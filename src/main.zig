@@ -5,6 +5,7 @@ const Mat4 = math.Mat4;
 const Camera = @import("camera.zig").Camera;
 const chunk_mod = @import("chunk.zig");
 const mesh_mod = @import("mesh.zig");
+const world_mod = @import("world.zig");
 
 // Import C headers
 const c = @cImport({
@@ -76,62 +77,9 @@ pub fn main() !void {
     // Enable Backface Culling
     c.glEnable(c.GL_CULL_FACE);
 
-    // 6. Initialize Chunk
-    var chunk = chunk_mod.Chunk.init();
-
-    // Fill with test data
-    for (0..chunk_mod.CHUNK_SIZE_X) |x| {
-        for (0..chunk_mod.CHUNK_SIZE_Z) |z| {
-            // Layers 0-3: Stone
-            chunk.setBlock(x, 0, z, .Stone);
-            chunk.setBlock(x, 1, z, .Stone);
-            chunk.setBlock(x, 2, z, .Stone);
-            chunk.setBlock(x, 3, z, .Stone);
-
-            // Layer 4: Dirt
-            chunk.setBlock(x, 4, z, .Dirt);
-            // Layer 5: Grass
-            chunk.setBlock(x, 5, z, .Grass);
-        }
-    }
-    // A random pillar
-    chunk.setBlock(8, 6, 8, .Stone);
-    chunk.setBlock(8, 7, 8, .Stone);
-    chunk.setBlock(8, 8, 8, .Stone);
-
-    // Generate Mesh
-    const chunk_mesh = try mesh_mod.generateMesh(std.heap.c_allocator, &chunk);
-    defer chunk_mesh.deinit();
-
-    const vertex_count = @as(c_int, @intCast(chunk_mesh.vertices.len / 6));
-
-    var vao: c.GLuint = undefined;
-    var vbo: c.GLuint = undefined;
-
-    // Use standard OpenGL functions if available, GLEW macros might be tricky in Zig?
-    // But glew.h should map them.
-    // Let's check if glGenVertexArrays is actually a function pointer that is null.
-    // if (c.glGenVertexArrays == null) {
-    //     std.debug.print("Error: glGenVertexArrays is null! OpenGL 3.3 not supported?\n", .{});
-    //     return error.GLFunctionLoadFailed;
-    // }
-
-    c.glGenVertexArrays().?(1, &vao);
-    c.glGenBuffers().?(1, &vbo);
-
-    c.glBindVertexArray().?(vao);
-
-    c.glBindBuffer().?(c.GL_ARRAY_BUFFER, vbo);
-    // Upload dynamic mesh data
-    c.glBufferData().?(c.GL_ARRAY_BUFFER, @as(c.GLsizeiptr, @intCast(chunk_mesh.vertices.len * @sizeOf(f32))), chunk_mesh.vertices.ptr, c.GL_STATIC_DRAW);
-
-    // Position Attribute (Layout 0, 3 floats, Stride 6 * f32)
-    c.glVertexAttribPointer().?(0, 3, c.GL_FLOAT, c.GL_FALSE, 6 * @sizeOf(f32), null);
-    c.glEnableVertexAttribArray().?(0);
-
-    // Color Attribute (Layout 1, 3 floats, Offset 3 * f32)
-    c.glVertexAttribPointer().?(1, 3, c.GL_FLOAT, c.GL_FALSE, 6 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32)));
-    c.glEnableVertexAttribArray().?(1);
+    // 6. Initialize World
+    var world = world_mod.World.init(std.heap.c_allocator, 12345); // Fixed seed for now
+    defer world.deinit();
 
     // 7. Compile Shaders
     const shader_program = try createShaderProgram();
@@ -143,7 +91,7 @@ pub fn main() !void {
     const transform_loc = c.glGetUniformLocation().?(shader_program, "transform");
 
     // Camera Setup (Position slightly outside the chunk to see it)
-    var camera = Camera.new(Vec3.new(-5.0, 10.0, -5.0), Vec3.new(0.0, 1.0, 0.0), -45.0, -20.0);
+    var camera = Camera.new(Vec3.new(0.0, 50.0, 0.0), Vec3.new(0.0, 1.0, 0.0), -45.0, -20.0);
     var lastTime: u64 = c.SDL_GetTicks();
 
     // 8. Main Loop
@@ -174,24 +122,31 @@ pub fn main() !void {
         // Keyboard Input
         const keys = c.SDL_GetKeyboardState(null);
 
-        if (keys[c.SDL_SCANCODE_W]) camera.processKeyboard(.FORWARD, deltaTime);
-        if (keys[c.SDL_SCANCODE_S]) camera.processKeyboard(.BACKWARD, deltaTime);
-        if (keys[c.SDL_SCANCODE_A]) camera.processKeyboard(.LEFT, deltaTime);
-        if (keys[c.SDL_SCANCODE_D]) camera.processKeyboard(.RIGHT, deltaTime);
+        // Faster camera for large worlds
+        const speed_mult: f32 = if (keys[c.SDL_SCANCODE_LSHIFT]) 4.0 else 1.0;
+
+        // We need to modify the camera speed logic.
+        // Camera.processKeyboard uses fixed velocity.
+        // Let's just call it multiple times or hack it?
+        // Ideally update Camera struct, but for now:
+        if (keys[c.SDL_SCANCODE_W]) camera.processKeyboard(.FORWARD, deltaTime * speed_mult);
+        if (keys[c.SDL_SCANCODE_S]) camera.processKeyboard(.BACKWARD, deltaTime * speed_mult);
+        if (keys[c.SDL_SCANCODE_A]) camera.processKeyboard(.LEFT, deltaTime * speed_mult);
+        if (keys[c.SDL_SCANCODE_D]) camera.processKeyboard(.RIGHT, deltaTime * speed_mult);
+
+        // Update World
+        try world.update(camera.pos);
 
         // Projection
         var w: c_int = 0;
         var h: c_int = 0;
         _ = c.SDL_GetWindowSize(window, &w, &h);
         const aspect = @as(f32, @floatFromInt(w)) / @as(f32, @floatFromInt(h));
-        const proj = Mat4.perspective(std.math.degreesToRadians(45.0), aspect, 0.1, 100.0);
+        const proj = Mat4.perspective(std.math.degreesToRadians(45.0), aspect, 0.1, 500.0); // Increased far plane
         // View (Camera)
         const view = camera.getViewMatrix();
 
-        // Model (Identity)
-        const model = Mat4.identity();
-
-        const mvp = Mat4.multiply(proj, Mat4.multiply(view, model));
+        const view_proj = Mat4.multiply(proj, view);
 
         // Render
         c.glClearColor(0.53, 0.81, 0.92, 1.0); // Sky blue background
@@ -199,10 +154,7 @@ pub fn main() !void {
 
         c.glUseProgram().?(shader_program);
 
-        c.glUniformMatrix4fv().?(transform_loc, 1, c.GL_TRUE, &mvp.data[0][0]);
-
-        c.glBindVertexArray().?(vao);
-        c.glDrawArrays(c.GL_TRIANGLES, 0, vertex_count);
+        world.render(transform_loc, view_proj);
 
         _ = c.SDL_GL_SwapWindow(window);
     }
