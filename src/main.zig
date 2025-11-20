@@ -3,6 +3,8 @@ const math = @import("math.zig");
 const Vec3 = math.Vec3;
 const Mat4 = math.Mat4;
 const Camera = @import("camera.zig").Camera;
+const chunk_mod = @import("chunk.zig");
+const mesh_mod = @import("mesh.zig");
 
 // Import C headers
 const c = @cImport({
@@ -66,71 +68,62 @@ pub fn main() !void {
         return error.GLEWInitFailed;
     }
 
+    // Clear any GL errors that might have been caused by glewInit (common issue)
+    _ = c.glGetError();
+
     // Enable Depth Test for 3D
     c.glEnable(c.GL_DEPTH_TEST);
     // Enable Backface Culling
     c.glEnable(c.GL_CULL_FACE);
 
-    // 6. Setup Cube Data (Position x,y,z | Color r,g,b)
-    const vertices = [_]f32{
-        // Back Face
-        -0.5, -0.5, -0.5, 1.0, 0.0, 0.0,
-        0.5,  0.5,  -0.5, 1.0, 0.0, 0.0,
-        0.5,  -0.5, -0.5, 1.0, 0.0, 0.0,
-        0.5,  0.5,  -0.5, 1.0, 0.0, 0.0,
-        -0.5, -0.5, -0.5, 1.0, 0.0, 0.0,
-        -0.5, 0.5,  -0.5, 1.0, 0.0, 0.0,
+    // 6. Initialize Chunk
+    var chunk = chunk_mod.Chunk.init();
 
-        // Front Face
-        -0.5, -0.5, 0.5,  0.0, 1.0, 0.0,
-        0.5,  -0.5, 0.5,  0.0, 1.0, 0.0,
-        0.5,  0.5,  0.5,  0.0, 1.0, 0.0,
-        0.5,  0.5,  0.5,  0.0, 1.0, 0.0,
-        -0.5, 0.5,  0.5,  0.0, 1.0, 0.0,
-        -0.5, -0.5, 0.5,  0.0, 1.0, 0.0,
+    // Fill with test data
+    for (0..chunk_mod.CHUNK_SIZE_X) |x| {
+        for (0..chunk_mod.CHUNK_SIZE_Z) |z| {
+            // Layers 0-3: Stone
+            chunk.setBlock(x, 0, z, .Stone);
+            chunk.setBlock(x, 1, z, .Stone);
+            chunk.setBlock(x, 2, z, .Stone);
+            chunk.setBlock(x, 3, z, .Stone);
 
-        // Left Face
-        -0.5, 0.5,  0.5,  0.0, 0.0, 1.0,
-        -0.5, 0.5,  -0.5, 0.0, 0.0, 1.0,
-        -0.5, -0.5, -0.5, 0.0, 0.0, 1.0,
-        -0.5, -0.5, -0.5, 0.0, 0.0, 1.0,
-        -0.5, -0.5, 0.5,  0.0, 0.0, 1.0,
-        -0.5, 0.5,  0.5,  0.0, 0.0, 1.0,
+            // Layer 4: Dirt
+            chunk.setBlock(x, 4, z, .Dirt);
+            // Layer 5: Grass
+            chunk.setBlock(x, 5, z, .Grass);
+        }
+    }
+    // A random pillar
+    chunk.setBlock(8, 6, 8, .Stone);
+    chunk.setBlock(8, 7, 8, .Stone);
+    chunk.setBlock(8, 8, 8, .Stone);
 
-        // Right Face
-        0.5,  0.5,  0.5,  1.0, 1.0, 0.0,
-        0.5,  -0.5, -0.5, 1.0, 1.0, 0.0,
-        0.5,  0.5,  -0.5, 1.0, 1.0, 0.0,
-        0.5,  -0.5, -0.5, 1.0, 1.0, 0.0,
-        0.5,  0.5,  0.5,  1.0, 1.0, 0.0,
-        0.5,  -0.5, 0.5,  1.0, 1.0, 0.0,
+    // Generate Mesh
+    const chunk_mesh = try mesh_mod.generateMesh(std.heap.c_allocator, &chunk);
+    defer chunk_mesh.deinit();
 
-        // Bottom Face
-        -0.5, -0.5, -0.5, 0.0, 1.0, 1.0,
-        0.5,  -0.5, -0.5, 0.0, 1.0, 1.0,
-        0.5,  -0.5, 0.5,  0.0, 1.0, 1.0,
-        0.5,  -0.5, 0.5,  0.0, 1.0, 1.0,
-        -0.5, -0.5, 0.5,  0.0, 1.0, 1.0,
-        -0.5, -0.5, -0.5, 0.0, 1.0, 1.0,
-
-        // Top Face
-        -0.5, 0.5,  -0.5, 1.0, 0.0, 1.0,
-        -0.5, 0.5,  0.5,  1.0, 0.0, 1.0,
-        0.5,  0.5,  0.5,  1.0, 0.0, 1.0,
-        0.5,  0.5,  0.5,  1.0, 0.0, 1.0,
-        0.5,  0.5,  -0.5, 1.0, 0.0, 1.0,
-        -0.5, 0.5,  -0.5, 1.0, 0.0, 1.0,
-    };
+    const vertex_count = @as(c_int, @intCast(chunk_mesh.vertices.len / 6));
 
     var vao: c.GLuint = undefined;
     var vbo: c.GLuint = undefined;
+
+    // Use standard OpenGL functions if available, GLEW macros might be tricky in Zig?
+    // But glew.h should map them.
+    // Let's check if glGenVertexArrays is actually a function pointer that is null.
+    // if (c.glGenVertexArrays == null) {
+    //     std.debug.print("Error: glGenVertexArrays is null! OpenGL 3.3 not supported?\n", .{});
+    //     return error.GLFunctionLoadFailed;
+    // }
+
     c.glGenVertexArrays().?(1, &vao);
     c.glGenBuffers().?(1, &vbo);
 
     c.glBindVertexArray().?(vao);
 
     c.glBindBuffer().?(c.GL_ARRAY_BUFFER, vbo);
-    c.glBufferData().?(c.GL_ARRAY_BUFFER, @sizeOf(@TypeOf(vertices)), &vertices, c.GL_STATIC_DRAW);
+    // Upload dynamic mesh data
+    c.glBufferData().?(c.GL_ARRAY_BUFFER, @as(c.GLsizeiptr, @intCast(chunk_mesh.vertices.len * @sizeOf(f32))), chunk_mesh.vertices.ptr, c.GL_STATIC_DRAW);
 
     // Position Attribute (Layout 0, 3 floats, Stride 6 * f32)
     c.glVertexAttribPointer().?(0, 3, c.GL_FLOAT, c.GL_FALSE, 6 * @sizeOf(f32), null);
@@ -144,10 +137,13 @@ pub fn main() !void {
     const shader_program = try createShaderProgram();
     defer c.glDeleteProgram().?(shader_program);
 
+    // Important: Use the shader program BEFORE locating uniforms!
+    c.glUseProgram().?(shader_program);
+
     const transform_loc = c.glGetUniformLocation().?(shader_program, "transform");
 
-    // Camera Setup
-    var camera = Camera.new(Vec3.new(0.0, 0.0, 3.0), Vec3.new(0.0, 1.0, 0.0), -90.0, 0.0);
+    // Camera Setup (Position slightly outside the chunk to see it)
+    var camera = Camera.new(Vec3.new(-5.0, 10.0, -5.0), Vec3.new(0.0, 1.0, 0.0), -45.0, -20.0);
     var lastTime: u64 = c.SDL_GetTicks();
 
     // 8. Main Loop
@@ -198,7 +194,7 @@ pub fn main() !void {
         const mvp = Mat4.multiply(proj, Mat4.multiply(view, model));
 
         // Render
-        c.glClearColor(0.2, 0.3, 0.3, 1.0);
+        c.glClearColor(0.53, 0.81, 0.92, 1.0); // Sky blue background
         c.glClear(c.GL_COLOR_BUFFER_BIT | c.GL_DEPTH_BUFFER_BIT);
 
         c.glUseProgram().?(shader_program);
@@ -206,7 +202,7 @@ pub fn main() !void {
         c.glUniformMatrix4fv().?(transform_loc, 1, c.GL_TRUE, &mvp.data[0][0]);
 
         c.glBindVertexArray().?(vao);
-        c.glDrawArrays(c.GL_TRIANGLES, 0, 36);
+        c.glDrawArrays(c.GL_TRIANGLES, 0, vertex_count);
 
         _ = c.SDL_GL_SwapWindow(window);
     }
