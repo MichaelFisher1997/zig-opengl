@@ -1,4 +1,4 @@
-//! Chunk mesh generation with visible face culling.
+//! Chunk mesh generation with visible face culling and texture UVs.
 //! Only generates faces where a solid block meets air/transparent block.
 
 const std = @import("std");
@@ -13,6 +13,7 @@ const CHUNK_SIZE_Z = @import("chunk.zig").CHUNK_SIZE_Z;
 const BlockType = @import("block.zig").BlockType;
 const Face = @import("block.zig").Face;
 const ALL_FACES = @import("block.zig").ALL_FACES;
+const TextureAtlas = @import("../engine/graphics/texture_atlas.zig").TextureAtlas;
 
 pub const ChunkMesh = struct {
     vao: c.GLuint,
@@ -25,6 +26,9 @@ pub const ChunkMesh = struct {
     /// Is the mesh ready to render?
     ready: bool = false,
 
+    // Vertex format: position (3) + color (3) + normal (3) + uv (2) = 11 floats
+    const FLOATS_PER_VERTEX: u32 = 11;
+
     pub fn init(allocator: std.mem.Allocator) ChunkMesh {
         var vao: c.GLuint = undefined;
         var vbo: c.GLuint = undefined;
@@ -32,11 +36,11 @@ pub const ChunkMesh = struct {
         c.glGenVertexArrays().?(1, &vao);
         c.glGenBuffers().?(1, &vbo);
 
-        // Setup vertex format: position (3) + color (3) + normal (3) = 9 floats
+        // Setup vertex format
         c.glBindVertexArray().?(vao);
         c.glBindBuffer().?(c.GL_ARRAY_BUFFER, vbo);
 
-        const stride: c.GLsizei = 9 * @sizeOf(f32);
+        const stride: c.GLsizei = FLOATS_PER_VERTEX * @sizeOf(f32);
 
         // Position (location 0)
         c.glVertexAttribPointer().?(0, 3, c.GL_FLOAT, c.GL_FALSE, stride, null);
@@ -49,6 +53,10 @@ pub const ChunkMesh = struct {
         // Normal (location 2)
         c.glVertexAttribPointer().?(2, 3, c.GL_FLOAT, c.GL_FALSE, stride, @ptrFromInt(6 * @sizeOf(f32)));
         c.glEnableVertexAttribArray().?(2);
+
+        // UV (location 3)
+        c.glVertexAttribPointer().?(3, 2, c.GL_FLOAT, c.GL_FALSE, stride, @ptrFromInt(9 * @sizeOf(f32)));
+        c.glEnableVertexAttribArray().?(3);
 
         c.glBindVertexArray().?(0);
 
@@ -71,7 +79,7 @@ pub const ChunkMesh = struct {
         defer vertices.deinit(self.allocator);
 
         // Reserve modest initial capacity (will grow as needed)
-        try vertices.ensureTotalCapacity(self.allocator, 1024 * 9);
+        try vertices.ensureTotalCapacity(self.allocator, 1024 * FLOATS_PER_VERTEX);
 
         // Iterate through all blocks
         var y: u32 = 0;
@@ -125,21 +133,39 @@ pub const ChunkMesh = struct {
             @floatFromInt(normal[2]),
         };
 
+        // Get tile index for this face
+        const block_id = @intFromEnum(block);
+        const tiles = TextureAtlas.getTilesForBlock(block_id);
+        const tile_index = switch (face) {
+            .top => tiles.top,
+            .bottom => tiles.bottom,
+            else => tiles.side,
+        };
+
+        // Get UV coordinates for the tile
+        const uv = TextureAtlas.getTileUV(tile_index);
+        const uv_coords = [4][2]f32{
+            .{ uv[0], uv[1] }, // bottom-left
+            .{ uv[0], uv[3] }, // top-left
+            .{ uv[2], uv[3] }, // top-right
+            .{ uv[2], uv[1] }, // bottom-right
+        };
+
         // Get the 4 corners of the face
         const corners = getFaceCorners(x, y, z, face);
 
         // Triangle 1: 0, 1, 2
-        try addVertex(self.allocator, vertices, corners[0], color, nf);
-        try addVertex(self.allocator, vertices, corners[1], color, nf);
-        try addVertex(self.allocator, vertices, corners[2], color, nf);
+        try addVertex(self.allocator, vertices, corners[0], color, nf, uv_coords[0]);
+        try addVertex(self.allocator, vertices, corners[1], color, nf, uv_coords[1]);
+        try addVertex(self.allocator, vertices, corners[2], color, nf, uv_coords[2]);
 
         // Triangle 2: 0, 2, 3
-        try addVertex(self.allocator, vertices, corners[0], color, nf);
-        try addVertex(self.allocator, vertices, corners[2], color, nf);
-        try addVertex(self.allocator, vertices, corners[3], color, nf);
+        try addVertex(self.allocator, vertices, corners[0], color, nf, uv_coords[0]);
+        try addVertex(self.allocator, vertices, corners[2], color, nf, uv_coords[2]);
+        try addVertex(self.allocator, vertices, corners[3], color, nf, uv_coords[3]);
     }
 
-    fn addVertex(allocator: std.mem.Allocator, vertices: *std.ArrayListUnmanaged(f32), pos: [3]f32, color: [3]f32, normal: [3]f32) !void {
+    fn addVertex(allocator: std.mem.Allocator, vertices: *std.ArrayListUnmanaged(f32), pos: [3]f32, color: [3]f32, normal: [3]f32, uv: [2]f32) !void {
         try vertices.append(allocator, pos[0]);
         try vertices.append(allocator, pos[1]);
         try vertices.append(allocator, pos[2]);
@@ -149,6 +175,8 @@ pub const ChunkMesh = struct {
         try vertices.append(allocator, normal[0]);
         try vertices.append(allocator, normal[1]);
         try vertices.append(allocator, normal[2]);
+        try vertices.append(allocator, uv[0]);
+        try vertices.append(allocator, uv[1]);
     }
 
     fn uploadVertices(self: *ChunkMesh, vertices: []const f32) void {
@@ -159,7 +187,7 @@ pub const ChunkMesh = struct {
             vertices.ptr,
             c.GL_STATIC_DRAW,
         );
-        self.vertex_count = @intCast(vertices.len / 9);
+        self.vertex_count = @intCast(vertices.len / FLOATS_PER_VERTEX);
         self.ready = self.vertex_count > 0;
     }
 

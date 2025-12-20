@@ -128,6 +128,11 @@ pub const Shader = struct {
         c.glUniform1i().?(loc, value);
     }
 
+    pub fn setBool(self: *const Shader, name: [*c]const u8, value: bool) void {
+        const loc = self.getUniformLocation(name);
+        c.glUniform1i().?(loc, if (value) 1 else 0);
+    }
+
     fn compileShader(shader_type: c.GLenum, source: [*c]const u8) Error!c.GLuint {
         const shader = c.glCreateShader().?(shader_type);
         c.glShaderSource().?(shader, 1, &source, null);

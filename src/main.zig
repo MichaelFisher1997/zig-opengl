@@ -13,6 +13,7 @@ const UISystem = @import("engine/ui/ui_system.zig").UISystem;
 const Color = @import("engine/ui/ui_system.zig").Color;
 const Rect = @import("engine/core/interfaces.zig").Rect;
 const log = @import("engine/core/log.zig");
+const TextureAtlas = @import("engine/graphics/texture_atlas.zig").TextureAtlas;
 
 // World imports
 const World = @import("world/world.zig").World;
@@ -25,19 +26,22 @@ const c = @cImport({
     @cInclude("SDL3/SDL_opengl.h");
 });
 
-// Shaders
+// Textured terrain shaders
 const vertex_shader_src =
     \\#version 330 core
     \\layout (location = 0) in vec3 aPos;
     \\layout (location = 1) in vec3 aColor;
     \\layout (location = 2) in vec3 aNormal;
+    \\layout (location = 3) in vec2 aTexCoord;
     \\out vec3 vColor;
     \\out vec3 vNormal;
+    \\out vec2 vTexCoord;
     \\uniform mat4 transform;
     \\void main() {
     \\    gl_Position = transform * vec4(aPos, 1.0);
     \\    vColor = aColor;
     \\    vNormal = aNormal;
+    \\    vTexCoord = aTexCoord;
     \\}
 ;
 
@@ -45,12 +49,23 @@ const fragment_shader_src =
     \\#version 330 core
     \\in vec3 vColor;
     \\in vec3 vNormal;
+    \\in vec2 vTexCoord;
     \\out vec4 FragColor;
+    \\uniform sampler2D uTexture;
+    \\uniform bool uUseTexture;
     \\void main() {
     \\    // Simple directional lighting
     \\    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
-    \\    float diff = max(dot(vNormal, lightDir), 0.0) * 0.3 + 0.7;
-    \\    FragColor = vec4(vColor * diff, 1.0);
+    \\    float diff = max(dot(vNormal, lightDir), 0.0) * 0.4 + 0.6;
+    \\    
+    \\    vec3 color;
+    \\    if (uUseTexture) {
+    \\        vec4 texColor = texture(uTexture, vTexCoord);
+    \\        color = texColor.rgb * vColor * diff;
+    \\    } else {
+    \\        color = vColor * diff;
+    \\    }
+    \\    FragColor = vec4(color, 1.0);
     \\}
 ;
 
@@ -116,12 +131,16 @@ pub fn main() !void {
     var shader = try Shader.initSimple(vertex_shader_src, fragment_shader_src);
     defer shader.deinit();
 
-    // 8. Create World
+    // 8. Create Texture Atlas
+    var atlas = TextureAtlas.init(allocator);
+    defer atlas.deinit();
+
+    // 9. Create World
     const seed: u64 = 12345; // World seed for terrain generation
     var world = World.init(allocator, 2, seed); // 2 chunk render distance (5x5 = 25 chunks)
     defer world.deinit();
 
-    // 9. Create UI System for FPS display
+    // 10. Create UI System for FPS display
     var ui = try UISystem.init(1280, 720);
     defer ui.deinit();
 
@@ -129,10 +148,12 @@ pub fn main() !void {
     renderer.setViewport(1280, 720);
 
     log.log.info("=== Zig Voxel Engine ===", .{});
-    log.log.info("Controls: WASD=Move, Space/Shift=Up/Down, Tab=Mouse, F=Wireframe, V=VSync, Esc=Quit", .{});
+    log.log.info("Controls: WASD=Move, Space/Shift=Up/Down, Tab=Mouse, F=Wireframe, T=Textures, V=VSync, Esc=Quit", .{});
 
-    // 10. Main Loop
+    // 11. Main Loop
     var vsync_enabled = true;
+    var textures_enabled = true;
+
     while (!input.should_quit) {
         // Update time
         time.update();
@@ -156,6 +177,12 @@ pub fn main() !void {
         // Toggle wireframe with F
         if (input.isKeyPressed(.f)) {
             renderer.toggleWireframe();
+        }
+
+        // Toggle textures with T
+        if (input.isKeyPressed(.t)) {
+            textures_enabled = !textures_enabled;
+            log.log.info("Textures: {}", .{textures_enabled});
         }
 
         // Toggle VSync with V
@@ -188,6 +215,13 @@ pub fn main() !void {
 
         // Render 3D world
         renderer.beginFrame();
+
+        // Bind texture atlas and set uniforms
+        shader.use();
+        atlas.bind(0);
+        shader.setInt("uTexture", 0);
+        shader.setBool("uUseTexture", textures_enabled);
+
         world.render(&shader, view_proj);
 
         // Render UI (FPS counter)

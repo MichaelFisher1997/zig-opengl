@@ -76,7 +76,7 @@ pub const Texture = struct {
         );
 
         if (config.generate_mipmaps and data != null) {
-            c.glGenerateMipmap(c.GL_TEXTURE_2D);
+            c.glGenerateMipmap().?(c.GL_TEXTURE_2D);
         }
 
         c.glBindTexture(c.GL_TEXTURE_2D, 0);
@@ -112,13 +112,15 @@ pub const Texture = struct {
 
     /// Bind texture to a specific slot
     pub fn bind(self: *const Texture, slot: u32) void {
-        c.glActiveTexture(c.GL_TEXTURE0 + slot);
+        const texture_unit: c.GLenum = @intCast(c.GL_TEXTURE0 + @as(c.GLint, @intCast(slot)));
+        c.glActiveTexture().?(texture_unit);
         c.glBindTexture(c.GL_TEXTURE_2D, self.id);
     }
 
     /// Unbind texture from slot
     pub fn unbind(slot: u32) void {
-        c.glActiveTexture(c.GL_TEXTURE0 + slot);
+        const texture_unit: c.GLenum = @intCast(c.GL_TEXTURE0 + @as(c.GLint, @intCast(slot)));
+        c.glActiveTexture().?(texture_unit);
         c.glBindTexture(c.GL_TEXTURE_2D, 0);
     }
 
