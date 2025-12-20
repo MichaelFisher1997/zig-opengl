@@ -1,6 +1,21 @@
 const std = @import("std");
 
-// Import C headers
+// Engine imports
+const Vec3 = @import("engine/math/vec3.zig").Vec3;
+const Mat4 = @import("engine/math/mat4.zig").Mat4;
+const Camera = @import("engine/graphics/camera.zig").Camera;
+const Shader = @import("engine/graphics/shader.zig").Shader;
+const Renderer = @import("engine/graphics/renderer.zig").Renderer;
+const Input = @import("engine/input/input.zig").Input;
+const Time = @import("engine/core/time.zig").Time;
+const UISystem = @import("engine/ui/ui_system.zig").UISystem;
+const Color = @import("engine/ui/ui_system.zig").Color;
+const Rect = @import("engine/core/interfaces.zig").Rect;
+
+// World imports
+const World = @import("world/world.zig").World;
+
+// C imports
 const c = @cImport({
     @cDefine("_FORTIFY_SOURCE", "0");
     @cInclude("SDL3/SDL.h");
@@ -8,95 +23,40 @@ const c = @cImport({
     @cInclude("SDL3/SDL_opengl.h");
 });
 
-// Simple Shader Sources
+// Shaders
 const vertex_shader_src =
     \\#version 330 core
     \\layout (location = 0) in vec3 aPos;
     \\layout (location = 1) in vec3 aColor;
+    \\layout (location = 2) in vec3 aNormal;
     \\out vec3 vColor;
+    \\out vec3 vNormal;
     \\uniform mat4 transform;
     \\void main() {
     \\    gl_Position = transform * vec4(aPos, 1.0);
     \\    vColor = aColor;
+    \\    vNormal = aNormal;
     \\}
 ;
 
 const fragment_shader_src =
     \\#version 330 core
     \\in vec3 vColor;
+    \\in vec3 vNormal;
     \\out vec4 FragColor;
     \\void main() {
-    \\    FragColor = vec4(vColor, 1.0);
+    \\    // Simple directional lighting
+    \\    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
+    \\    float diff = max(dot(vNormal, lightDir), 0.0) * 0.3 + 0.7;
+    \\    FragColor = vec4(vColor * diff, 1.0);
     \\}
 ;
 
-// Matrix Helper
-const Mat4 = struct {
-    data: [4][4]f32,
-
-    fn identity() Mat4 {
-        return .{
-            .data = .{
-                .{ 1, 0, 0, 0 },
-                .{ 0, 1, 0, 0 },
-                .{ 0, 0, 1, 0 },
-                .{ 0, 0, 0, 1 },
-            },
-        };
-    }
-
-    fn multiply(a: Mat4, b: Mat4) Mat4 {
-        var res = Mat4.identity();
-        for (0..4) |r| {
-            for (0..4) |c_idx| {
-                res.data[r][c_idx] =
-                    a.data[r][0] * b.data[0][c_idx] +
-                    a.data[r][1] * b.data[1][c_idx] +
-                    a.data[r][2] * b.data[2][c_idx] +
-                    a.data[r][3] * b.data[3][c_idx];
-            }
-        }
-        return res;
-    }
-
-    fn perspective(fov: f32, aspect: f32, near: f32, far: f32) Mat4 {
-        const tan_half_fov = std.math.tan(fov / 2.0);
-        var res = Mat4.identity();
-        // Zero out diagonal first
-        res.data[0][0] = 0;
-        res.data[1][1] = 0;
-        res.data[2][2] = 0;
-        res.data[3][3] = 0;
-
-        res.data[0][0] = 1.0 / (aspect * tan_half_fov);
-        res.data[1][1] = 1.0 / tan_half_fov;
-        res.data[2][2] = -(far + near) / (far - near);
-        res.data[2][3] = -(2.0 * far * near) / (far - near);
-        res.data[3][2] = -1.0;
-        return res;
-    }
-
-    fn translate(x: f32, y: f32, z: f32) Mat4 {
-        var res = Mat4.identity();
-        res.data[0][3] = x;
-        res.data[1][3] = y;
-        res.data[2][3] = z;
-        return res;
-    }
-
-    fn rotateY(angle: f32) Mat4 {
-        var res = Mat4.identity();
-        const c_val = std.math.cos(angle);
-        const s_val = std.math.sin(angle);
-        res.data[0][0] = c_val;
-        res.data[0][2] = s_val;
-        res.data[2][0] = -s_val;
-        res.data[2][2] = c_val;
-        return res;
-    }
-};
-
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
     // 1. Initialize SDL
     if (c.SDL_Init(c.SDL_INIT_VIDEO) == false) {
         std.debug.print("SDL Init Failed: {s}\n", .{c.SDL_GetError()});
@@ -110,147 +70,190 @@ pub fn main() !void {
     _ = c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_PROFILE_MASK, c.SDL_GL_CONTEXT_PROFILE_CORE);
 
     // 3. Create Window
-    const window = c.SDL_CreateWindow("Zig SDL3 OpenGL", 800, 600, c.SDL_WINDOW_OPENGL | c.SDL_WINDOW_RESIZABLE);
+    const window = c.SDL_CreateWindow(
+        "Zig Voxel Engine",
+        1280,
+        720,
+        c.SDL_WINDOW_OPENGL | c.SDL_WINDOW_RESIZABLE,
+    );
     if (window == null) return error.WindowCreationFailed;
     defer c.SDL_DestroyWindow(window);
 
-    // 4. Create Context
+    // 4. Create GL Context
     const gl_context = c.SDL_GL_CreateContext(window);
     if (gl_context == null) return error.GLContextCreationFailed;
     defer _ = c.SDL_GL_DestroyContext(gl_context);
-
     _ = c.SDL_GL_MakeCurrent(window, gl_context);
 
-    // 5. Initialize GLEW (Must be done after Context creation)
+    // 5. Initialize GLEW
     c.glewExperimental = c.GL_TRUE;
     if (c.glewInit() != c.GLEW_OK) {
         return error.GLEWInitFailed;
     }
 
-    // Enable Depth Test for 3D
-    c.glEnable(c.GL_DEPTH_TEST);
+    // 6. Initialize Engine Systems
+    var input = Input.init(allocator);
+    defer input.deinit();
 
-    // 6. Setup Tetrahedron Data (Position x,y,z | Color r,g,b)
-    const vertices = [_]f32{
-        // Front Face (Red)
-        0.0,  0.5,  0.0,  1.0, 0.0, 0.0,
-        -0.5, -0.5, 0.5,  1.0, 0.0, 0.0,
-        0.5,  -0.5, 0.5,  1.0, 0.0, 0.0,
+    var time = Time.init();
+    var renderer = Renderer.init();
 
-        // Right Face (Green)
-        0.0,  0.5,  0.0,  0.0, 1.0, 0.0,
-        0.5,  -0.5, 0.5,  0.0, 1.0, 0.0,
-        0.5,  -0.5, -0.5, 0.0, 1.0, 0.0,
+    // Start camera high above ground level, looking down
+    var camera = Camera.init(.{
+        .position = Vec3.init(8, 100, 8),
+        .pitch = -0.3, // Look slightly down
+        .move_speed = 50.0, // Fast movement for testing
+    });
 
-        // Back Face (Blue)
-        0.0,  0.5,  0.0,  0.0, 0.0, 1.0,
-        0.5,  -0.5, -0.5, 0.0, 0.0, 1.0,
-        -0.5, -0.5, -0.5, 0.0, 0.0, 1.0,
+    // 7. Create Shader
+    var shader = try Shader.init(vertex_shader_src, fragment_shader_src);
+    defer shader.deinit();
 
-        // Left Face (Yellow)
-        0.0,  0.5,  0.0,  1.0, 1.0, 0.0,
-        -0.5, -0.5, -0.5, 1.0, 1.0, 0.0,
-        -0.5, -0.5, 0.5,  1.0, 1.0, 0.0,
+    // 8. Create World
+    const seed: u64 = 12345; // World seed for terrain generation
+    var world = World.init(allocator, 2, seed); // 2 chunk render distance (5x5 = 25 chunks)
+    defer world.deinit();
 
-        // Bottom Face (Grey) - Optional, makes it a solid solid
-        -0.5, -0.5, 0.5,  0.5, 0.5, 0.5,
-        -0.5, -0.5, -0.5, 0.5, 0.5, 0.5,
-        0.5,  -0.5, -0.5, 0.5, 0.5, 0.5,
+    // 9. Create UI System for FPS display
+    var ui = try UISystem.init(allocator, 1280, 720);
+    defer ui.deinit();
 
-        -0.5, -0.5, 0.5,  0.5, 0.5, 0.5,
-        0.5,  -0.5, -0.5, 0.5, 0.5, 0.5,
-        0.5,  -0.5, 0.5,  0.5, 0.5, 0.5,
-    };
+    // Initial viewport
+    renderer.setViewport(1280, 720);
 
-    var vao: c.GLuint = undefined;
-    var vbo: c.GLuint = undefined;
-    c.glGenVertexArrays().?(1, &vao);
-    c.glGenBuffers().?(1, &vbo);
+    std.debug.print("\n=== Zig Voxel Engine ===\n", .{});
+    std.debug.print("Controls:\n", .{});
+    std.debug.print("  WASD - Move\n", .{});
+    std.debug.print("  Space/Shift - Up/Down\n", .{});
+    std.debug.print("  Tab - Toggle mouse capture\n", .{});
+    std.debug.print("  F - Toggle wireframe\n", .{});
+    std.debug.print("  Escape - Quit\n", .{});
+    std.debug.print("========================\n\n", .{});
 
-    c.glBindVertexArray().?(vao);
+    // 9. Main Loop
+    while (!input.should_quit) {
+        // Update time
+        time.update();
 
-    c.glBindBuffer().?(c.GL_ARRAY_BUFFER, vbo);
-    c.glBufferData().?(c.GL_ARRAY_BUFFER, @sizeOf(@TypeOf(vertices)), &vertices, c.GL_STATIC_DRAW);
+        // Process input
+        input.beginFrame();
+        input.pollEvents();
 
-    // Position Attribute (Layout 0, 3 floats, Stride 6 * f32)
-    c.glVertexAttribPointer().?(0, 3, c.GL_FLOAT, c.GL_FALSE, 6 * @sizeOf(f32), null);
-    c.glEnableVertexAttribArray().?(0);
-
-    // Color Attribute (Layout 1, 3 floats, Offset 3 * f32)
-    c.glVertexAttribPointer().?(1, 3, c.GL_FLOAT, c.GL_FALSE, 6 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32)));
-    c.glEnableVertexAttribArray().?(1);
-
-    // 7. Compile Shaders
-
-    const shader_program = try createShaderProgram();
-    defer c.glDeleteProgram().?(shader_program);
-
-    const transform_loc = c.glGetUniformLocation().?(shader_program, "transform");
-
-    // 8. Main Loop
-    var running = true;
-    while (running) {
-        var event: c.SDL_Event = undefined;
-        while (c.SDL_PollEvent(&event)) {
-            if (event.type == c.SDL_EVENT_QUIT) running = false;
-            if (event.type == c.SDL_EVENT_KEY_DOWN and event.key.key == c.SDLK_ESCAPE) running = false;
+        // Handle escape to quit
+        if (input.isKeyPressed(.escape)) {
+            input.should_quit = true;
         }
 
-        // Calculate Matrix
-        const time = @as(f32, @floatFromInt(c.SDL_GetTicks())) / 1000.0;
+        // Toggle mouse capture with Tab
+        if (input.isKeyPressed(.tab)) {
+            const captured = !input.mouse_captured;
+            input.mouse_captured = captured;
+            _ = c.SDL_SetWindowRelativeMouseMode(window, captured);
+        }
 
-        // Projection (Aspect ratio 800/600)
-        const proj = Mat4.perspective(std.math.degreesToRadians(45.0), 800.0 / 600.0, 0.1, 100.0);
+        // Toggle wireframe with F
+        if (input.isKeyPressed(.f)) {
+            renderer.toggleWireframe();
+        }
 
-        // View/Model (Push back -3 units, rotate)
-        const model_trans = Mat4.translate(0, 0, -3.0);
-        const model_rot = Mat4.rotateY(time);
-        const model = Mat4.multiply(model_trans, model_rot);
+        // Update camera
+        camera.update(&input, time.delta_time);
 
-        const mvp = Mat4.multiply(proj, model);
+        // Update world (load chunks around player)
+        try world.update(camera.position);
 
-        // Render
-        c.glClearColor(0.1, 0.1, 0.1, 1.0);
-        c.glClear(c.GL_COLOR_BUFFER_BIT | c.GL_DEPTH_BUFFER_BIT);
+        // Debug: print stats on first few frames
+        if (time.frame_count < 3) {
+            const stats = world.getStats();
+            std.debug.print("Frame {}: Chunks={}, Vertices={}\n", .{
+                time.frame_count, stats.chunks_loaded, stats.total_vertices,
+            });
+        }
 
-        c.glUseProgram().?(shader_program);
+        // Handle window resize
+        renderer.setViewport(input.window_width, input.window_height);
+        ui.resize(input.window_width, input.window_height);
 
-        // Send Matrix (transpose = GL_TRUE because our matrix is row-major)
-        c.glUniformMatrix4fv().?(transform_loc, 1, c.GL_TRUE, &mvp.data[0][0]);
+        // Calculate matrices
+        const aspect = @as(f32, @floatFromInt(input.window_width)) / @as(f32, @floatFromInt(input.window_height));
+        const view_proj = camera.getViewProjectionMatrix(aspect);
 
-        c.glBindVertexArray().?(vao);
-        c.glDrawArrays(c.GL_TRIANGLES, 0, 18); // 6 triangles * 3 vertices
+        // Render 3D world
+        renderer.beginFrame();
+        world.render(&shader, view_proj);
 
+        // Render UI (FPS counter)
+        ui.begin();
+
+        // Draw FPS background
+        ui.drawRect(.{ .x = 10, .y = 10, .width = 80, .height = 30 }, Color.rgba(0, 0, 0, 0.7));
+
+        // Draw FPS digits
+        drawNumber(&ui, @intFromFloat(time.fps), 15, 15, Color.white);
+
+        ui.end();
+
+        // Swap buffers
         _ = c.SDL_GL_SwapWindow(window);
+
+        // Print stats occasionally
+        if (time.frame_count % 120 == 0) {
+            const stats = world.getStats();
+            std.debug.print("FPS: {d:.1} | Chunks: {} | Vertices: {} | Pos: ({d:.1}, {d:.1}, {d:.1})\n", .{
+                time.fps,
+                stats.chunks_loaded,
+                stats.total_vertices,
+                camera.position.x,
+                camera.position.y,
+                camera.position.z,
+            });
+        }
     }
 }
 
-fn createShaderProgram() !c.GLuint {
-    // Helper to compile single shader
-    const compile = struct {
-        fn func(shader_type: c.GLenum, source: [*c]const u8) !c.GLuint {
-            const shader = c.glCreateShader().?(shader_type);
-            c.glShaderSource().?(shader, 1, &source, null);
-            c.glCompileShader().?(shader);
+// Simple digit drawing using rectangles (7-segment style)
+fn drawNumber(ui: *UISystem, num: u32, x: f32, y: f32, color: Color) void {
+    var n = num;
+    var digit_x = x + 50; // Start from right
 
-            var success: c.GLint = undefined;
-            c.glGetShaderiv().?(shader, c.GL_COMPILE_STATUS, &success);
-            if (success == 0) return error.ShaderCompileFailed;
+    if (n == 0) {
+        drawDigit(ui, 0, digit_x, y, color);
+        return;
+    }
 
-            return shader;
-        }
-    }.func;
+    while (n > 0) : (digit_x -= 15) {
+        const digit: u4 = @intCast(n % 10);
+        drawDigit(ui, digit, digit_x, y, color);
+        n /= 10;
+    }
+}
 
-    const vert = try compile(c.GL_VERTEX_SHADER, vertex_shader_src);
-    const frag = try compile(c.GL_FRAGMENT_SHADER, fragment_shader_src);
+fn drawDigit(ui: *UISystem, digit: u4, x: f32, y: f32, color: Color) void {
+    const w: f32 = 10;
+    const h: f32 = 16;
+    const t: f32 = 2; // thickness
 
-    const prog = c.glCreateProgram().?();
-    c.glAttachShader().?(prog, vert);
-    c.glAttachShader().?(prog, frag);
-    c.glLinkProgram().?(prog);
+    // 7-segment display: top, top-left, top-right, middle, bottom-left, bottom-right, bottom
+    const segments: [10][7]bool = .{
+        .{ true, true, true, false, true, true, true }, // 0
+        .{ false, false, true, false, false, true, false }, // 1
+        .{ true, false, true, true, true, false, true }, // 2
+        .{ true, false, true, true, false, true, true }, // 3
+        .{ false, true, true, true, false, true, false }, // 4
+        .{ true, true, false, true, false, true, true }, // 5
+        .{ true, true, false, true, true, true, true }, // 6
+        .{ true, false, true, false, false, true, false }, // 7
+        .{ true, true, true, true, true, true, true }, // 8
+        .{ true, true, true, true, false, true, true }, // 9
+    };
 
-    c.glDeleteShader().?(vert);
-    c.glDeleteShader().?(frag);
+    const seg = segments[digit];
 
-    return prog;
+    if (seg[0]) ui.drawRect(.{ .x = x, .y = y, .width = w, .height = t }, color); // top
+    if (seg[1]) ui.drawRect(.{ .x = x, .y = y, .width = t, .height = h / 2 }, color); // top-left
+    if (seg[2]) ui.drawRect(.{ .x = x + w - t, .y = y, .width = t, .height = h / 2 }, color); // top-right
+    if (seg[3]) ui.drawRect(.{ .x = x, .y = y + h / 2 - t / 2, .width = w, .height = t }, color); // middle
+    if (seg[4]) ui.drawRect(.{ .x = x, .y = y + h / 2, .width = t, .height = h / 2 }, color); // bottom-left
+    if (seg[5]) ui.drawRect(.{ .x = x + w - t, .y = y + h / 2, .width = t, .height = h / 2 }, color); // bottom-right
+    if (seg[6]) ui.drawRect(.{ .x = x, .y = y + h - t, .width = w, .height = t }, color); // bottom
 }
