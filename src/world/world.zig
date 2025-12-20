@@ -12,6 +12,7 @@ const TerrainGenerator = @import("worldgen/generator.zig").TerrainGenerator;
 
 const Mat4 = @import("../engine/math/mat4.zig").Mat4;
 const Vec3 = @import("../engine/math/vec3.zig").Vec3;
+const Frustum = @import("../engine/math/frustum.zig").Frustum;
 const Shader = @import("../engine/graphics/shader.zig").Shader;
 
 pub const ChunkKey = struct {
@@ -47,13 +48,20 @@ pub const ChunkData = struct {
     mesh: ChunkMesh,
 };
 
+/// Render statistics
+pub const RenderStats = struct {
+    chunks_total: u32 = 0,
+    chunks_rendered: u32 = 0,
+    chunks_culled: u32 = 0,
+    vertices_rendered: u64 = 0,
+};
+
 pub const World = struct {
     chunks: std.HashMap(ChunkKey, *ChunkData, ChunkKeyContext, 80),
     allocator: std.mem.Allocator,
     generator: TerrainGenerator,
-
-    /// Render distance in chunks
     render_distance: i32,
+    last_render_stats: RenderStats,
 
     pub fn init(allocator: std.mem.Allocator, render_distance: i32, seed: u64) World {
         return .{
@@ -61,6 +69,7 @@ pub const World = struct {
             .allocator = allocator,
             .render_distance = render_distance,
             .generator = TerrainGenerator.init(seed),
+            .last_render_stats = .{},
         };
     }
 
@@ -143,20 +152,42 @@ pub const World = struct {
         }
     }
 
-    /// Render all loaded chunks
+    /// Render all loaded chunks with frustum culling
     pub fn render(self: *World, shader: *const Shader, view_proj: Mat4) void {
         shader.use();
 
+        // Extract frustum from view-projection matrix
+        const frustum = Frustum.fromViewProj(view_proj);
+
+        self.last_render_stats = .{};
+
         var iter = self.chunks.iterator();
         while (iter.next()) |entry| {
+            const key = entry.key_ptr.*;
             const data = entry.value_ptr.*;
 
             if (!data.mesh.ready) continue;
+
+            self.last_render_stats.chunks_total += 1;
+
+            // Frustum culling
+            if (!frustum.intersectsChunk(key.x, key.z)) {
+                self.last_render_stats.chunks_culled += 1;
+                continue;
+            }
+
+            self.last_render_stats.chunks_rendered += 1;
+            self.last_render_stats.vertices_rendered += data.mesh.vertex_count;
 
             // Model matrix is identity since chunk vertices are in world space
             shader.setMat4("transform", &view_proj.data);
             data.mesh.draw();
         }
+    }
+
+    /// Get render statistics from last frame
+    pub fn getRenderStats(self: *const World) RenderStats {
+        return self.last_render_stats;
     }
 
     /// Get statistics

@@ -241,10 +241,13 @@ pub fn main() !void {
         // Print stats occasionally
         if (time.frame_count % 120 == 0) {
             const stats = world.getStats();
-            std.debug.print("FPS: {d:.1} | Chunks: {} | Vertices: {} | Pos: ({d:.1}, {d:.1}, {d:.1})\n", .{
+            const render_stats = world.getRenderStats();
+            std.debug.print("FPS: {d:.1} | Chunks: {}/{} (culled: {}) | Vertices: {} | Pos: ({d:.1}, {d:.1}, {d:.1})\n", .{
                 time.fps,
+                render_stats.chunks_rendered,
                 stats.chunks_loaded,
-                stats.total_vertices,
+                render_stats.chunks_culled,
+                render_stats.vertices_rendered,
                 camera.position.x,
                 camera.position.y,
                 camera.position.z,
