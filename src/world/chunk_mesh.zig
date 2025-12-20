@@ -1,5 +1,6 @@
 //! Chunk mesh generation with visible face culling and texture UVs.
 //! Only generates faces where a solid block meets air/transparent block.
+//! Supports cross-chunk face culling when neighbor chunk data is provided.
 
 const std = @import("std");
 const c = @cImport({
@@ -14,6 +15,16 @@ const BlockType = @import("block.zig").BlockType;
 const Face = @import("block.zig").Face;
 const ALL_FACES = @import("block.zig").ALL_FACES;
 const TextureAtlas = @import("../engine/graphics/texture_atlas.zig").TextureAtlas;
+
+/// Neighbor chunks for cross-chunk face culling
+pub const NeighborChunks = struct {
+    north: ?*const Chunk = null, // -Z
+    south: ?*const Chunk = null, // +Z
+    east: ?*const Chunk = null, // +X
+    west: ?*const Chunk = null, // -X
+
+    pub const empty = NeighborChunks{};
+};
 
 pub const ChunkMesh = struct {
     vao: c.GLuint,
@@ -73,8 +84,13 @@ pub const ChunkMesh = struct {
         c.glDeleteBuffers().?(1, &self.vbo);
     }
 
-    /// Build mesh from chunk data with face culling
+    /// Build mesh from chunk data with face culling (no neighbor awareness)
     pub fn build(self: *ChunkMesh, chunk: *const Chunk) !void {
+        return self.buildWithNeighbors(chunk, NeighborChunks.empty);
+    }
+
+    /// Build mesh from chunk data with cross-chunk face culling
+    pub fn buildWithNeighbors(self: *ChunkMesh, chunk: *const Chunk, neighbors: NeighborChunks) !void {
         var vertices = std.ArrayListUnmanaged(f32){};
         defer vertices.deinit(self.allocator);
 
@@ -99,7 +115,7 @@ pub const ChunkMesh = struct {
 
                     // Check each face
                     for (ALL_FACES) |face| {
-                        if (self.shouldRenderFace(chunk, x, y, z, face)) {
+                        if (shouldRenderFace(chunk, neighbors, x, y, z, face)) {
                             try self.addFace(&vertices, world_x, world_y, world_z, face, block);
                         }
                     }
@@ -109,18 +125,6 @@ pub const ChunkMesh = struct {
 
         // Upload to GPU
         self.uploadVertices(vertices.items);
-    }
-
-    /// Check if a face should be rendered (neighbor is air/transparent)
-    fn shouldRenderFace(self: *ChunkMesh, chunk: *const Chunk, x: u32, y: u32, z: u32, face: Face) bool {
-        _ = self;
-        const offset = face.getOffset();
-        const nx = @as(i32, @intCast(x)) + offset.x;
-        const ny = @as(i32, @intCast(y)) + offset.y;
-        const nz = @as(i32, @intCast(z)) + offset.z;
-
-        const neighbor = chunk.getBlockSafe(nx, ny, nz);
-        return neighbor.isTransparent();
     }
 
     /// Add a face (2 triangles, 6 vertices) to the vertex list
@@ -198,6 +202,56 @@ pub const ChunkMesh = struct {
         c.glDrawArrays(c.GL_TRIANGLES, 0, @intCast(self.vertex_count));
     }
 };
+
+/// Check if a face should be rendered (neighbor is air/transparent)
+/// Supports cross-chunk lookups via NeighborChunks
+fn shouldRenderFace(chunk: *const Chunk, neighbors: NeighborChunks, x: u32, y: u32, z: u32, face: Face) bool {
+    const offset = face.getOffset();
+    const nx = @as(i32, @intCast(x)) + offset.x;
+    const ny = @as(i32, @intCast(y)) + offset.y;
+    const nz = @as(i32, @intCast(z)) + offset.z;
+
+    // Y bounds check (no vertical neighbors)
+    if (ny < 0 or ny >= CHUNK_SIZE_Y) {
+        return ny < 0; // Render bottom face at y=0, hide top face above world
+    }
+
+    // Check if neighbor is in adjacent chunk
+    if (nx < 0) {
+        // West neighbor (-X)
+        if (neighbors.west) |west_chunk| {
+            return west_chunk.getBlock(CHUNK_SIZE_X - 1, @intCast(ny), @intCast(z)).isTransparent();
+        }
+        return true; // No neighbor chunk loaded, render the face
+    }
+
+    if (nx >= CHUNK_SIZE_X) {
+        // East neighbor (+X)
+        if (neighbors.east) |east_chunk| {
+            return east_chunk.getBlock(0, @intCast(ny), @intCast(z)).isTransparent();
+        }
+        return true;
+    }
+
+    if (nz < 0) {
+        // North neighbor (-Z)
+        if (neighbors.north) |north_chunk| {
+            return north_chunk.getBlock(@intCast(x), @intCast(ny), CHUNK_SIZE_Z - 1).isTransparent();
+        }
+        return true;
+    }
+
+    if (nz >= CHUNK_SIZE_Z) {
+        // South neighbor (+Z)
+        if (neighbors.south) |south_chunk| {
+            return south_chunk.getBlock(@intCast(x), @intCast(ny), 0).isTransparent();
+        }
+        return true;
+    }
+
+    // Neighbor is within this chunk
+    return chunk.getBlock(@intCast(nx), @intCast(ny), @intCast(nz)).isTransparent();
+}
 
 /// Get the 4 corners of a face (counter-clockwise winding)
 fn getFaceCorners(x: f32, y: f32, z: f32, face: Face) [4][3]f32 {

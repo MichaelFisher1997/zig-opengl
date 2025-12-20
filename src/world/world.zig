@@ -3,6 +3,7 @@
 const std = @import("std");
 const Chunk = @import("chunk.zig").Chunk;
 const ChunkMesh = @import("chunk_mesh.zig").ChunkMesh;
+const NeighborChunks = @import("chunk_mesh.zig").NeighborChunks;
 const BlockType = @import("block.zig").BlockType;
 const worldToChunk = @import("chunk.zig").worldToChunk;
 const worldToLocal = @import("chunk.zig").worldToLocal;
@@ -145,11 +146,23 @@ pub const World = struct {
 
                 // Rebuild mesh if dirty
                 if (data.chunk.dirty) {
-                    try data.mesh.build(&data.chunk);
+                    // Gather neighbor chunks for cross-chunk face culling
+                    const neighbors = self.getNeighborChunks(cx, cz);
+                    try data.mesh.buildWithNeighbors(&data.chunk, neighbors);
                     data.chunk.dirty = false;
                 }
             }
         }
+    }
+
+    /// Get neighbor chunks for a given chunk position
+    fn getNeighborChunks(self: *World, chunk_x: i32, chunk_z: i32) NeighborChunks {
+        return .{
+            .north = if (self.getChunk(chunk_x, chunk_z - 1)) |d| &d.chunk else null,
+            .south = if (self.getChunk(chunk_x, chunk_z + 1)) |d| &d.chunk else null,
+            .east = if (self.getChunk(chunk_x + 1, chunk_z)) |d| &d.chunk else null,
+            .west = if (self.getChunk(chunk_x - 1, chunk_z)) |d| &d.chunk else null,
+        };
     }
 
     /// Render all loaded chunks with frustum culling
