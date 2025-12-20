@@ -1,9 +1,7 @@
 //! Texture loading and management.
 
 const std = @import("std");
-const c = @cImport({
-    @cInclude("GL/glew.h");
-});
+const c = @import("../../c.zig").c;
 
 const log = @import("../core/log.zig");
 

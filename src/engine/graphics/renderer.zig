@@ -1,9 +1,7 @@
 //! Main renderer that manages OpenGL state and rendering pipeline.
 
 const std = @import("std");
-const c = @cImport({
-    @cInclude("GL/glew.h");
-});
+const c = @import("../../c.zig").c;
 
 const Mat4 = @import("../math/mat4.zig").Mat4;
 const Vec3 = @import("../math/vec3.zig").Vec3;
@@ -177,10 +175,7 @@ pub const Renderer = struct {
 
 /// Set VSync mode (call after creating GL context)
 pub fn setVSync(enabled: bool) void {
-    const sdl = @cImport({
-        @cInclude("SDL3/SDL.h");
-    });
-    _ = sdl.SDL_GL_SetSwapInterval(if (enabled) 1 else 0);
+    _ = c.SDL_GL_SetSwapInterval(if (enabled) 1 else 0);
     log.log.info("VSync: {}", .{enabled});
 }
 

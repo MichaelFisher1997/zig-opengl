@@ -2,9 +2,7 @@
 //! Uses orthographic projection and immediate-mode style rendering.
 
 const std = @import("std");
-const c = @cImport({
-    @cInclude("GL/glew.h");
-});
+const c = @import("../../c.zig").c;
 
 const Mat4 = @import("../math/mat4.zig").Mat4;
 const Vec3 = @import("../math/vec3.zig").Vec3;
@@ -86,8 +84,9 @@ pub const UISystem = struct {
 
     /// Begin UI rendering (call before drawing any UI elements)
     pub fn begin(self: *UISystem) void {
-        // Disable depth test for UI
+        // Disable depth test and culling for UI
         c.glDisable(c.GL_DEPTH_TEST);
+        c.glDisable(c.GL_CULL_FACE);
 
         self.shader.use();
 
@@ -103,6 +102,7 @@ pub const UISystem = struct {
         _ = self;
         c.glBindVertexArray().?(0);
         c.glEnable(c.GL_DEPTH_TEST);
+        c.glEnable(c.GL_CULL_FACE);
     }
 
     /// Draw a filled rectangle

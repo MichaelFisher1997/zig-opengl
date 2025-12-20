@@ -2,9 +2,7 @@
 //! Generates a procedural texture atlas with all block types.
 
 const std = @import("std");
-const c = @cImport({
-    @cInclude("GL/glew.h");
-});
+const c = @import("../../c.zig").c;
 
 const Texture = @import("texture.zig").Texture;
 const FilterMode = @import("texture.zig").FilterMode;

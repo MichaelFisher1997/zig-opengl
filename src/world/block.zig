@@ -15,6 +15,11 @@ pub const BlockType = enum(u8) {
     bedrock = 9,
     gravel = 10,
     glass = 11,
+    snow_block = 12,
+    cactus = 13,
+    coal_ore = 14,
+    iron_ore = 15,
+    gold_ore = 16,
 
     _,
 
@@ -55,6 +60,11 @@ pub const BlockType = enum(u8) {
             .bedrock => .{ 0.15, 0.15, 0.15 },
             .gravel => .{ 0.45, 0.42, 0.4 },
             .glass => .{ 0.8, 0.9, 0.95 },
+            .snow_block => .{ 0.95, 0.95, 1.0 },
+            .cactus => .{ 0.1, 0.6, 0.1 },
+            .coal_ore => .{ 0.1, 0.1, 0.1 },
+            .iron_ore => .{ 0.6, 0.5, 0.4 },
+            .gold_ore => .{ 0.9, 0.8, 0.2 },
             _ => .{ 1, 0, 1 }, // Magenta for unknown
         };
     }

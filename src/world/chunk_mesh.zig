@@ -3,9 +3,7 @@
 //! Supports cross-chunk face culling when neighbor chunk data is provided.
 
 const std = @import("std");
-const c = @cImport({
-    @cInclude("GL/glew.h");
-});
+const c = @import("../c.zig").c;
 
 const Chunk = @import("chunk.zig").Chunk;
 const CHUNK_SIZE_X = @import("chunk.zig").CHUNK_SIZE_X;

@@ -63,9 +63,7 @@ pub var log = Logger.init(.debug);
 
 /// OpenGL error checking
 pub fn checkGLError(location: []const u8) bool {
-    const c = @cImport({
-        @cInclude("GL/glew.h");
-    });
+    const c = @import("../../c.zig").c;
 
     var had_error = false;
     while (true) {
@@ -89,8 +87,6 @@ pub fn checkGLError(location: []const u8) bool {
 
 /// Clear any pending GL errors
 pub fn clearGLErrors() void {
-    const c = @cImport({
-        @cInclude("GL/glew.h");
-    });
+    const c = @import("../../c.zig").c;
     while (c.glGetError() != c.GL_NO_ERROR) {}
 }
