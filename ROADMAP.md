@@ -1,6 +1,6 @@
 # OpenGL Engine Roadmap
 
-This roadmap is derived from The Cherno’s OpenGL series and translated into **engine-level milestones**.  
+This roadmap is derived from The Cherno's OpenGL series and translated into **engine-level milestones**.  
 Use this as a checklist and progression guide while building your engine.
 
 ---
@@ -8,36 +8,36 @@ Use this as a checklist and progression guide while building your engine.
 ## Phase 0 — Foundations
 **Goal:** Window + context + sanity
 
-- [ ] Window creation abstraction (GLFW / SDL)
-- [ ] OpenGL context creation (core profile)
-- [ ] Swap buffers
-- [ ] VSync enable / disable
-- [ ] OpenGL loader (GLAD / GLEW)
-- [ ] Runtime OpenGL version & capability checks
+- [x] Window creation abstraction (GLFW / SDL)
+- [x] OpenGL context creation (core profile)
+- [x] Swap buffers
+- [x] VSync enable / disable
+- [x] OpenGL loader (GLAD / GLEW)
+- [x] Runtime OpenGL version & capability checks
 
 ---
 
 ## Phase 1 — Modern OpenGL Basics
 **Goal:** Draw *something* correctly, the modern way
 
-- [ ] Core-profile OpenGL only (no fixed pipeline)
-- [ ] Vertex Buffer (VBO) abstraction
+- [x] Core-profile OpenGL only (no fixed pipeline)
+- [x] Vertex Buffer (VBO) abstraction
 - [ ] Index Buffer (EBO / IBO) abstraction
-- [ ] Vertex Array Object (VAO) abstraction
-- [ ] Vertex attribute specification
-- [ ] Interleaved vertex layouts
-- [ ] Static vs dynamic buffer usage
+- [x] Vertex Array Object (VAO) abstraction
+- [x] Vertex attribute specification
+- [x] Interleaved vertex layouts
+- [x] Static vs dynamic buffer usage
 
 ---
 
 ## Phase 2 — Shaders
 **Goal:** Full control of the GPU pipeline
 
-- [ ] Shader compilation system
-- [ ] Shader linking & validation
-- [ ] Error reporting for shaders
-- [ ] Shader abstraction class
-- [ ] Uniform upload API
+- [x] Shader compilation system
+- [x] Shader linking & validation
+- [x] Error reporting for shaders
+- [x] Shader abstraction class
+- [x] Uniform upload API
 - [ ] Uniform location caching
 - [ ] Shader source hot-reloading
 - [ ] Central shader library / registry
@@ -51,31 +51,31 @@ Use this as a checklist and progression guide while building your engine.
 - [ ] KHR_debug callback
 - [ ] GL call error macros
 - [ ] Assertions around GPU calls
-- [ ] Engine-level logging system
+- [x] Engine-level logging system
 
 ---
 
 ## Phase 4 — Renderer Architecture
 **Goal:** Hide OpenGL behind a clean engine API
 
-- [ ] Renderer API layer
+- [x] Renderer API layer
 - [ ] Render command abstraction
-- [ ] Draw call encapsulation
-- [ ] Renderer statistics (draw calls, vertices)
-- [ ] Render state isolation
-- [ ] Multiple object rendering
+- [x] Draw call encapsulation
+- [x] Renderer statistics (draw calls, vertices)
+- [x] Render state isolation
+- [x] Multiple object rendering
 
 ---
 
 ## Phase 5 — Textures & Materials
 **Goal:** Real assets, not hardcoded colors
 
-- [ ] Texture loading system
-- [ ] Texture abstraction class
-- [ ] Texture parameter configuration
-- [ ] Texture unit / slot management
+- [x] Texture loading system
+- [x] Texture abstraction class
+- [x] Texture parameter configuration
+- [x] Texture unit / slot management
 - [ ] Multi-texture rendering
-- [ ] Texture atlases
+- [x] Texture atlases
 - [ ] Material system (shader + textures + params)
 
 ---
@@ -83,8 +83,8 @@ Use this as a checklist and progression guide while building your engine.
 ## Phase 6 — Blending & Transparency
 **Goal:** UI, sprites, and transparency
 
-- [ ] Alpha blending
-- [ ] Blend mode abstraction
+- [x] Alpha blending
+- [x] Blend mode abstraction
 - [ ] Premultiplied alpha support
 - [ ] Transparent object ordering (basic)
 
@@ -93,13 +93,14 @@ Use this as a checklist and progression guide while building your engine.
 ## Phase 7 — Math & Transforms
 **Goal:** Cameras, movement, real scenes
 
-- [ ] Math library (vec2/3/4, mat4)
+- [x] Math library (vec2/3/4, mat4)
 - [ ] Transform component
-- [ ] Projection matrices (ortho & perspective)
-- [ ] View matrices (camera)
-- [ ] Model matrices
-- [ ] MVP pipeline
-- [ ] Camera abstraction
+- [x] Projection matrices (ortho & perspective)
+- [x] View matrices (camera)
+- [x] Model matrices
+- [x] MVP pipeline
+- [x] Camera abstraction
+- [x] Frustum culling
 
 ---
 
@@ -109,9 +110,9 @@ Use this as a checklist and progression guide while building your engine.
 - [ ] Batch renderer architecture
 - [ ] Batched colored geometry
 - [ ] Batched textured geometry
-- [ ] Texture slot management
+- [x] Texture slot management
 - [ ] Dynamic geometry batching
-- [ ] Draw-call minimisation strategy
+- [x] Draw-call minimisation strategy (frustum culling)
 
 ---
 
@@ -130,14 +131,14 @@ Use this as a checklist and progression guide while building your engine.
 
 - [ ] ImGui integration
 - [ ] Debug panels
-- [ ] Renderer stats overlay
+- [x] Renderer stats overlay
 - [ ] Live shader reload toggle
-- [ ] Runtime render mode toggles (wireframe, etc.)
+- [x] Runtime render mode toggles (wireframe, etc.)
 
 ---
 
 ## Phase 11 — Testing Framework
-**Goal:** Don’t break rendering accidentally
+**Goal:** Don't break rendering accidentally
 
 - [ ] Render test framework
 - [ ] Isolated render tests
@@ -146,16 +147,16 @@ Use this as a checklist and progression guide while building your engine.
 
 ---
 
-## Engine v1 “Done” Definition
+## Engine v1 "Done" Definition
 You can call this a **real engine** when you have:
 
-- [ ] Clean renderer API
+- [x] Clean renderer API
 - [ ] Shader + material system
-- [ ] Texture & asset loading
-- [ ] Camera & transform system
+- [x] Texture & asset loading
+- [x] Camera & transform system
 - [ ] Batch renderer
 - [ ] Debug UI
-- [ ] Measured performance metrics
+- [x] Measured performance metrics
 
 ---
 
