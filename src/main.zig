@@ -18,6 +18,7 @@ const TextureAtlas = @import("engine/graphics/texture_atlas.zig").TextureAtlas;
 
 // World imports
 const World = @import("world/world.zig").World;
+const worldToChunk = @import("world/chunk.zig").worldToChunk;
 
 // C imports
 const c = @import("c.zig").c;
@@ -74,7 +75,7 @@ const AppState = enum {
 };
 
 const Settings = struct {
-    render_distance: i32 = 2,
+    render_distance: i32 = 15,
     mouse_sensitivity: f32 = 50.0,
     vsync: bool = true,
     fov: f32 = 45.0,
@@ -161,8 +162,8 @@ pub fn main() !void {
     defer seed_input.deinit(allocator);
     var seed_focused = false;
 
-    var world: ?World = null;
-    defer if (world) |*active_world| active_world.deinit();
+    var world: ?*World = null;
+    defer if (world) |active_world| active_world.deinit();
 
     // Initial viewport
     renderer.setViewport(1280, 720);
@@ -182,11 +183,6 @@ pub fn main() !void {
         input.beginFrame();
         input.pollEvents();
 
-        // Handle escape to quit
-        if (input.isKeyPressed(.escape)) {
-            input.should_quit = true;
-        }
-
         // Handle window resize
         renderer.setViewport(input.window_width, input.window_height);
         ui.resize(input.window_width, input.window_height);
@@ -198,6 +194,26 @@ pub fn main() !void {
         const mouse_y: f32 = @floatFromInt(mouse_pos.y);
         const mouse_clicked = input.isMouseButtonPressed(.left);
 
+        // Global Escape Handling
+        if (input.isKeyPressed(.escape)) {
+            switch (app_state) {
+                .home => input.should_quit = true,
+                .singleplayer => {
+                    app_state = .home;
+                    seed_focused = false;
+                },
+                .settings => app_state = last_state,
+                .world => {
+                    app_state = .paused;
+                    input.setMouseCapture(window, false);
+                },
+                .paused => {
+                    app_state = .world;
+                    input.setMouseCapture(window, true);
+                },
+            }
+        }
+
         const in_world = app_state == .world;
         const in_pause = app_state == .paused;
 
@@ -205,17 +221,6 @@ pub fn main() !void {
             // Toggle mouse capture with Tab (only in world)
             if (in_world and input.isKeyPressed(.tab)) {
                 input.setMouseCapture(window, !input.mouse_captured);
-            }
-
-            // Pause toggle with Escape
-            if (input.isKeyPressed(.escape)) {
-                if (in_world) {
-                    app_state = .paused;
-                    input.setMouseCapture(window, false);
-                } else if (in_pause) {
-                    app_state = .world;
-                    input.setMouseCapture(window, true);
-                }
             }
 
             // Toggle wireframe with F
@@ -241,7 +246,7 @@ pub fn main() !void {
                 camera.update(&input, time.delta_time);
             }
 
-            if (world) |*active_world| {
+            if (world) |active_world| {
                 // Update world (load chunks around player)
                 active_world.render_distance = settings.render_distance;
                 try active_world.update(camera.position);
@@ -258,7 +263,7 @@ pub fn main() !void {
         renderer.beginFrame();
 
         if (in_world or in_pause) {
-            if (world) |*active_world| {
+            if (world) |active_world| {
                 // Calculate matrices
                 const aspect = screen_w / screen_h;
                 // TODO: Update camera FOV with settings.fov
@@ -276,6 +281,32 @@ pub fn main() !void {
                 ui.begin();
                 ui.drawRect(.{ .x = 10, .y = 10, .width = 80, .height = 30 }, Color.rgba(0, 0, 0, 0.7));
                 drawNumber(&ui, @intFromFloat(time.fps), 15, 15, Color.white);
+
+                // Streaming HUD
+                const stats = active_world.getStats();
+                const rs = active_world.getRenderStats();
+                const player_chunk = worldToChunk(@intFromFloat(camera.position.x), @intFromFloat(camera.position.z));
+                const hud_y: f32 = 50.0;
+                ui.drawRect(.{ .x = 10, .y = hud_y, .width = 220, .height = 130 }, Color.rgba(0, 0, 0, 0.6));
+
+                drawText(&ui, "POS:", 15, hud_y + 5, 1.5, Color.white);
+                drawNumber(&ui, player_chunk.chunk_x, 120, hud_y + 5, Color.white);
+                drawNumber(&ui, player_chunk.chunk_z, 170, hud_y + 5, Color.white);
+
+                drawText(&ui, "CHUNKS:", 15, hud_y + 25, 1.5, Color.white);
+                drawNumber(&ui, @intCast(stats.chunks_loaded), 140, hud_y + 25, Color.white);
+
+                drawText(&ui, "VISIBLE:", 15, hud_y + 45, 1.5, Color.white);
+                drawNumber(&ui, @intCast(rs.chunks_rendered), 140, hud_y + 45, Color.white);
+
+                drawText(&ui, "QUEUED GEN:", 15, hud_y + 65, 1.5, Color.white);
+                drawNumber(&ui, @intCast(stats.gen_queue), 140, hud_y + 65, Color.white);
+
+                drawText(&ui, "QUEUED MESH:", 15, hud_y + 85, 1.5, Color.white);
+                drawNumber(&ui, @intCast(stats.mesh_queue), 140, hud_y + 85, Color.white);
+
+                drawText(&ui, "PENDING UP:", 15, hud_y + 105, 1.5, Color.white);
+                drawNumber(&ui, @intCast(stats.upload_queue), 140, hud_y + 105, Color.white);
 
                 if (in_pause) {
                     // Darken background
@@ -302,7 +333,7 @@ pub fn main() !void {
 
                     if (drawButton(&ui, .{ .x = pause_x, .y = pause_y, .width = pause_w, .height = pause_h }, "QUIT TO TITLE", 2.0, mouse_x, mouse_y, mouse_clicked)) {
                         app_state = .home;
-                        if (world) |*w| {
+                        if (world) |w| {
                             w.deinit();
                             world = null;
                         }
@@ -362,7 +393,7 @@ pub fn main() !void {
                         if (settings.render_distance > 1) settings.render_distance -= 1;
                     }
                     if (drawButton(&ui, .{ .x = value_x + 100.0, .y = setting_y - 5.0, .width = 30.0, .height = 30.0 }, "+", 1.5, mouse_x, mouse_y, mouse_clicked)) {
-                        if (settings.render_distance < 16) settings.render_distance += 1;
+                        if (settings.render_distance < 32) settings.render_distance += 1;
                     }
                     setting_y += 50.0;
 
@@ -457,11 +488,11 @@ pub fn main() !void {
 
                     if (create_clicked or create_pressed) {
                         const seed_value = try resolveSeed(&seed_input, allocator);
-                        if (world) |*active_world| {
+                        if (world) |active_world| {
                             active_world.deinit();
                             world = null;
                         }
-                        world = World.init(allocator, 2, seed_value);
+                        world = try World.init(allocator, 2, seed_value);
                         app_state = .world;
                         seed_focused = false;
                         camera = Camera.init(.{
@@ -482,7 +513,7 @@ pub fn main() !void {
         _ = c.SDL_GL_SwapWindow(window);
 
         if (in_world) {
-            if (world) |*active_world| {
+            if (world) |active_world| {
                 if (time.frame_count % 120 == 0) {
                     const stats = active_world.getStats();
                     const render_stats = active_world.getRenderStats();
@@ -503,20 +534,10 @@ pub fn main() !void {
 }
 
 // Simple digit drawing using rectangles (7-segment style)
-fn drawNumber(ui: *UISystem, num: u32, x: f32, y: f32, color: Color) void {
-    var n = num;
-    var digit_x = x + 50; // Start from right
-
-    if (n == 0) {
-        drawDigit(ui, 0, digit_x, y, color);
-        return;
-    }
-
-    while (n > 0) : (digit_x -= 15) {
-        const digit: u4 = @intCast(n % 10);
-        drawDigit(ui, digit, digit_x, y, color);
-        n /= 10;
-    }
+fn drawNumber(ui: *UISystem, num: i32, x: f32, y: f32, color: Color) void {
+    var buffer: [12]u8 = undefined;
+    const text = std.fmt.bufPrint(&buffer, "{d}", .{num}) catch return;
+    drawText(ui, text, x, y, 2.0, color);
 }
 
 fn drawDigit(ui: *UISystem, digit: u4, x: f32, y: f32, color: Color) void {

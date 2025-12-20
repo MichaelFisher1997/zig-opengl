@@ -28,6 +28,8 @@ pub const ChunkMesh = struct {
     vao: c.GLuint,
     vbo: c.GLuint,
     vertex_count: u32,
+    pending_vertices: ?[]f32 = null,
+    mutex: std.Thread.Mutex = .{},
 
     /// Allocator for vertex data during mesh building
     allocator: std.mem.Allocator,
@@ -78,6 +80,10 @@ pub const ChunkMesh = struct {
     }
 
     pub fn deinit(self: *ChunkMesh) void {
+        self.mutex.lock();
+        if (self.pending_vertices) |pv| self.allocator.free(pv);
+        self.pending_vertices = null;
+        self.mutex.unlock();
         c.glDeleteVertexArrays().?(1, &self.vao);
         c.glDeleteBuffers().?(1, &self.vbo);
     }
@@ -121,8 +127,36 @@ pub const ChunkMesh = struct {
             }
         }
 
-        // Upload to GPU
-        self.uploadVertices(vertices.items);
+        // Store vertices to be uploaded by the main thread later
+        const final_slice = try vertices.toOwnedSlice(self.allocator);
+
+        self.mutex.lock();
+        if (self.pending_vertices) |pv| self.allocator.free(pv);
+        self.pending_vertices = final_slice;
+        self.mutex.unlock();
+    }
+
+    /// Upload pending vertices to GPU (Must be called from main thread)
+    pub fn upload(self: *ChunkMesh) void {
+        self.mutex.lock();
+        const vertices = self.pending_vertices orelse {
+            self.mutex.unlock();
+            return;
+        };
+        self.pending_vertices = null;
+        self.mutex.unlock();
+
+        defer self.allocator.free(vertices);
+
+        c.glBindBuffer().?(c.GL_ARRAY_BUFFER, self.vbo);
+        c.glBufferData().?(
+            c.GL_ARRAY_BUFFER,
+            @intCast(vertices.len * @sizeOf(f32)),
+            vertices.ptr,
+            c.GL_STATIC_DRAW,
+        );
+        self.vertex_count = @intCast(vertices.len / FLOATS_PER_VERTEX);
+        self.ready = self.vertex_count > 0;
     }
 
     /// Add a face (2 triangles, 6 vertices) to the vertex list
