@@ -32,11 +32,15 @@ const vertex_shader_src =
     \\layout (location = 2) in vec3 aNormal;
     \\layout (location = 3) in vec2 aTexCoord;
     \\layout (location = 4) in float aTileID;
+    \\layout (location = 5) in float aSkyLight;
+    \\layout (location = 6) in float aBlockLight;
     \\out vec3 vColor;
     \\flat out vec3 vNormal;
     \\out vec2 vTexCoord;
     \\flat out int vTileID;
     \\out float vDistance;
+    \\out float vSkyLight;
+    \\out float vBlockLight;
     \\uniform mat4 transform;
     \\void main() {
     \\    vec4 clipPos = transform * vec4(aPos, 1.0);
@@ -45,7 +49,9 @@ const vertex_shader_src =
     \\    vNormal = aNormal;
     \\    vTexCoord = aTexCoord;
     \\    vTileID = int(aTileID);
-    \\    vDistance = length(aPos); // Distance from chunk origin (floating origin)
+    \\    vDistance = length(aPos);
+    \\    vSkyLight = aSkyLight;
+    \\    vBlockLight = aBlockLight;
     \\}
 ;
 
@@ -56,6 +62,8 @@ const fragment_shader_src =
     \\in vec2 vTexCoord;
     \\flat in int vTileID;
     \\in float vDistance;
+    \\in float vSkyLight;
+    \\in float vBlockLight;
     \\out vec4 FragColor;
     \\uniform sampler2D uTexture;
     \\uniform bool uUseTexture;
@@ -66,10 +74,24 @@ const fragment_shader_src =
     \\uniform float uFogDensity;
     \\uniform bool uFogEnabled;
     \\void main() {
-    \\    // Dynamic directional lighting from sun
+    \\    // Combined lighting = Ambient + (SkyLight * SunIntensity) + BlockLight
+    \\    // Directional sun contribution (diffuse) only affects skylight
+    \\    
     \\    float sunDiff = max(dot(vNormal, uSunDir), 0.0);
-    \\    float lighting = uAmbient + sunDiff * uSunIntensity * 0.6;
-    \\    lighting = clamp(lighting, 0.0, 1.0);
+    \\    
+    \\    // Calculate light levels
+    \\    // Skylight affected by sun intensity and angle
+    \\    float skyLight = vSkyLight * (uAmbient + sunDiff * uSunIntensity * 0.8);
+    \\    
+    \\    // Block light fades with distance (handled by propagation, here just 0-1)
+    \\    float blockLight = vBlockLight;
+    \\    
+    \\    // Combine lights (max or add, max usually looks better for voxels)
+    \\    float lightLevel = max(skyLight, blockLight);
+    \\    
+    \\    // Ensure minimum ambient
+    \\    lightLevel = max(lightLevel, uAmbient * 0.5);
+    \\    lightLevel = clamp(lightLevel, 0.0, 1.0);
     \\    
     \\    vec3 color;
     \\    if (uUseTexture) {
@@ -86,9 +108,9 @@ const fragment_shader_src =
     \\        vec2 uv = (tilePos + tiledUV) * tileSize;
     \\        vec4 texColor = texture(uTexture, uv);
     \\        if (texColor.a < 0.1) discard;
-    \\        color = texColor.rgb * vColor * lighting;
+    \\        color = texColor.rgb * vColor * lightLevel;
     \\    } else {
-    \\        color = vColor * lighting;
+    \\        color = vColor * lightLevel;
     \\    }
     \\    
     \\    // Apply fog
