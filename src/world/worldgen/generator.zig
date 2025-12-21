@@ -446,9 +446,23 @@ pub const TerrainGenerator = struct {
         const mount = std.math.pow(f32, m_mask, 1.7) * p.mount_amp;
         base_height += mount;
 
+        // ATTENUATION: Reduce detail noise at higher altitudes to avoid jagged peaks
+        const elev_norm = clamp01((base_height - sea) / 120.0);
+        const detail_atten = 1.0 - smoothstep(0.3, 0.9, elev_norm);
+
         // Section 5.3: Local detail (hills)
-        const detail = self.detail_noise.fbm2D(x, z, 5, 2.0, 0.5, p.detail_scale) * p.detail_amp;
+        const detail = self.detail_noise.fbm2D(x, z, 5, 2.0, 0.5, p.detail_scale) * p.detail_amp * detail_atten;
         base_height += detail;
+
+        // COMPRESSION: Soft cap peaks to prevent needle terrain
+        const peak_start = sea + 90.0;
+        if (base_height > peak_start) {
+            const h_above = base_height - peak_start;
+            const peak_range = 100.0;
+            // Smoothly compress height as it goes higher
+            const compressed = peak_range * (1.0 - std.math.exp(-h_above / peak_range));
+            base_height = peak_start + compressed;
+        }
 
         // Section 5.5: Cliff/terrace shaping - reduce smoothness in rugged areas
         // Higher erosion = smoother terrain, lower = more cliffs
