@@ -17,6 +17,7 @@ pub const ShadowMap = struct {
     shader: Shader,
     light_space_matrices: [CASCADE_COUNT]Mat4,
     cascade_splits: [CASCADE_COUNT]f32,
+    texel_sizes: [CASCADE_COUNT]f32,
 
     pub fn init(resolution: u32) !ShadowMap {
         var depth_maps: [CASCADE_COUNT]Texture = undefined;
@@ -56,6 +57,7 @@ pub const ShadowMap = struct {
             .shader = shader,
             .light_space_matrices = [_]Mat4{Mat4.identity} ** CASCADE_COUNT,
             .cascade_splits = [_]f32{0} ** CASCADE_COUNT,
+            .texel_sizes = [_]f32{0} ** CASCADE_COUNT,
         };
     }
 
@@ -86,12 +88,12 @@ pub const ShadowMap = struct {
         var last_split = near;
         for (0..CASCADE_COUNT) |i| {
             const split = self.cascade_splits[i];
-            self.light_space_matrices[i] = self.computeLightMatrix(last_split, split, camera_fov, aspect, sun_dir, cam_pos, cam_view);
+            self.light_space_matrices[i] = self.computeLightMatrix(i, last_split, split, camera_fov, aspect, sun_dir, cam_pos, cam_view);
             last_split = split;
         }
     }
 
-    fn computeLightMatrix(self: *ShadowMap, near: f32, far: f32, fov: f32, aspect: f32, sun_dir: Vec3, cam_pos: Vec3, cam_view: Mat4) Mat4 {
+    fn computeLightMatrix(self: *ShadowMap, cascade_index: usize, near: f32, far: f32, fov: f32, aspect: f32, sun_dir: Vec3, cam_pos: Vec3, cam_view: Mat4) Mat4 {
         _ = cam_pos;
 
         // 1. Compute bounding sphere of frustum slice (STABLE CSM approach)
@@ -131,6 +133,8 @@ pub const ShadowMap = struct {
         // 5. Snap center to texel grid in LIGHT SPACE
         // This makes the shadow map "locked" to the world as the camera moves.
         const texel_size = (2.0 * radius) / @as(f32, @floatFromInt(self.resolution));
+        self.texel_sizes[cascade_index] = texel_size;
+
         const center_snapped = Vec3.init(
             @floor(center_ls.x / texel_size) * texel_size,
             @floor(center_ls.y / texel_size) * texel_size,

@@ -92,6 +92,7 @@ const fragment_shader_src =
     \\uniform sampler2D uShadowMap2;
     \\uniform mat4 uLightSpaceMatrices[3];
     \\uniform float uCascadeSplits[3];
+    \\uniform float uShadowTexelSizes[3];
     \\
     \\float calculateShadow(vec3 fragPosWorld, float nDotL, int layer) {
     \\    vec4 fragPosLightSpace = uLightSpaceMatrices[layer] * vec4(fragPosWorld, 1.0);
@@ -103,12 +104,15 @@ const fragment_shader_src =
     \\    if (projCoords.z > 1.0 || projCoords.z < 0.0) return 0.0;
     \\    
     \\    float currentDepth = projCoords.z;
-    \\    // Debug: set bias very small to see if anything appears
-    \\    float biasScale = (layer == 0) ? 1.0 : (layer == 1 ? 4.0 : 8.0);
-    \\    float bias = max(0.0005 * biasScale * (1.0 - nDotL), 0.0001 * biasScale);
+    \\    
+    \\    // Revert to stable normalized bias, but scaled by layer
+    \\    float bias = max(0.002 * (1.0 - nDotL), 0.0005);
+    \\    if (layer == 1) bias *= 2.0;
+    \\    if (layer == 2) bias *= 4.0;
     \\
     \\    float shadow = 0.0;
-    \\    vec2 texelSize = 1.0 / vec2(2048.0);
+    \\    // Use dynamic texel size for PCF
+    \\    vec2 texelSize = 1.0 / vec2(textureSize(uShadowMap0, 0));
     \\    
     \\    for(int x = -1; x <= 1; ++x) {
     \\        for(int y = -1; y <= 1; ++y) {
@@ -205,6 +209,8 @@ const Settings = struct {
     vsync: bool = true,
     fov: f32 = 45.0,
     textures_enabled: bool = true,
+    shadow_resolution: u32 = 2048,
+    shadow_distance: f32 = 250.0,
 };
 
 pub fn main() !void {
@@ -334,15 +340,17 @@ pub fn main() !void {
     var atmosphere = Atmosphere.init();
     defer atmosphere.deinit();
 
-    // 11. Create Shadow Map (CSM with 2048 resolution per cascade)
-    var shadow_map = try ShadowMap.init(2048);
+    var settings = Settings{};
+
+    // 11. Create Shadow Map (CSM with configurable resolution)
+    var shadow_map = try ShadowMap.init(settings.shadow_resolution);
     defer shadow_map.deinit();
 
     // 12. Menu + world state
     var app_state: AppState = .home;
     var last_state: AppState = .home; // For "Back" button in settings
-    var settings = Settings{};
     var debug_shadows = false;
+    var debug_cascade_idx: usize = 0;
     var seed_input = std.ArrayList(u8).empty;
     defer seed_input.deinit(allocator);
     var seed_focused = false;
@@ -432,6 +440,12 @@ pub fn main() !void {
                 log.log.info("Debug Shadows: {}", .{debug_shadows});
             }
 
+            // Cycle shadow cascades in debug mode with K
+            if (debug_shadows and input.isKeyPressed(.k)) {
+                debug_cascade_idx = (debug_cascade_idx + 1) % 3;
+                log.log.info("Debug Cascade: {}", .{debug_cascade_idx});
+            }
+
             // Time-of-day controls
             // 1-4: Time presets (midnight, sunrise, noon, sunset)
             if (input.isKeyPressed(.@"1")) {
@@ -505,10 +519,8 @@ pub fn main() !void {
 
                 if (has_shadows) {
                     // Update cascades (splits and matrices)
-                    // Shadow distance 250 blocks (covers most of render distance)
-                    const shadow_dist = 250.0;
-                    // camera.fov is already in radians
-                    shadow_map.update(camera.fov, aspect, 0.1, shadow_dist, light_dir, camera.position, camera.getViewMatrixOriginCentered());
+                    // Shadow distance from settings
+                    shadow_map.update(camera.fov, aspect, 0.1, settings.shadow_distance, light_dir, camera.position, camera.getViewMatrixOriginCentered());
 
                     // Render each cascade
                     for (0..3) |i| {
@@ -547,6 +559,9 @@ pub fn main() !void {
 
                     const split_name = std.fmt.bufPrintZ(&name_buf, "uCascadeSplits[{}]", .{i}) catch unreachable;
                     shader.setFloat(split_name, shadow_map.cascade_splits[i]);
+
+                    const size_name = std.fmt.bufPrintZ(&name_buf, "uShadowTexelSizes[{}]", .{i}) catch unreachable;
+                    shader.setFloat(size_name, shadow_map.texel_sizes[i]);
                 }
 
                 // Set atmosphere/lighting uniforms
@@ -563,8 +578,8 @@ pub fn main() !void {
                 if (debug_shadows) {
                     debug_shader.use();
                     c.glActiveTexture().?(c.GL_TEXTURE0);
-                    // Visualize Cascade 0 (closest)
-                    c.glBindTexture(c.GL_TEXTURE_2D, shadow_map.depth_maps[0].id);
+                    // Visualize selected cascade
+                    c.glBindTexture(c.GL_TEXTURE_2D, shadow_map.depth_maps[debug_cascade_idx].id);
                     debug_shader.setInt("uDepthMap", 0);
 
                     c.glBindVertexArray().?(debug_quad_vao);
@@ -733,6 +748,17 @@ pub fn main() !void {
                     if (drawButton(&ui, .{ .x = value_x, .y = setting_y - 5.0, .width = 130.0, .height = 30.0 }, if (settings.vsync) "ENABLED" else "DISABLED", 1.5, mouse_x, mouse_y, mouse_clicked)) {
                         settings.vsync = !settings.vsync;
                         setVSync(settings.vsync);
+                    }
+                    setting_y += 50.0;
+
+                    // Shadow Distance
+                    drawText(&ui, "SHADOW DISTANCE", label_x, setting_y, 2.0, Color.white);
+                    drawNumber(&ui, @intFromFloat(settings.shadow_distance), value_x + 60.0, setting_y, Color.white);
+                    if (drawButton(&ui, .{ .x = value_x, .y = setting_y - 5.0, .width = 30.0, .height = 30.0 }, "-", 1.5, mouse_x, mouse_y, mouse_clicked)) {
+                        if (settings.shadow_distance > 50.0) settings.shadow_distance -= 50.0;
+                    }
+                    if (drawButton(&ui, .{ .x = value_x + 100.0, .y = setting_y - 5.0, .width = 30.0, .height = 30.0 }, "+", 1.5, mouse_x, mouse_y, mouse_clicked)) {
+                        if (settings.shadow_distance < 1000.0) settings.shadow_distance += 50.0;
                     }
                     setting_y += 50.0;
 
