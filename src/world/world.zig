@@ -103,8 +103,8 @@ pub const World = struct {
             .last_pc = .{ .x = 9999, .z = 9999 },
         };
 
-        world.gen_pool = try WorkerPool.init(allocator, 2, gen_queue, world, processGenJob);
-        world.mesh_pool = try WorkerPool.init(allocator, 2, mesh_queue, world, processMeshJob);
+        world.gen_pool = try WorkerPool.init(allocator, 4, gen_queue, world, processGenJob);
+        world.mesh_pool = try WorkerPool.init(allocator, 3, mesh_queue, world, processMeshJob);
 
         return world;
     }
@@ -140,6 +140,20 @@ pub const World = struct {
             self.chunks_mutex.unlock();
             return;
         };
+
+        // Skip if chunk is now too far from player (stale job)
+        const dx = job.chunk_x - self.last_pc.x;
+        const dz = job.chunk_z - self.last_pc.z;
+        const max_dist = self.render_distance + 2;
+        if (dx * dx + dz * dz > max_dist * max_dist) {
+            // Reset state so it can be re-queued if player returns
+            if (chunk_data.chunk.state == .generating) {
+                chunk_data.chunk.state = .missing;
+            }
+            self.chunks_mutex.unlock();
+            return;
+        }
+
         chunk_data.chunk.pin();
         self.chunks_mutex.unlock();
 
@@ -160,6 +174,18 @@ pub const World = struct {
             self.chunks_mutex.unlock();
             return;
         };
+
+        // Skip if chunk is now too far from player (stale job)
+        const dx = job.chunk_x - self.last_pc.x;
+        const dz = job.chunk_z - self.last_pc.z;
+        const max_dist = self.render_distance + 2;
+        if (dx * dx + dz * dz > max_dist * max_dist) {
+            if (chunk_data.chunk.state == .meshing) {
+                chunk_data.chunk.state = .generated;
+            }
+            self.chunks_mutex.unlock();
+            return;
+        }
 
         chunk_data.chunk.pin();
         const neighbors = NeighborChunks{
@@ -255,6 +281,10 @@ pub const World = struct {
         if (moved) {
             self.last_pc = .{ .x = pc.chunk_x, .z = pc.chunk_z };
 
+            // Re-prioritize queued jobs based on new player position
+            try self.gen_queue.updatePlayerPos(pc.chunk_x, pc.chunk_z);
+            try self.mesh_queue.updatePlayerPos(pc.chunk_x, pc.chunk_z);
+
             var cz = pc.chunk_z - self.render_distance;
             while (cz <= pc.chunk_z + self.render_distance) : (cz += 1) {
                 var cx = pc.chunk_x - self.render_distance;
@@ -311,14 +341,16 @@ pub const World = struct {
         }
         self.chunks_mutex.unlock();
 
-        if (self.upload_queue.items.len > 0) {
+        // Upload multiple meshes per frame (up to 4) for faster chunk appearance
+        const max_uploads: usize = 4;
+        var uploads: usize = 0;
+        while (self.upload_queue.items.len > 0 and uploads < max_uploads) {
             const data = self.upload_queue.orderedRemove(0);
             data.mesh.upload();
-            // Only transition to renderable if we were still in the uploading state.
-            // If we were set back to .generated, we stay there.
             if (data.chunk.state == .uploading) {
                 data.chunk.state = .renderable;
             }
+            uploads += 1;
         }
 
         const unload_dist_sq = (self.render_distance + 2) * (self.render_distance + 2);
@@ -354,7 +386,9 @@ pub const World = struct {
         self.chunks_mutex.unlock();
     }
 
-    pub fn render(self: *World, shader: *const Shader, view_proj: Mat4) void {
+    /// Render all visible chunks using camera-relative coordinates (floating origin)
+    /// This prevents floating-point precision issues at large world coordinates
+    pub fn render(self: *World, shader: *const Shader, view_proj: Mat4, camera_pos: Vec3) void {
         const frustum = Frustum.fromViewProj(view_proj);
         self.last_render_stats = .{};
 
@@ -367,7 +401,8 @@ pub const World = struct {
             if (data.chunk.state != .renderable) continue;
 
             self.last_render_stats.chunks_total += 1;
-            if (!frustum.intersectsChunk(key.x, key.z)) {
+            // Use camera-relative frustum culling
+            if (!frustum.intersectsChunkRelative(key.x, key.z, camera_pos.x, camera_pos.y, camera_pos.z)) {
                 self.last_render_stats.chunks_culled += 1;
                 continue;
             }
@@ -377,7 +412,18 @@ pub const World = struct {
                 self.last_render_stats.vertices_rendered += s.count_solid;
             }
 
-            shader.setMat4("transform", &view_proj.data);
+            // Camera-relative chunk position (floating origin)
+            // Chunk mesh vertices are in local coords (0-16), we translate them
+            // relative to camera position to keep values small for GPU precision
+            const chunk_world_x: f32 = @floatFromInt(key.x * CHUNK_SIZE_X);
+            const chunk_world_z: f32 = @floatFromInt(key.z * CHUNK_SIZE_Z);
+            const rel_x = chunk_world_x - camera_pos.x;
+            const rel_z = chunk_world_z - camera_pos.z;
+            const rel_y = -camera_pos.y; // Y=0 in chunk space maps to -camera_y in view space
+
+            const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
+            const mvp = view_proj.multiply(model);
+            shader.setMat4("transform", &mvp.data);
             data.mesh.draw(.solid);
         }
 
@@ -387,13 +433,21 @@ pub const World = struct {
             const data = entry.value_ptr.*;
             if (data.chunk.state != .renderable) continue;
             const key = entry.key_ptr.*;
-            if (!frustum.intersectsChunk(key.x, key.z)) continue;
+            if (!frustum.intersectsChunkRelative(key.x, key.z, camera_pos.x, camera_pos.y, camera_pos.z)) continue;
 
             for (data.mesh.subchunks) |s| {
                 self.last_render_stats.vertices_rendered += s.count_fluid;
             }
 
-            shader.setMat4("transform", &view_proj.data);
+            const chunk_world_x: f32 = @floatFromInt(key.x * CHUNK_SIZE_X);
+            const chunk_world_z: f32 = @floatFromInt(key.z * CHUNK_SIZE_Z);
+            const rel_x = chunk_world_x - camera_pos.x;
+            const rel_z = chunk_world_z - camera_pos.z;
+            const rel_y = -camera_pos.y;
+
+            const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
+            const mvp = view_proj.multiply(model);
+            shader.setMat4("transform", &mvp.data);
             data.mesh.draw(.fluid);
         }
 
