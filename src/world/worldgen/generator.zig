@@ -46,8 +46,8 @@ const Params = struct {
     // Section 5: Height function
     sea_level: i32 = 64,
     mount_amp: f32 = 90.0,
-    detail_scale: f32 = 1.0 / 220.0,
-    detail_amp: f32 = 12.0,
+    detail_scale: f32 = 1.0 / 150.0, // Higher frequency for more local variation
+    detail_amp: f32 = 12.0, // Keep moderate - mid-freq noise handles bigger variation
 
     // Section 6: Ocean shaping
     coast_jitter_scale: f32 = 1.0 / 650.0,
@@ -80,6 +80,9 @@ pub const TerrainGenerator = struct {
     seabed_noise: Noise,
     river_noise: Noise,
 
+    // Coastal exposure noise for variable beach width (per coastlines.md)
+    beach_exposure_noise: Noise,
+
     // Cave system (worm caves + noise cavities)
     cave_system: CaveSystem,
 
@@ -106,6 +109,7 @@ pub const TerrainGenerator = struct {
             .coast_jitter_noise = Noise.init(random.int(u64)),
             .seabed_noise = Noise.init(random.int(u64)),
             .river_noise = Noise.init(random.int(u64)),
+            .beach_exposure_noise = Noise.init(random.int(u64)),
             .cave_system = CaveSystem.init(seed),
             .filler_depth_noise = Noise.init(random.int(u64)),
             .params = .{},
@@ -246,12 +250,51 @@ pub const TerrainGenerator = struct {
         // Relax terrain to prevent vertical cliffs
         self.relaxTerrain(&surface_heights);
 
+        // Per coastlines.md: compute shore distance to ocean for procedural beaches
+        // Using simple radius search (Option A from spec)
+        var shore_distances: [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32 = undefined;
+        const shore_search_radius: i32 = 8; // Search within 8 blocks for ocean
+
+        local_z = 0;
+        while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
+            var local_x: u32 = 0;
+            while (local_x < CHUNK_SIZE_X) : (local_x += 1) {
+                const idx = local_x + local_z * CHUNK_SIZE_X;
+
+                if (is_ocean_flags[idx]) {
+                    // Underwater columns have distance 0
+                    shore_distances[idx] = 0;
+                } else {
+                    // Search for nearest ocean water
+                    var min_dist: i32 = 9999;
+                    var dz: i32 = -shore_search_radius;
+                    while (dz <= shore_search_radius) : (dz += 1) {
+                        var dx: i32 = -shore_search_radius;
+                        while (dx <= shore_search_radius) : (dx += 1) {
+                            const nx = @as(i32, @intCast(local_x)) + dx;
+                            const nz = @as(i32, @intCast(local_z)) + dz;
+
+                            if (nx >= 0 and nx < CHUNK_SIZE_X and nz >= 0 and nz < CHUNK_SIZE_Z) {
+                                const nidx = @as(usize, @intCast(nx)) + @as(usize, @intCast(nz)) * CHUNK_SIZE_X;
+                                if (is_ocean_flags[nidx]) {
+                                    // Manhattan distance
+                                    const dist = @max(@abs(dx), @abs(dz));
+                                    min_dist = @min(min_dist, dist);
+                                }
+                            }
+                        }
+                    }
+                    shore_distances[idx] = min_dist;
+                }
+            }
+        }
+
         // Generate worm caves (crosses chunk boundaries)
         var worm_carve_map = self.cave_system.generateWormCaves(chunk, &surface_heights, self.allocator) catch {
             // If allocation fails, continue without worm caves
             var empty_map: ?@import("caves.zig").CaveCarveMap = null;
             _ = &empty_map;
-            return self.generateWithoutWormCaves(chunk, &surface_heights, &biome_ids, &secondary_biome_ids, &biome_blends, &filler_depths, &is_ocean_flags, &cave_region_values, sea);
+            return self.generateWithoutWormCaves(chunk, &surface_heights, &biome_ids, &secondary_biome_ids, &biome_blends, &filler_depths, &is_ocean_flags, &cave_region_values, &shore_distances, sea);
         };
         defer worm_carve_map.deinit();
 
@@ -265,6 +308,7 @@ pub const TerrainGenerator = struct {
                 const filler_depth = filler_depths[idx];
                 const is_ocean = is_ocean_flags[idx];
                 const cave_region = cave_region_values[idx];
+                const shore_dist = shore_distances[idx];
 
                 const wx: f32 = @floatFromInt(world_x + @as(i32, @intCast(local_x)));
                 const wz: f32 = @floatFromInt(world_z + @as(i32, @intCast(local_z)));
@@ -272,14 +316,24 @@ pub const TerrainGenerator = struct {
                 // Re-compute coastal status and slope for procedural beaches
                 const warp = self.computeWarp(wx, wz);
                 const c_val = self.getContinentalness(wx + warp.x, wz + warp.z);
-                // Tighten coastal zone to prevent massive inland beaches
-                const is_coastal_zone = c_val > 0.50 and c_val < 0.62;
 
                 var max_slope: i32 = 0;
                 if (local_x > 0) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_height_i - surface_heights[idx - 1]))));
                 if (local_x < CHUNK_SIZE_X - 1) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_height_i - surface_heights[idx + 1]))));
                 if (local_z > 0) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_height_i - surface_heights[idx - CHUNK_SIZE_X]))));
                 if (local_z < CHUNK_SIZE_Z - 1) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_height_i - surface_heights[idx + CHUNK_SIZE_X]))));
+
+                // === SIMPLIFIED BEACH LOGIC ===
+                // Beach is ONLY blocks directly adjacent to water (shore_dist <= 2)
+                // and at or just above sea level (0-2 blocks above)
+                const depth_above_sea = terrain_height_i - p.sea_level;
+                const is_beach_surface = !is_ocean and
+                    shore_dist <= 2 and
+                    depth_above_sea >= 0 and depth_above_sea <= 2 and
+                    max_slope <= 2;
+
+                // Cliff: steep slope in coastal area
+                const is_cliff = c_val > 0.50 and c_val < 0.65 and max_slope >= 4 and terrain_height_i >= p.sea_level;
 
                 // Fill column
                 var y: i32 = 0;
@@ -288,7 +342,7 @@ pub const TerrainGenerator = struct {
                 const primary_biome_id = biome_ids[idx];
                 const secondary_biome_id = secondary_biome_ids[idx];
                 const blend = biome_blends[idx];
-                // Lower frequency for larger, more natural clumps (0.1 -> 0.02)
+                // Lower frequency for larger, more natural clumps
                 const dither = self.detail_noise.perlin2D(wx * 0.02, wz * 0.02) * 0.5 + 0.5;
                 const use_secondary = dither < blend;
                 const active_biome_id = if (use_secondary) secondary_biome_id else primary_biome_id;
@@ -297,14 +351,19 @@ pub const TerrainGenerator = struct {
                 while (y < CHUNK_SIZE_Y) : (y += 1) {
                     var block = self.getBlockAt(y, terrain_height_i, active_biome, filler_depth, is_ocean, sea);
 
-                    // Procedural Beach/Cliff rules
-                    if (block == active_biome.getSurfaceBlock()) {
-                        const sl = p.sea_level;
-                        if (is_coastal_zone and max_slope >= 3 and y >= sl) {
-                            block = .stone; // Cliff
-                        } else if (is_coastal_zone and max_slope <= 1 and y >= sl - 2 and y <= sl + 1) {
-                            block = .sand; // Beach
+                    const is_surface = (y == terrain_height_i);
+                    const is_near_surface = (y > terrain_height_i - 3 and y <= terrain_height_i);
+
+                    if (is_surface and block != .air and block != .water and block != .bedrock) {
+                        // Procedural beach surface override
+                        if (is_beach_surface) {
+                            block = .sand;
+                        } else if (is_cliff) {
+                            block = .stone;
                         }
+                    } else if (is_near_surface and is_beach_surface and block == .dirt) {
+                        // Sand filler below beach surface
+                        block = .sand;
                     }
 
                     // Cave carving (worm caves + noise cavities)
@@ -361,6 +420,7 @@ pub const TerrainGenerator = struct {
         filler_depths: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32,
         is_ocean_flags: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]bool,
         cave_region_values: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32,
+        shore_distances: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32,
         sea: f32,
     ) void {
         const world_x = chunk.getWorldX();
@@ -376,6 +436,7 @@ pub const TerrainGenerator = struct {
                 const filler_depth = filler_depths[idx];
                 const is_ocean = is_ocean_flags[idx];
                 const cave_region = cave_region_values[idx];
+                const shore_dist = shore_distances[idx];
 
                 const wx: f32 = @floatFromInt(world_x + @as(i32, @intCast(local_x)));
                 const wz: f32 = @floatFromInt(world_z + @as(i32, @intCast(local_z)));
@@ -383,13 +444,20 @@ pub const TerrainGenerator = struct {
                 // Re-compute coastal status and slope
                 const warp = self.computeWarp(wx, wz);
                 const c_val = self.getContinentalness(wx + warp.x, wz + warp.z);
-                const is_coastal_zone = c_val > 0.50 and c_val < 0.62;
 
                 var max_slope: i32 = 0;
                 if (local_x > 0) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_height_i - surface_heights[idx - 1]))));
                 if (local_x < CHUNK_SIZE_X - 1) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_height_i - surface_heights[idx + 1]))));
                 if (local_z > 0) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_height_i - surface_heights[idx - CHUNK_SIZE_X]))));
                 if (local_z < CHUNK_SIZE_Z - 1) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_height_i - surface_heights[idx + CHUNK_SIZE_X]))));
+
+                // === SIMPLIFIED BEACH LOGIC ===
+                const depth_above_sea = terrain_height_i - p.sea_level;
+                const is_beach_surface = !is_ocean and
+                    shore_dist <= 2 and
+                    depth_above_sea >= 0 and depth_above_sea <= 2 and
+                    max_slope <= 2;
+                const is_cliff = c_val > 0.50 and c_val < 0.65 and max_slope >= 4 and terrain_height_i >= p.sea_level;
 
                 const primary_biome_id = biome_ids[idx];
                 const secondary_biome_id = secondary_biome_ids[idx];
@@ -403,14 +471,17 @@ pub const TerrainGenerator = struct {
                 while (y < CHUNK_SIZE_Y) : (y += 1) {
                     var block = self.getBlockAt(y, terrain_height_i, active_biome, filler_depth, is_ocean, sea);
 
-                    // Procedural Beach/Cliff rules
-                    if (block == active_biome.getSurfaceBlock()) {
-                        const sl = p.sea_level;
-                        if (is_coastal_zone and max_slope >= 3 and y >= sl) {
-                            block = .stone;
-                        } else if (is_coastal_zone and max_slope <= 1 and y >= sl - 2 and y <= sl + 1) {
+                    const is_surface = (y == terrain_height_i);
+                    const is_near_surface = (y > terrain_height_i - 3 and y <= terrain_height_i);
+
+                    if (is_surface and block != .air and block != .water and block != .bedrock) {
+                        if (is_beach_surface) {
                             block = .sand;
+                        } else if (is_cliff) {
+                            block = .stone;
                         }
+                    } else if (is_near_surface and is_beach_surface and block == .dirt) {
+                        block = .sand;
                     }
 
                     // Only noise cavities (no worm caves)
@@ -486,9 +557,9 @@ pub const TerrainGenerator = struct {
         const sea: f32 = @floatFromInt(p.sea_level);
 
         // Section 5.1: Base height from continentalness
-        // Broader smoothstep range to flatten the coast and push it inland (more water)
-        const land_factor = smoothstep(0.30, 0.95, c);
-        var base_height = std.math.lerp(sea - 60.0, sea + 90.0, land_factor);
+        // Moderately sharp transition - not too gradual, not too extreme
+        const land_factor = smoothstep(0.42, 0.58, c);
+        var base_height = std.math.lerp(sea - 35.0, sea + 40.0, land_factor);
 
         // Section 5.2: Mountain lift with soft cap
         const m_mask = self.getMountainMask(pv, e, c);
@@ -497,12 +568,17 @@ pub const TerrainGenerator = struct {
         mount = mount / (1.0 + mount / mount_cap);
         base_height += mount;
 
-        // ATTENUATION: Reduce detail noise at higher altitudes to avoid jagged peaks
-        const elev_norm = clamp01((base_height - sea) / 120.0);
-        const detail_atten = 1.0 - smoothstep(0.3, 0.9, elev_norm);
+        // MID-FREQUENCY HILLS: Add significant variation to break uniform slopes
+        // This creates local hills/valleys that interrupt the continental gradient
+        const mid_freq_scale = 1.0 / 100.0;
+        const mid_noise = self.detail_noise.fbm2D(x + 5000.0, z + 5000.0, 3, 2.0, 0.5, mid_freq_scale);
+        const mid_amp: f32 = 20.0;
+        // Apply more strongly on land
+        const land_mult = smoothstep(0.40, 0.55, c);
+        base_height += mid_noise * mid_amp * land_mult;
 
-        // Section 5.3: Local detail (hills)
-        const detail = self.detail_noise.fbm2D(x, z, 5, 2.0, 0.5, p.detail_scale) * p.detail_amp * detail_atten;
+        // Section 5.3: Local detail (high frequency variation)
+        const detail = self.detail_noise.fbm2D(x, z, 5, 2.0, 0.5, p.detail_scale) * p.detail_amp;
         base_height += detail;
 
         // COMPRESSION: Soft cap peaks to prevent needle terrain
@@ -510,14 +586,11 @@ pub const TerrainGenerator = struct {
         if (base_height > peak_start) {
             const h_above = base_height - peak_start;
             const peak_range = 100.0;
-            // Smoothly compress height as it goes higher
             const compressed = peak_range * (1.0 - std.math.exp(-h_above / peak_range));
             base_height = peak_start + compressed;
         }
 
-        // Section 5.5: Cliff/terrace shaping - reduce smoothness in rugged areas
-        // Higher erosion = smoother terrain, lower = more cliffs
-        // We can add subtle terracing in low-erosion mountain areas
+        // Subtle terracing only in mountain areas
         if (m_mask > 0.3 and e < 0.4) {
             const terrace_step: f32 = 4.0;
             const terrace_strength: f32 = 0.25 * (1.0 - e);
@@ -588,86 +661,10 @@ pub const TerrainGenerator = struct {
     }
 
     fn relaxTerrain(self: *const TerrainGenerator, heights: *[CHUNK_SIZE_X * CHUNK_SIZE_Z]i32) void {
+        // DISABLED: Minecraft-style terrain doesn't need smoothing
+        // The natural terrain variation from noise is desired
         _ = self;
-        const max_diff = 2;
-        const iterations = 4;
-
-        for (0..iterations) |_| {
-            var changed = false;
-
-            // Forward pass
-            var i: usize = 0;
-            while (i < heights.len) : (i += 1) {
-                var h = heights[i];
-                const x = i % CHUNK_SIZE_X;
-                const z = i / CHUNK_SIZE_X;
-
-                // West
-                if (x > 0) {
-                    const n = heights[i - 1];
-                    if (h - n > max_diff) {
-                        h = n + max_diff;
-                        heights[i] = h;
-                        changed = true;
-                    } else if (n - h > max_diff) {
-                        h = n - max_diff;
-                        heights[i] = h;
-                        changed = true;
-                    }
-                }
-                // North
-                if (z > 0) {
-                    const n = heights[i - CHUNK_SIZE_X];
-                    if (h - n > max_diff) {
-                        h = n + max_diff;
-                        heights[i] = h;
-                        changed = true;
-                    } else if (n - h > max_diff) {
-                        h = n - max_diff;
-                        heights[i] = h;
-                        changed = true;
-                    }
-                }
-            }
-
-            // Backward pass
-            var j: usize = heights.len;
-            while (j > 0) {
-                j -= 1;
-                var h = heights[j];
-                const x = j % CHUNK_SIZE_X;
-                const z = j / CHUNK_SIZE_X;
-
-                // East
-                if (x < CHUNK_SIZE_X - 1) {
-                    const n = heights[j + 1];
-                    if (h - n > max_diff) {
-                        h = n + max_diff;
-                        heights[j] = h;
-                        changed = true;
-                    } else if (n - h > max_diff) {
-                        h = n - max_diff;
-                        heights[j] = h;
-                        changed = true;
-                    }
-                }
-                // South
-                if (z < CHUNK_SIZE_Z - 1) {
-                    const n = heights[j + CHUNK_SIZE_X];
-                    if (h - n > max_diff) {
-                        h = n + max_diff;
-                        heights[j] = h;
-                        changed = true;
-                    } else if (n - h > max_diff) {
-                        h = n - max_diff;
-                        heights[j] = h;
-                        changed = true;
-                    }
-                }
-            }
-
-            if (!changed) break;
-        }
+        _ = heights;
     }
 
     // ========== Ores ==========
@@ -753,10 +750,19 @@ pub const TerrainGenerator = struct {
                 const wx: f32 = @floatFromInt(chunk.getWorldX() + @as(i32, @intCast(local_x)));
                 const wz: f32 = @floatFromInt(chunk.getWorldZ() + @as(i32, @intCast(local_z)));
 
-                // Coastal suppression
+                // Coastal suppression - match coastlines.md spec
                 const warp = self.computeWarp(wx, wz);
                 const c_val = self.getContinentalness(wx + warp.x, wz + warp.z);
-                const tree_suppress = smoothstep(0.58, 0.62, c_val);
+
+                // Find surface height for elevation-based suppression
+                const surface_y = self.findSurface(chunk, local_x, local_z);
+                const sea_level_u: u32 = @intCast(self.params.sea_level);
+                const near_sea_level = surface_y <= sea_level_u + 4;
+
+                // Suppress trees in coastal zone AND near sea level
+                // Per coastlines.md: noTreeDist band of 6-18 blocks from shore
+                // Trees allowed only when both inland AND above sea level
+                const tree_suppress_final = if (c_val < 0.55 and near_sea_level) @as(f32, 0.0) else smoothstep(0.50, 0.62, c_val);
 
                 const primary = biome_ids[idx];
                 const secondary = secondary_biome_ids[idx];
@@ -770,7 +776,7 @@ pub const TerrainGenerator = struct {
                 const active_def = if (dither < blend) sec_def else prim_def;
                 const profile = active_def.vegetation;
 
-                const tree_density = std.math.lerp(prim_def.vegetation.tree_density, sec_def.vegetation.tree_density, blend) * tree_suppress;
+                const tree_density = std.math.lerp(prim_def.vegetation.tree_density, sec_def.vegetation.tree_density, blend) * tree_suppress_final;
                 const cactus_density = std.math.lerp(prim_def.vegetation.cactus_density, sec_def.vegetation.cactus_density, blend);
                 const bamboo_density = std.math.lerp(prim_def.vegetation.bamboo_density, sec_def.vegetation.bamboo_density, blend);
                 const melon_density = std.math.lerp(prim_def.vegetation.melon_density, sec_def.vegetation.melon_density, blend);

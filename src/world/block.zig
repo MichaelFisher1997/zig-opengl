@@ -11,13 +11,18 @@ pub const Biome = enum(u8) {
     beach = 2,
     plains = 3,
     forest = 4,
-    taiga = 5, // cold forest
+    taiga = 5,
     desert = 6,
     snow_tundra = 7,
     mountains = 8,
     snowy_mountains = 9,
     river = 10,
-    swamp = 11, // Added per biomes.md spec
+    swamp = 11,
+    mangrove_swamp = 12,
+    jungle = 13,
+    savanna = 14,
+    badlands = 15,
+    mushroom_fields = 16,
 
     /// Get surface block for this biome
     /// Prefer using BiomeDefinition.surface from worldgen/biome.zig
@@ -25,12 +30,15 @@ pub const Biome = enum(u8) {
         return switch (self) {
             .deep_ocean, .ocean => .gravel,
             .beach => .sand,
-            .plains, .forest, .swamp => .grass,
-            .taiga => .grass, // Could use podzol if we add it
+            .plains, .forest, .swamp, .jungle, .savanna => .grass,
+            .taiga => .grass,
             .desert => .sand,
             .snow_tundra, .snowy_mountains => .snow_block,
             .mountains => .stone,
             .river => .sand,
+            .mangrove_swamp => .mud,
+            .badlands => .red_sand,
+            .mushroom_fields => .mycelium,
         };
     }
 
@@ -41,9 +49,12 @@ pub const Biome = enum(u8) {
             .deep_ocean => .gravel,
             .ocean => .sand,
             .beach, .desert, .river => .sand,
-            .plains, .forest, .taiga, .swamp => .dirt,
+            .plains, .forest, .taiga, .swamp, .jungle, .savanna => .dirt,
             .snow_tundra => .dirt,
             .mountains, .snowy_mountains => .stone,
+            .mangrove_swamp => .mud,
+            .badlands => .terracotta,
+            .mushroom_fields => .dirt,
         };
     }
 
