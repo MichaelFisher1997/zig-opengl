@@ -5,6 +5,7 @@ const Thread = std.Thread;
 const Mutex = Thread.Mutex;
 const Condition = Thread.Condition;
 const Chunk = @import("../../world/chunk.zig").Chunk;
+const log = @import("log.zig");
 
 pub const JobType = enum {
     generation,
@@ -96,12 +97,21 @@ pub const JobQueue = struct {
             const dz = job.chunk_z - cz;
             var updated_job = job;
             updated_job.dist_sq = dx * dx + dz * dz;
-            temp.append(self.allocator, updated_job) catch continue;
+            temp.append(self.allocator, updated_job) catch {
+                // On allocation failure, job is dropped. This is acceptable as the chunk
+                // will be re-queued on next update cycle when player position changes.
+                log.log.debug("Job queue: dropped job during priority update (allocation failed)", .{});
+                continue;
+            };
         }
 
         // Re-add with updated priorities
         for (temp.items) |job| {
-            self.jobs.add(job) catch continue;
+            self.jobs.add(job) catch {
+                // Priority queue full or allocation failed - job dropped, will be re-queued
+                log.log.debug("Job queue: failed to re-add job after priority update", .{});
+                continue;
+            };
         }
     }
 

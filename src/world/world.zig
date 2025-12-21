@@ -15,12 +15,17 @@ const Mat4 = @import("../engine/math/mat4.zig").Mat4;
 const Vec3 = @import("../engine/math/vec3.zig").Vec3;
 const Frustum = @import("../engine/math/frustum.zig").Frustum;
 const Shader = @import("../engine/graphics/shader.zig").Shader;
+const log = @import("../engine/core/log.zig");
 
 const JobSystem = @import("../engine/core/job_system.zig");
 const JobQueue = JobSystem.JobQueue;
 const WorkerPool = JobSystem.WorkerPool;
 const Job = JobSystem.Job;
 const JobType = JobSystem.JobType;
+
+/// Buffer distance beyond render_distance for chunk unloading.
+/// Prevents thrashing when player moves near chunk boundaries.
+const CHUNK_UNLOAD_BUFFER: i32 = 2;
 
 pub const ChunkKey = struct {
     x: i32,
@@ -144,7 +149,7 @@ pub const World = struct {
         // Skip if chunk is now too far from player (stale job)
         const dx = job.chunk_x - self.last_pc.x;
         const dz = job.chunk_z - self.last_pc.z;
-        const max_dist = self.render_distance + 2;
+        const max_dist = self.render_distance + CHUNK_UNLOAD_BUFFER;
         if (dx * dx + dz * dz > max_dist * max_dist) {
             // Reset state so it can be re-queued if player returns
             if (chunk_data.chunk.state == .generating) {
@@ -154,6 +159,8 @@ pub const World = struct {
             return;
         }
 
+        // Pin chunk to prevent unloading during generation.
+        // The pin mechanism uses atomic refcounting to ensure thread-safe access.
         chunk_data.chunk.pin();
         self.chunks_mutex.unlock();
 
@@ -178,7 +185,7 @@ pub const World = struct {
         // Skip if chunk is now too far from player (stale job)
         const dx = job.chunk_x - self.last_pc.x;
         const dz = job.chunk_z - self.last_pc.z;
-        const max_dist = self.render_distance + 2;
+        const max_dist = self.render_distance + CHUNK_UNLOAD_BUFFER;
         if (dx * dx + dz * dz > max_dist * max_dist) {
             if (chunk_data.chunk.state == .meshing) {
                 chunk_data.chunk.state = .generated;
@@ -187,6 +194,8 @@ pub const World = struct {
             return;
         }
 
+        // Pin chunk and neighbors to prevent unloading during mesh building.
+        // Uses atomic refcounting for thread-safe access across worker threads.
         chunk_data.chunk.pin();
         const neighbors = NeighborChunks{
             .north = if (self.chunks.get(ChunkKey{ .x = job.chunk_x, .z = job.chunk_z - 1 })) |d| d: {
@@ -217,7 +226,9 @@ pub const World = struct {
         }
 
         if (chunk_data.chunk.state == .meshing and chunk_data.chunk.job_token == job.job_token) {
-            chunk_data.mesh.buildWithNeighbors(&chunk_data.chunk, neighbors) catch {};
+            chunk_data.mesh.buildWithNeighbors(&chunk_data.chunk, neighbors) catch |err| {
+                log.log.err("Mesh build failed for chunk ({}, {}): {}", .{ job.chunk_x, job.chunk_z, err });
+            };
             chunk_data.chunk.state = .mesh_ready;
         }
     }
@@ -353,7 +364,7 @@ pub const World = struct {
             uploads += 1;
         }
 
-        const unload_dist_sq = (self.render_distance + 2) * (self.render_distance + 2);
+        const unload_dist_sq = (self.render_distance + CHUNK_UNLOAD_BUFFER) * (self.render_distance + CHUNK_UNLOAD_BUFFER);
         self.chunks_mutex.lock();
         var to_remove = std.ArrayListUnmanaged(ChunkKey).empty;
         defer to_remove.deinit(self.allocator);
