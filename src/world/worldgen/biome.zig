@@ -41,7 +41,11 @@ pub const TreeType = enum {
     birch,
     spruce,
     swamp_oak, // Swamp trees with vines
-    acacia,
+    mangrove, // Prop roots
+    jungle, // Tall with vines
+    acacia, // Diagonal trunk
+    huge_red_mushroom,
+    huge_brown_mushroom,
     none,
 };
 
@@ -53,6 +57,10 @@ pub const VegetationProfile = struct {
     grass_density: f32 = 0.0,
     cactus_density: f32 = 0.0,
     dead_bush_density: f32 = 0.0,
+    bamboo_density: f32 = 0.0,
+    melon_density: f32 = 0.0,
+    red_mushroom_density: f32 = 0.0,
+    brown_mushroom_density: f32 = 0.0,
 };
 
 /// Terrain modifiers applied during height computation
@@ -144,6 +152,11 @@ pub const BiomeId = enum(u8) {
     snowy_mountains = 9,
     river = 10,
     swamp = 11, // New biome from spec
+    mangrove_swamp = 12,
+    jungle = 13,
+    savanna = 14,
+    badlands = 15,
+    mushroom_fields = 16,
 };
 
 // ============================================================================
@@ -296,6 +309,65 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0 },
         .terrain = .{ .height_amplitude = 1.4 },
         .colors = .{ .grass = .{ 0.85, 0.90, 0.95 } },
+    },
+
+    // === New Biomes ===
+    .{
+        .id = .mangrove_swamp,
+        .name = "Mangrove Swamp",
+        .temperature = .{ .min = 0.7, .max = 0.9 },
+        .humidity = .{ .min = 0.8, .max = 1.0 },
+        .elevation = .{ .min = 0.2, .max = 0.4 },
+        .continentalness = .{ .min = 0.5, .max = 0.7 },
+        .priority = 6,
+        .surface = .{ .top = .mud, .filler = .mud, .depth_range = 4 },
+        .vegetation = .{ .tree_types = &.{.mangrove}, .tree_density = 0.15 },
+        .terrain = .{ .clamp_to_sea_level = true, .height_offset = -1 },
+        .colors = .{ .grass = .{ 0.4, 0.5, 0.2 }, .foliage = .{ 0.4, 0.5, 0.2 }, .water = .{ 0.2, 0.4, 0.3 } },
+    },
+    .{
+        .id = .jungle,
+        .name = "Jungle",
+        .temperature = .{ .min = 0.75, .max = 1.0 },
+        .humidity = .{ .min = 0.7, .max = 1.0 },
+        .elevation = .{ .min = 0.3, .max = 0.7 },
+        .priority = 5,
+        .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 3 },
+        .vegetation = .{ .tree_types = &.{.jungle}, .tree_density = 0.25, .bamboo_density = 0.1, .melon_density = 0.05 },
+        .colors = .{ .grass = .{ 0.2, 0.8, 0.1 }, .foliage = .{ 0.1, 0.7, 0.1 } },
+    },
+    .{
+        .id = .savanna,
+        .name = "Savanna",
+        .temperature = .{ .min = 0.7, .max = 1.0 },
+        .humidity = .{ .min = 0.3, .max = 0.5 },
+        .priority = 4,
+        .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 3 },
+        .vegetation = .{ .tree_types = &.{.acacia}, .tree_density = 0.01, .grass_density = 0.5 },
+        .colors = .{ .grass = .{ 0.6, 0.6, 0.3 }, .foliage = .{ 0.5, 0.5, 0.3 } },
+    },
+    .{
+        .id = .badlands,
+        .name = "Badlands",
+        .temperature = .{ .min = 0.7, .max = 1.0 },
+        .humidity = .{ .min = 0.0, .max = 0.3 },
+        .elevation = .{ .min = 0.4, .max = 0.8 },
+        .ruggedness = .{ .min = 0.4, .max = 1.0 },
+        .priority = 6,
+        .surface = .{ .top = .red_sand, .filler = .terracotta, .depth_range = 5 },
+        .vegetation = .{ .cactus_density = 0.02 },
+        .colors = .{ .grass = .{ 0.5, 0.4, 0.3 } },
+    },
+    .{
+        .id = .mushroom_fields,
+        .name = "Mushroom Fields",
+        .temperature = .{ .min = 0.4, .max = 0.7 },
+        .humidity = .{ .min = 0.7, .max = 1.0 },
+        .continentalness = .{ .min = 0.0, .max = 0.2 },
+        .priority = 20,
+        .surface = .{ .top = .mycelium, .filler = .dirt, .depth_range = 3 },
+        .vegetation = .{ .tree_types = &.{ .huge_red_mushroom, .huge_brown_mushroom }, .tree_density = 0.05, .red_mushroom_density = 0.1, .brown_mushroom_density = 0.1 },
+        .colors = .{ .grass = .{ 0.4, 0.8, 0.4 } },
     },
 
     // === Special Biomes ===

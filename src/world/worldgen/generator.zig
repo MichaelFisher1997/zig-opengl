@@ -583,11 +583,35 @@ pub const TerrainGenerator = struct {
                         const y = self.findSurface(chunk, local_x, local_z);
                         if (y > 0) {
                             const surface_block = chunk.getBlock(local_x, @intCast(y), local_z);
-                            if (surface_block == .grass or surface_block == .dirt) {
+                            if (surface_block == .grass or surface_block == .dirt or surface_block == .mud or surface_block == .mycelium) {
                                 self.placeTree(chunk, local_x, @intCast(y + 1), local_z, tree_type, random);
                                 placed = true;
                             }
                         }
+                    }
+                }
+
+                // Bamboo
+                if (!placed and profile.bamboo_density > 0 and random.float(f32) < profile.bamboo_density) {
+                    const y = self.findSurface(chunk, local_x, local_z);
+                    if (y > 0) {
+                        const h = 4 + random.uintLessThan(u32, 8);
+                        for (0..h) |i| {
+                            const ty = y + 1 + @as(u32, @intCast(i));
+                            if (ty < CHUNK_SIZE_Y) {
+                                chunk.setBlock(local_x, ty, local_z, .bamboo);
+                            }
+                        }
+                        placed = true;
+                    }
+                }
+
+                // Melon
+                if (!placed and profile.melon_density > 0 and random.float(f32) < profile.melon_density) {
+                    const y = self.findSurface(chunk, local_x, local_z);
+                    if (y > 0 and y < CHUNK_SIZE_Y - 1) {
+                        chunk.setBlock(local_x, y + 1, local_z, .melon);
+                        placed = true;
                     }
                 }
 
@@ -596,7 +620,7 @@ pub const TerrainGenerator = struct {
                     const y = self.findSurface(chunk, local_x, local_z);
                     if (y > 0) {
                         const surface_block = chunk.getBlock(local_x, @intCast(y), local_z);
-                        if (surface_block == .sand and @as(i32, @intCast(y)) >= self.params.sea_level) {
+                        if ((surface_block == .sand or surface_block == .red_sand) and @as(i32, @intCast(y)) >= self.params.sea_level) {
                             self.placeCactus(chunk, local_x, @intCast(y + 1), local_z, random);
                             placed = true;
                         }
@@ -616,51 +640,120 @@ pub const TerrainGenerator = struct {
     }
 
     fn placeTree(self: *const TerrainGenerator, chunk: *Chunk, x: u32, y: u32, z: u32, tree_type: biome_mod.TreeType, random: std.Random) void {
-        if (tree_type == .spruce) {
-            // Spruce tree: Tall, conical
-            const height = 6 + random.uintLessThan(u32, 4); // 6-9 blocks
+        const log_type: BlockType = switch (tree_type) {
+            .mangrove => .mangrove_log,
+            .jungle => .jungle_log,
+            .acacia => .acacia_log,
+            .birch, .spruce => .wood,
+            else => .wood,
+        };
+        const leaf_type: BlockType = switch (tree_type) {
+            .mangrove => .mangrove_leaves,
+            .jungle => .jungle_leaves,
+            .acacia => .acacia_leaves,
+            .birch, .spruce => .leaves,
+            else => .leaves,
+        };
 
-            // Trunk
-            for (0..height) |i| {
-                const ty = y + @as(u32, @intCast(i));
-                if (ty < CHUNK_SIZE_Y) chunk.setBlock(x, ty, z, .wood);
-            }
+        switch (tree_type) {
+            .huge_red_mushroom => {
+                const height = 5 + random.uintLessThan(u32, 3);
+                for (0..height) |i| {
+                    if (y + @as(u32, @intCast(i)) < CHUNK_SIZE_Y) {
+                        chunk.setBlock(x, y + @as(u32, @intCast(i)), z, .mushroom_stem);
+                    }
+                }
+                self.placeLeafDisk(chunk, x, y + height, z, 2, .red_mushroom_block);
+            },
+            .huge_brown_mushroom => {
+                const height = 5 + random.uintLessThan(u32, 3);
+                for (0..height) |i| {
+                    if (y + @as(u32, @intCast(i)) < CHUNK_SIZE_Y) {
+                        chunk.setBlock(x, y + @as(u32, @intCast(i)), z, .mushroom_stem);
+                    }
+                }
+                self.placeLeafDisk(chunk, x, y + height, z, 3, .brown_mushroom_block);
+            },
+            .mangrove => {
+                // Prop roots
+                for (0..3) |i| {
+                    if (y + @as(u32, @intCast(i)) < CHUNK_SIZE_Y) {
+                        chunk.setBlock(x, y + @as(u32, @intCast(i)), z, .mangrove_roots);
+                    }
+                }
+                const trunk_start = y + 2;
+                const height = 4 + random.uintLessThan(u32, 3);
+                for (0..height) |i| {
+                    if (trunk_start + @as(u32, @intCast(i)) < CHUNK_SIZE_Y) {
+                        chunk.setBlock(x, trunk_start + @as(u32, @intCast(i)), z, log_type);
+                    }
+                }
+                self.placeLeafDisk(chunk, x, trunk_start + height, z, 2, leaf_type);
+            },
+            .jungle => {
+                const height = 10 + random.uintLessThan(u32, 10);
+                for (0..height) |i| {
+                    if (y + @as(u32, @intCast(i)) < CHUNK_SIZE_Y) {
+                        chunk.setBlock(x, y + @as(u32, @intCast(i)), z, log_type);
+                    }
+                }
+                self.placeLeafDisk(chunk, x, y + height, z, 3, leaf_type);
+                self.placeLeafDisk(chunk, x, y + height - 1, z, 2, leaf_type);
+            },
+            .acacia => {
+                const height = 5 + random.uintLessThan(u32, 3);
+                var cx = x;
+                const cz = z;
+                for (0..height) |i| {
+                    if (y + @as(u32, @intCast(i)) < CHUNK_SIZE_Y) {
+                        chunk.setBlock(cx, y + @as(u32, @intCast(i)), cz, log_type);
+                    }
+                    if (i > 2 and random.boolean()) {
+                        cx = cx +% 1;
+                    }
+                }
+                self.placeLeafDisk(chunk, cx, y + height, cz, 3, leaf_type);
+            },
+            .spruce => {
+                const height = 6 + random.uintLessThan(u32, 4);
+                for (0..height) |i| {
+                    if (y + @as(u32, @intCast(i)) < CHUNK_SIZE_Y) {
+                        chunk.setBlock(x, y + @as(u32, @intCast(i)), z, log_type);
+                    }
+                }
 
-            // Leaves (Cone)
-            const leaf_base = y + 2;
-            const leaf_top = y + height + 1;
+                const leaf_base = y + 2;
+                const leaf_top = y + height + 1;
+                var ly: u32 = leaf_base;
+                while (ly <= leaf_top) : (ly += 1) {
+                    const dist = leaf_top - ly;
+                    const r: i32 = if (dist > 5) 2 else if (dist > 1) 1 else 0;
+                    self.placeLeafDisk(chunk, x, ly, z, r, leaf_type);
+                }
+                if (leaf_top < CHUNK_SIZE_Y) {
+                    chunk.setBlock(x, leaf_top, z, leaf_type);
+                }
+            },
+            else => {
+                const height = 4 + random.uintLessThan(u32, 3);
+                for (0..height) |i| {
+                    if (y + @as(u32, @intCast(i)) < CHUNK_SIZE_Y) {
+                        chunk.setBlock(x, y + @as(u32, @intCast(i)), z, log_type);
+                    }
+                }
 
-            var ly: u32 = leaf_base;
-            while (ly <= leaf_top) : (ly += 1) {
-                const dist_from_top = leaf_top - ly;
-                const radius: i32 = if (dist_from_top > 5) 2 else if (dist_from_top > 1) 1 else 0;
-                self.placeLeafDisk(chunk, x, ly, z, radius);
-            }
-            // Top tip
-            if (leaf_top < CHUNK_SIZE_Y) chunk.setBlock(x, leaf_top, z, .leaves);
-        } else {
-            // Standard Oak/Birch tree
-            const height = 4 + random.uintLessThan(u32, 3);
-
-            // Trunk
-            for (0..height) |i| {
-                const ty = y + @as(u32, @intCast(i));
-                if (ty < CHUNK_SIZE_Y) chunk.setBlock(x, ty, z, .wood);
-            }
-
-            // Leaves (Blob)
-            const leaf_start = y + height - 2;
-            const leaf_end = y + height + 1;
-
-            var ly: u32 = leaf_start;
-            while (ly <= leaf_end) : (ly += 1) {
-                const range: i32 = if (ly == leaf_end) 1 else 2;
-                self.placeLeafDisk(chunk, x, ly, z, range);
-            }
+                const leaf_start = y + height - 2;
+                const leaf_end = y + height + 1;
+                var ly: u32 = leaf_start;
+                while (ly <= leaf_end) : (ly += 1) {
+                    const r: i32 = if (ly == leaf_end) 1 else 2;
+                    self.placeLeafDisk(chunk, x, ly, z, r, leaf_type);
+                }
+            },
         }
     }
 
-    fn placeLeafDisk(self: *const TerrainGenerator, chunk: *Chunk, x: u32, y: u32, z: u32, radius: i32) void {
+    fn placeLeafDisk(self: *const TerrainGenerator, chunk: *Chunk, x: u32, y: u32, z: u32, radius: i32, block: BlockType) void {
         _ = self;
         if (radius < 0) return;
         var lz: i32 = -radius;
@@ -675,7 +768,7 @@ pub const TerrainGenerator = struct {
                         y < CHUNK_SIZE_Y)
                     {
                         if (chunk.getBlock(@intCast(target_x), y, @intCast(target_z)) == .air) {
-                            chunk.setBlock(@intCast(target_x), y, @intCast(target_z), .leaves);
+                            chunk.setBlock(@intCast(target_x), y, @intCast(target_z), block);
                         }
                     }
                 }
@@ -694,8 +787,6 @@ pub const TerrainGenerator = struct {
         }
     }
 
-    /// Compute initial skylight for the chunk using vertical pass
-    /// Skylight starts at 15 from top of world and drops to 0 below opaque blocks
     pub fn computeSkylight(self: *const TerrainGenerator, chunk: *Chunk) void {
         _ = self;
 

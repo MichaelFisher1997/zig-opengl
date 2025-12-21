@@ -12,6 +12,7 @@ const BlockType = @import("block.zig").BlockType;
 const Face = @import("block.zig").Face;
 const ALL_FACES = @import("block.zig").ALL_FACES;
 const TextureAtlas = @import("../engine/graphics/texture_atlas.zig").TextureAtlas;
+const biome_mod = @import("worldgen/biome.zig");
 
 pub const SUBCHUNK_SIZE = 16;
 pub const NUM_SUBCHUNKS = 16;
@@ -136,6 +137,7 @@ pub const ChunkMesh = struct {
         block: BlockType,
         side: bool,
         light: PackedLight, // Light of the block this face is exposed to
+        color: [3]f32,
     };
 
     fn meshSlice(self: *ChunkMesh, chunk: *const Chunk, neighbors: NeighborChunks, axis: Face, s: i32, si: u32, solid_list: *std.ArrayListUnmanaged(f32), fluid_list: *std.ArrayListUnmanaged(f32)) !void {
@@ -163,11 +165,15 @@ pub const ChunkMesh = struct {
                 if (isEmittingSubchunk(axis, s - 1, u, v, y_min, y_max) and b1_emits and !b2.occludes(b1, axis)) {
                     // Face of b1 exposed to b2 - sample light from b2's position
                     const light = getLightAtBoundary(chunk, neighbors, axis, s, u, v, si);
-                    mask[u + v * du] = .{ .block = b1, .side = true, .light = light };
+                    // Use b1's position for color
+                    const color = getBlockColor(chunk, neighbors, axis, s - 1, u, v, si, b1);
+                    mask[u + v * du] = .{ .block = b1, .side = true, .light = light, .color = color };
                 } else if (isEmittingSubchunk(axis, s, u, v, y_min, y_max) and b2_emits and !b1.occludes(b2, axis)) {
                     // Face of b2 exposed to b1 - sample light from b1's position
                     const light = getLightAtBoundary(chunk, neighbors, axis, s - 1, u, v, si);
-                    mask[u + v * du] = .{ .block = b2, .side = false, .light = light };
+                    // Use b2's position for color
+                    const color = getBlockColor(chunk, neighbors, axis, s, u, v, si, b2);
+                    mask[u + v * du] = .{ .block = b2, .side = false, .light = light, .color = color };
                 }
             }
         }
@@ -191,6 +197,12 @@ pub const ChunkMesh = struct {
                     const sky_diff = @as(i8, @intCast(nxt.light.sky_light)) - @as(i8, @intCast(k.light.sky_light));
                     const block_diff = @as(i8, @intCast(nxt.light.block_light)) - @as(i8, @intCast(k.light.block_light));
                     if (@abs(sky_diff) > 1 or @abs(block_diff) > 1) break;
+
+                    // Color check
+                    const diff_r = @abs(nxt.color[0] - k.color[0]);
+                    const diff_g = @abs(nxt.color[1] - k.color[1]);
+                    const diff_b = @abs(nxt.color[2] - k.color[2]);
+                    if (diff_r > 0.02 or diff_g > 0.02 or diff_b > 0.02) break;
                 }
                 var height: u32 = 1;
                 var dvh: u32 = 1;
@@ -204,12 +216,18 @@ pub const ChunkMesh = struct {
                         const sky_diff = @as(i8, @intCast(nxt.light.sky_light)) - @as(i8, @intCast(k.light.sky_light));
                         const block_diff = @as(i8, @intCast(nxt.light.block_light)) - @as(i8, @intCast(k.light.block_light));
                         if (@abs(sky_diff) > 1 or @abs(block_diff) > 1) break :outer;
+
+                        // Color check
+                        const diff_r = @abs(nxt.color[0] - k.color[0]);
+                        const diff_g = @abs(nxt.color[1] - k.color[1]);
+                        const diff_b = @abs(nxt.color[2] - k.color[2]);
+                        if (diff_r > 0.02 or diff_g > 0.02 or diff_b > 0.02) break :outer;
                     }
                     height += 1;
                 }
 
                 const target = if (k.block.isTransparent() and k.block != .leaves) fluid_list else solid_list;
-                try addGreedyFace(self.allocator, target, axis, s, su, sv, width, height, k.block, k.side, si, k.light);
+                try addGreedyFace(self.allocator, target, axis, s, su, sv, width, height, k.block, k.side, si, k.light, k.color);
 
                 var dy: u32 = 0;
                 while (dy < height) : (dy += 1) {
@@ -316,14 +334,15 @@ fn getLightCross(chunk: *const Chunk, neighbors: NeighborChunks, x: i32, y: i32,
     return chunk.getLightSafe(x, y, z);
 }
 
-fn addGreedyFace(allocator: std.mem.Allocator, verts: *std.ArrayListUnmanaged(f32), axis: Face, s: i32, u: u32, v: u32, w: u32, h: u32, block: BlockType, forward: bool, si: u32, light: PackedLight) !void {
+fn addGreedyFace(allocator: std.mem.Allocator, verts: *std.ArrayListUnmanaged(f32), axis: Face, s: i32, u: u32, v: u32, w: u32, h: u32, block: BlockType, forward: bool, si: u32, light: PackedLight, tint: [3]f32) !void {
     const face = if (forward) axis else switch (axis) {
         .top => Face.bottom,
         .east => Face.west,
         .south => Face.north,
         else => unreachable,
     };
-    const col = block.getFaceColor(face);
+    const base_col = block.getFaceColor(face);
+    const col = [3]f32{ base_col[0] * tint[0], base_col[1] * tint[1], base_col[2] * tint[2] };
     const norm = face.getNormal();
     const nf = [3]f32{ @floatFromInt(norm[0]), @floatFromInt(norm[1]), @floatFromInt(norm[2]) };
     const tiles = TextureAtlas.getTilesForBlock(@intFromEnum(block));
@@ -456,4 +475,83 @@ fn setupBuffers(vao_ptr: *c.GLuint, vbo_ptr: *c.GLuint, vertices: []const f32) v
     c.glEnableVertexAttribArray().?(6);
 
     c.glBindVertexArray().?(0);
+}
+
+fn getBiomeAt(chunk: *const Chunk, neighbors: NeighborChunks, x: i32, z: i32) biome_mod.BiomeId {
+    if (x < 0) {
+        if (z >= 0 and z < CHUNK_SIZE_Z) {
+            if (neighbors.west) |w| return w.getBiome(CHUNK_SIZE_X - 1, @intCast(z));
+        }
+        return chunk.getBiome(0, @intCast(std.math.clamp(z, 0, CHUNK_SIZE_Z - 1)));
+    }
+    if (x >= CHUNK_SIZE_X) {
+        if (z >= 0 and z < CHUNK_SIZE_Z) {
+            if (neighbors.east) |e| return e.getBiome(0, @intCast(z));
+        }
+        return chunk.getBiome(CHUNK_SIZE_X - 1, @intCast(std.math.clamp(z, 0, CHUNK_SIZE_Z - 1)));
+    }
+    if (z < 0) {
+        if (neighbors.north) |n| return n.getBiome(@intCast(x), CHUNK_SIZE_Z - 1);
+        return chunk.getBiome(@intCast(x), 0);
+    }
+    if (z >= CHUNK_SIZE_Z) {
+        if (neighbors.south) |s| return s.getBiome(@intCast(x), 0);
+        return chunk.getBiome(@intCast(x), CHUNK_SIZE_Z - 1);
+    }
+    return chunk.getBiome(@intCast(x), @intCast(z));
+}
+
+fn getBlockColor(chunk: *const Chunk, neighbors: NeighborChunks, axis: Face, s: i32, u: u32, v: u32, si: u32, block: BlockType) [3]f32 {
+    if (block != .grass and block != .leaves and block != .water) return .{ 1.0, 1.0, 1.0 };
+
+    var x: i32 = 0;
+    var z: i32 = 0;
+    // Unused for now but good for context
+    _ = si;
+
+    switch (axis) {
+        .top => {
+            x = @intCast(u);
+            z = @intCast(v);
+        },
+        .east => {
+            x = s;
+            z = @intCast(v);
+        },
+        .south => {
+            x = @intCast(u);
+            z = s;
+        },
+        else => {
+            x = @intCast(u);
+            z = @intCast(v);
+        },
+    }
+
+    // 3x3 Blur for smooth biome transitions
+    var r: f32 = 0;
+    var g: f32 = 0;
+    var b: f32 = 0;
+    var count: f32 = 0;
+
+    var ox: i32 = -1;
+    while (ox <= 1) : (ox += 1) {
+        var oz: i32 = -1;
+        while (oz <= 1) : (oz += 1) {
+            const biome_id = getBiomeAt(chunk, neighbors, x + ox, z + oz);
+            const def = biome_mod.getBiomeDefinition(biome_id);
+            const col = switch (block) {
+                .grass => def.colors.grass,
+                .leaves => def.colors.foliage,
+                .water => def.colors.water,
+                else => .{ 1.0, 1.0, 1.0 },
+            };
+            r += col[0];
+            g += col[1];
+            b += col[2];
+            count += 1.0;
+        }
+    }
+
+    return .{ r / count, g / count, b / count };
 }
