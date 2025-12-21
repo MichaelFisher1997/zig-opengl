@@ -17,6 +17,7 @@ const log = @import("engine/core/log.zig");
 const TextureAtlas = @import("engine/graphics/texture_atlas.zig").TextureAtlas;
 const Atmosphere = @import("engine/graphics/atmosphere.zig").Atmosphere;
 const ShadowMap = @import("engine/graphics/shadows.zig").ShadowMap;
+const Clouds = @import("engine/graphics/clouds.zig").Clouds;
 
 // World imports
 const World = @import("world/world.zig").World;
@@ -94,6 +95,59 @@ const fragment_shader_src =
     \\uniform float uCascadeSplits[3];
     \\uniform float uShadowTexelSizes[3];
     \\
+    \\// Cloud shadows
+    \\uniform float uCloudWindOffsetX;
+    \\uniform float uCloudWindOffsetZ;
+    \\uniform float uCloudScale;
+    \\uniform float uCloudCoverage;
+    \\uniform float uCloudShadowStrength;
+    \\uniform float uCloudHeight;
+    \\
+    \\// Cloud shadow noise functions
+    \\float cloudHash(vec2 p) {
+    \\    p = fract(p * vec2(234.34, 435.345));
+    \\    p += dot(p, p + 34.23);
+    \\    return fract(p.x * p.y);
+    \\}
+    \\
+    \\float cloudNoise(vec2 p) {
+    \\    vec2 i = floor(p);
+    \\    vec2 f = fract(p);
+    \\    float a = cloudHash(i);
+    \\    float b = cloudHash(i + vec2(1.0, 0.0));
+    \\    float c = cloudHash(i + vec2(0.0, 1.0));
+    \\    float d = cloudHash(i + vec2(1.0, 1.0));
+    \\    vec2 u = f * f * (3.0 - 2.0 * f);
+    \\    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    \\}
+    \\
+    \\float cloudFbm(vec2 p) {
+    \\    float v = 0.0;
+    \\    float a = 0.5;
+    \\    for (int i = 0; i < 4; i++) {
+    \\        v += a * cloudNoise(p);
+    \\        p *= 2.0;
+    \\        a *= 0.5;
+    \\    }
+    \\    return v;
+    \\}
+    \\
+    \\float getCloudShadow(vec3 worldPos, vec3 sunDir) {
+    \\    // Project position along sun direction to cloud plane
+    \\    // This creates moving shadows that follow the sun
+    \\    vec2 shadowOffset = sunDir.xz * (uCloudHeight - worldPos.y) / max(sunDir.y, 0.1);
+    \\    vec2 samplePos = (worldPos.xz + shadowOffset + vec2(uCloudWindOffsetX, uCloudWindOffsetZ)) * uCloudScale;
+    \\    
+    \\    float n1 = cloudFbm(samplePos * 0.5);
+    \\    float n2 = cloudFbm(samplePos * 2.0 + vec2(100.0, 200.0)) * 0.3;
+    \\    float cloudValue = n1 * 0.7 + n2;
+    \\    
+    \\    float threshold = 1.0 - uCloudCoverage;
+    \\    float cloudMask = smoothstep(threshold - 0.1, threshold + 0.1, cloudValue);
+    \\    
+    \\    return cloudMask * uCloudShadowStrength;
+    \\}
+    \\
     \\float calculateShadow(vec3 fragPosWorld, float nDotL, int layer) {
     \\    vec4 fragPosLightSpace = uLightSpaceMatrices[layer] * vec4(fragPosWorld, 1.0);
     \\    vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
@@ -161,7 +215,16 @@ const fragment_shader_src =
     \\    // else FragColor = vec4(0.0, 0.0, 1.0, 1.0);
     \\    // return;
     \\    
-    \\    float directLight = nDotL * uSunIntensity * (1.0 - shadow);
+    \\    // Cloud shadow (only when sun is up)
+    \\    float cloudShadow = 0.0;
+    \\    if (uSunIntensity > 0.05 && uSunDir.y > 0.05) {
+    \\        cloudShadow = getCloudShadow(vFragPosWorld, uSunDir);
+    \\    }
+    \\    
+    \\    // Combine terrain shadow and cloud shadow
+    \\    float totalShadow = min(shadow + cloudShadow, 1.0);
+    \\    
+    \\    float directLight = nDotL * uSunIntensity * (1.0 - totalShadow);
     \\    float skyLight = vSkyLight * (uAmbient + directLight * 0.8);
     \\    
     \\    float blockLight = vBlockLight;
@@ -340,6 +403,10 @@ pub fn main() !void {
     var atmosphere = Atmosphere.init();
     defer atmosphere.deinit();
 
+    // 10b. Create Cloud System
+    var clouds = try Clouds.init();
+    defer clouds.deinit();
+
     var settings = Settings{};
 
     // 11. Create Shadow Map (CSM with configurable resolution)
@@ -362,7 +429,7 @@ pub fn main() !void {
     renderer.setViewport(1280, 720);
 
     log.log.info("=== Zig Voxel Engine ===", .{});
-    log.log.info("Controls: WASD=Move, Space/Shift=Up/Down, Tab=Mouse, F=Wireframe, T=Textures, V=VSync", .{});
+    log.log.info("Controls: WASD=Move, Space/Shift=Up/Down, Tab=Mouse, F=Wireframe, T=Textures, V=VSync, C=Clouds", .{});
     log.log.info("Time: 1=Midnight, 2=Sunrise, 3=Noon, 4=Sunset, N=Freeze/Unfreeze", .{});
 
     // 11. Main Loop
@@ -415,6 +482,12 @@ pub fn main() !void {
             // Toggle mouse capture with Tab (only in world)
             if (in_world and input.isKeyPressed(.tab)) {
                 input.setMouseCapture(window, !input.mouse_captured);
+            }
+
+            // Toggle clouds with C
+            if (input.isKeyPressed(.c)) {
+                clouds.enabled = !clouds.enabled;
+                log.log.info("Clouds: {}", .{clouds.enabled});
             }
 
             // Toggle wireframe with F
@@ -482,6 +555,9 @@ pub fn main() !void {
 
                 // Update atmosphere (day/night cycle)
                 atmosphere.update(time.delta_time);
+
+                // Update clouds (wind movement)
+                clouds.update(time.delta_time);
             }
 
             if (world) |active_world| {
@@ -572,8 +648,20 @@ pub fn main() !void {
                 shader.setFloat("uFogDensity", atmosphere.fog_density);
                 shader.setBool("uFogEnabled", atmosphere.fog_enabled);
 
+                // Set cloud shadow uniforms
+                const shadow_params = clouds.getCloudShadowParams();
+                shader.setFloat("uCloudWindOffsetX", shadow_params.wind_offset_x);
+                shader.setFloat("uCloudWindOffsetZ", shadow_params.wind_offset_z);
+                shader.setFloat("uCloudScale", shadow_params.cloud_scale);
+                shader.setFloat("uCloudCoverage", shadow_params.cloud_coverage);
+                shader.setFloat("uCloudShadowStrength", 0.15);
+                shader.setFloat("uCloudHeight", shadow_params.cloud_height);
+
                 // Pass camera position for floating origin chunk rendering
                 active_world.render(&shader, view_proj, camera.position);
+
+                // Render clouds (after terrain, with depth test enabled)
+                clouds.render(camera.position, &view_proj.data, atmosphere.sun_dir, atmosphere.sun_intensity, atmosphere.fog_color, atmosphere.fog_density);
 
                 if (debug_shadows) {
                     debug_shader.use();
