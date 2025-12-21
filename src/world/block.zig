@@ -3,42 +3,58 @@
 const std = @import("std");
 
 /// Biome types for terrain generation
+/// NOTE: This enum is kept for compatibility. See worldgen/biome.zig for
+/// the data-driven BiomeDefinition system.
 pub const Biome = enum(u8) {
     deep_ocean = 0,
     ocean = 1,
     beach = 2,
     plains = 3,
     forest = 4,
-    taiga = 5, // cold forest
+    taiga = 5,
     desert = 6,
     snow_tundra = 7,
     mountains = 8,
     snowy_mountains = 9,
     river = 10,
+    swamp = 11,
+    mangrove_swamp = 12,
+    jungle = 13,
+    savanna = 14,
+    badlands = 15,
+    mushroom_fields = 16,
 
     /// Get surface block for this biome
+    /// Prefer using BiomeDefinition.surface from worldgen/biome.zig
     pub fn getSurfaceBlock(self: Biome) BlockType {
         return switch (self) {
             .deep_ocean, .ocean => .gravel,
             .beach => .sand,
-            .plains, .forest => .grass,
-            .taiga => .grass, // Could use podzol if we add it
+            .plains, .forest, .swamp, .jungle, .savanna => .grass,
+            .taiga => .grass,
             .desert => .sand,
             .snow_tundra, .snowy_mountains => .snow_block,
             .mountains => .stone,
             .river => .sand,
+            .mangrove_swamp => .mud,
+            .badlands => .red_sand,
+            .mushroom_fields => .mycelium,
         };
     }
 
     /// Get filler block (subsurface) for this biome
+    /// Prefer using BiomeDefinition.surface from worldgen/biome.zig
     pub fn getFillerBlock(self: Biome) BlockType {
         return switch (self) {
             .deep_ocean => .gravel,
             .ocean => .sand,
             .beach, .desert, .river => .sand,
-            .plains, .forest, .taiga => .dirt,
+            .plains, .forest, .taiga, .swamp, .jungle, .savanna => .dirt,
             .snow_tundra => .dirt,
             .mountains, .snowy_mountains => .stone,
+            .mangrove_swamp => .mud,
+            .badlands => .terracotta,
+            .mushroom_fields => .dirt,
         };
     }
 
@@ -71,6 +87,23 @@ pub const BlockType = enum(u8) {
     gold_ore = 16,
     clay = 17,
     glowstone = 18,
+    mud = 19,
+    mangrove_log = 20,
+    mangrove_leaves = 21,
+    mangrove_roots = 22,
+    jungle_log = 23,
+    jungle_leaves = 24,
+    melon = 25,
+    bamboo = 26,
+    acacia_log = 27,
+    acacia_leaves = 28,
+    acacia_sapling = 29,
+    terracotta = 30,
+    red_sand = 31,
+    mycelium = 32,
+    mushroom_stem = 33,
+    red_mushroom_block = 34,
+    brown_mushroom_block = 35,
 
     _,
 
@@ -87,7 +120,7 @@ pub const BlockType = enum(u8) {
 
     pub fn isTransparent(self: BlockType) bool {
         return switch (self) {
-            .air, .water, .glass, .leaves => true,
+            .air, .water, .glass, .leaves, .mangrove_leaves, .mangrove_roots, .jungle_leaves, .bamboo, .acacia_leaves, .acacia_sapling => true,
             else => false,
         };
     }
@@ -95,7 +128,7 @@ pub const BlockType = enum(u8) {
     /// Returns true if block completely blocks light propagation
     pub fn isOpaque(self: BlockType) bool {
         return switch (self) {
-            .air, .water, .glass, .leaves => false,
+            .air, .water, .glass, .leaves, .mangrove_leaves, .mangrove_roots, .jungle_leaves, .bamboo, .acacia_leaves, .acacia_sapling => false,
             else => true,
         };
     }
@@ -132,6 +165,23 @@ pub const BlockType = enum(u8) {
             .gold_ore => .{ 0.9, 0.8, 0.2 },
             .clay => .{ 0.6, 0.6, 0.7 },
             .glowstone => .{ 1.0, 0.9, 0.5 },
+            .mud => .{ 0.35, 0.30, 0.30 },
+            .mangrove_log => .{ 0.45, 0.25, 0.25 },
+            .mangrove_leaves => .{ 0.2, 0.5, 0.15 },
+            .mangrove_roots => .{ 0.4, 0.3, 0.2 },
+            .jungle_log => .{ 0.5, 0.3, 0.1 },
+            .jungle_leaves => .{ 0.2, 0.5, 0.15 },
+            .melon => .{ 0.6, 0.8, 0.2 },
+            .bamboo => .{ 0.4, 0.8, 0.2 },
+            .acacia_log => .{ 0.6, 0.55, 0.5 },
+            .acacia_leaves => .{ 0.2, 0.5, 0.15 },
+            .acacia_sapling => .{ 0.3, 0.6, 0.2 },
+            .terracotta => .{ 0.7, 0.4, 0.3 },
+            .red_sand => .{ 0.8, 0.4, 0.1 },
+            .mycelium => .{ 0.4, 0.3, 0.4 },
+            .mushroom_stem => .{ 0.9, 0.9, 0.85 },
+            .red_mushroom_block => .{ 0.8, 0.2, 0.2 },
+            .brown_mushroom_block => .{ 0.6, 0.4, 0.3 },
             _ => .{ 1, 0, 1 }, // Magenta for unknown
         };
     }
