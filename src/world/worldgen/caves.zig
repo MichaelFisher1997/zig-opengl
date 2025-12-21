@@ -47,7 +47,16 @@ pub const CaveParams = struct {
 
 /// Cave carving data for a chunk
 /// Stores which blocks should be carved as air
+/// Memory usage: CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z bytes (currently 65KB)
 pub const CaveCarveMap = struct {
+    // Comptime safety check: ensure carve map doesn't exceed reasonable memory
+    comptime {
+        const size = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
+        if (size > 1_000_000) {
+            @compileError("CaveCarveMap size exceeds 1MB - consider using a sparse representation");
+        }
+    }
+
     data: []bool,
     allocator: std.mem.Allocator,
 
