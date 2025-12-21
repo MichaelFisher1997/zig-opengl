@@ -171,7 +171,7 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .temperature = Range.any(),
         .humidity = Range.any(),
         .elevation = .{ .min = 0.0, .max = 0.15 },
-        .continentalness = .{ .min = 0.0, .max = 0.35 },
+        .continentalness = .{ .min = 0.0, .max = 0.25 }, // Was 0.35
         .priority = 10,
         .surface = .{ .top = .gravel, .filler = .gravel, .depth_range = 4 },
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0 },
@@ -183,7 +183,7 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .temperature = Range.any(),
         .humidity = Range.any(),
         .elevation = .{ .min = 0.0, .max = 0.25 },
-        .continentalness = .{ .min = 0.0, .max = 0.46 },
+        .continentalness = .{ .min = 0.0, .max = 0.35 }, // Was 0.46
         .priority = 8,
         .surface = .{ .top = .sand, .filler = .sand, .depth_range = 3 },
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0 },
@@ -193,8 +193,8 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .name = "Beach",
         .temperature = .{ .min = 0.3, .max = 1.0 },
         .humidity = Range.any(),
-        .elevation = .{ .min = 0.2, .max = 0.315 }, // Reduced max from 0.35 to 0.315 (~4 blocks above sea)
-        .continentalness = .{ .min = 0.40, .max = 0.55 },
+        .elevation = .{ .min = 0.2, .max = 0.315 },
+        .continentalness = .{ .min = 0.30, .max = 0.45 }, // Was 0.40 - 0.55
         .priority = 7,
         .surface = .{ .top = .sand, .filler = .sand, .depth_range = 4 },
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0 },
@@ -207,7 +207,7 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .temperature = .{ .min = 0.35, .max = 0.70 },
         .humidity = .{ .min = 0.0, .max = 0.55 },
         .elevation = .{ .min = 0.25, .max = 0.55 },
-        .continentalness = .{ .min = 0.45, .max = 1.0 },
+        .continentalness = .{ .min = 0.35, .max = 1.0 }, // Was 0.45
         .ruggedness = .{ .min = 0.0, .max = 0.45 },
         .priority = 1,
         .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 3 },
@@ -220,7 +220,7 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .temperature = .{ .min = 0.35, .max = 0.70 },
         .humidity = .{ .min = 0.45, .max = 1.0 },
         .elevation = .{ .min = 0.25, .max = 0.65 },
-        .continentalness = .{ .min = 0.45, .max = 1.0 },
+        .continentalness = .{ .min = 0.35, .max = 1.0 }, // Was 0.45
         .ruggedness = .{ .min = 0.0, .max = 0.55 },
         .priority = 2,
         .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 3 },
@@ -233,7 +233,7 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .temperature = .{ .min = 0.20, .max = 0.42 },
         .humidity = .{ .min = 0.35, .max = 0.80 },
         .elevation = .{ .min = 0.25, .max = 0.70 },
-        .continentalness = .{ .min = 0.45, .max = 1.0 },
+        .continentalness = .{ .min = 0.35, .max = 1.0 }, // Was 0.45
         .priority = 3,
         .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 3 },
         .vegetation = .{ .tree_types = &.{.spruce}, .tree_density = 0.10, .grass_density = 0.2 },
@@ -245,13 +245,121 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .temperature = .{ .min = 0.65, .max = 1.0 },
         .humidity = .{ .min = 0.0, .max = 0.35 },
         .elevation = .{ .min = 0.25, .max = 0.60 },
-        .continentalness = .{ .min = 0.50, .max = 1.0 },
+        .continentalness = .{ .min = 0.40, .max = 1.0 }, // Was 0.50
         .ruggedness = .{ .min = 0.0, .max = 0.40 },
         .priority = 4,
         .surface = .{ .top = .sand, .filler = .sand, .depth_range = 6 },
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0, .cactus_density = 0.015, .dead_bush_density = 0.02 },
-        .terrain = .{ .height_amplitude = 0.5, .smoothing = 0.4 }, // Flatter, smoother
+        .terrain = .{ .height_amplitude = 0.5, .smoothing = 0.4 },
         .colors = .{ .grass = .{ 0.75, 0.70, 0.35 } },
+    },
+    .{
+        .id = .swamp,
+        .name = "Swamp",
+        .temperature = .{ .min = 0.50, .max = 0.80 },
+        .humidity = .{ .min = 0.70, .max = 1.0 },
+        .elevation = .{ .min = 0.20, .max = 0.40 },
+        .continentalness = .{ .min = 0.40, .max = 0.85 }, // Was 0.50
+        .ruggedness = .{ .min = 0.0, .max = 0.30 },
+        .priority = 5,
+        .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 2 },
+        .vegetation = .{ .tree_types = &.{.swamp_oak}, .tree_density = 0.08 },
+        .terrain = .{ .clamp_to_sea_level = true, .height_offset = -2 },
+        .colors = .{
+            .grass = .{ 0.35, 0.45, 0.25 },
+            .foliage = .{ 0.30, 0.40, 0.20 },
+            .water = .{ 0.25, 0.35, 0.30 },
+        },
+    },
+    .{
+        .id = .snow_tundra,
+        .name = "Snow Tundra",
+        .temperature = .{ .min = 0.0, .max = 0.25 },
+        .humidity = Range.any(),
+        .elevation = .{ .min = 0.25, .max = 0.65 },
+        .continentalness = .{ .min = 0.35, .max = 1.0 }, // Was 0.45
+        .priority = 4,
+        .surface = .{ .top = .snow_block, .filler = .dirt, .depth_range = 3 },
+        .vegetation = .{ .tree_types = &.{.spruce}, .tree_density = 0.01 },
+        .colors = .{ .grass = .{ 0.7, 0.75, 0.8 } },
+    },
+
+    // === Mountain Biomes ===
+    .{
+        .id = .mountains,
+        .name = "Mountains",
+        .temperature = .{ .min = 0.25, .max = 1.0 },
+        .humidity = Range.any(),
+        .elevation = .{ .min = 0.55, .max = 1.0 },
+        .ruggedness = .{ .min = 0.50, .max = 1.0 },
+        .priority = 6,
+        .surface = .{ .top = .stone, .filler = .stone, .depth_range = 1 },
+        .vegetation = .{ .tree_types = &.{}, .tree_density = 0 },
+        .terrain = .{ .height_amplitude = 1.5 },
+    },
+    .{
+        .id = .snowy_mountains,
+        .name = "Snowy Mountains",
+        .temperature = .{ .min = 0.0, .max = 0.35 },
+        .humidity = Range.any(),
+        .elevation = .{ .min = 0.55, .max = 1.0 },
+        .ruggedness = .{ .min = 0.45, .max = 1.0 },
+        .priority = 7,
+        .surface = .{ .top = .snow_block, .filler = .stone, .depth_range = 1 },
+        .vegetation = .{ .tree_types = &.{}, .tree_density = 0 },
+        .terrain = .{ .height_amplitude = 1.4 },
+        .colors = .{ .grass = .{ 0.85, 0.90, 0.95 } },
+    },
+
+    // === New Biomes ===
+    .{
+        .id = .mangrove_swamp,
+        .name = "Mangrove Swamp",
+        .temperature = .{ .min = 0.7, .max = 0.9 },
+        .humidity = .{ .min = 0.8, .max = 1.0 },
+        .elevation = .{ .min = 0.2, .max = 0.4 },
+        .continentalness = .{ .min = 0.40, .max = 0.7 }, // Was 0.50
+        .priority = 6,
+        .surface = .{ .top = .mud, .filler = .mud, .depth_range = 4 },
+        .vegetation = .{ .tree_types = &.{.mangrove}, .tree_density = 0.15 },
+        .terrain = .{ .clamp_to_sea_level = true, .height_offset = -1 },
+        .colors = .{ .grass = .{ 0.4, 0.5, 0.2 }, .foliage = .{ 0.4, 0.5, 0.2 }, .water = .{ 0.2, 0.4, 0.3 } },
+    },
+    .{
+        .id = .jungle,
+        .name = "Jungle",
+        .temperature = .{ .min = 0.75, .max = 1.0 },
+        .humidity = .{ .min = 0.7, .max = 1.0 },
+        .elevation = .{ .min = 0.3, .max = 0.7 },
+        .continentalness = .{ .min = 0.35, .max = 1.0 }, // Added
+        .priority = 5,
+        .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 3 },
+        .vegetation = .{ .tree_types = &.{.jungle}, .tree_density = 0.25, .bamboo_density = 0.1, .melon_density = 0.05 },
+        .colors = .{ .grass = .{ 0.2, 0.8, 0.1 }, .foliage = .{ 0.1, 0.7, 0.1 } },
+    },
+    .{
+        .id = .savanna,
+        .name = "Savanna",
+        .temperature = .{ .min = 0.7, .max = 1.0 },
+        .humidity = .{ .min = 0.3, .max = 0.5 },
+        .continentalness = .{ .min = 0.35, .max = 1.0 }, // Added
+        .priority = 4,
+        .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 3 },
+        .vegetation = .{ .tree_types = &.{.acacia}, .tree_density = 0.01, .grass_density = 0.5 },
+        .colors = .{ .grass = .{ 0.6, 0.6, 0.3 }, .foliage = .{ 0.5, 0.5, 0.3 } },
+    },
+    .{
+        .id = .badlands,
+        .name = "Badlands",
+        .temperature = .{ .min = 0.7, .max = 1.0 },
+        .humidity = .{ .min = 0.0, .max = 0.3 },
+        .elevation = .{ .min = 0.4, .max = 0.8 },
+        .continentalness = .{ .min = 0.40, .max = 1.0 }, // Added (kept inland?)
+        .ruggedness = .{ .min = 0.4, .max = 1.0 },
+        .priority = 6,
+        .surface = .{ .top = .red_sand, .filler = .terracotta, .depth_range = 5 },
+        .vegetation = .{ .cactus_density = 0.02 },
+        .colors = .{ .grass = .{ 0.5, 0.4, 0.3 } },
     },
     .{
         .id = .swamp,
