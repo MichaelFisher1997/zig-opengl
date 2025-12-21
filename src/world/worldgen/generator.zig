@@ -272,7 +272,8 @@ pub const TerrainGenerator = struct {
                 // Re-compute coastal status and slope for procedural beaches
                 const warp = self.computeWarp(wx, wz);
                 const c_val = self.getContinentalness(wx + warp.x, wz + warp.z);
-                const is_coastal_zone = c_val > 0.40 and c_val < 0.65;
+                // Tighten coastal zone to prevent massive inland beaches
+                const is_coastal_zone = c_val > 0.50 and c_val < 0.62;
 
                 var max_slope: i32 = 0;
                 if (local_x > 0) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_height_i - surface_heights[idx - 1]))));
@@ -300,7 +301,7 @@ pub const TerrainGenerator = struct {
                         const sl = p.sea_level;
                         if (is_coastal_zone and max_slope >= 3 and y >= sl) {
                             block = .stone; // Cliff
-                        } else if (is_coastal_zone and max_slope <= 1 and y >= sl - 2 and y <= sl + 3) {
+                        } else if (is_coastal_zone and max_slope <= 1 and y >= sl - 2 and y <= sl + 1) {
                             block = .sand; // Beach
                         }
                     }
@@ -381,7 +382,7 @@ pub const TerrainGenerator = struct {
                 // Re-compute coastal status and slope
                 const warp = self.computeWarp(wx, wz);
                 const c_val = self.getContinentalness(wx + warp.x, wz + warp.z);
-                const is_coastal_zone = c_val > 0.40 and c_val < 0.65;
+                const is_coastal_zone = c_val > 0.50 and c_val < 0.62;
 
                 var max_slope: i32 = 0;
                 if (local_x > 0) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_height_i - surface_heights[idx - 1]))));
@@ -406,7 +407,7 @@ pub const TerrainGenerator = struct {
                         const sl = p.sea_level;
                         if (is_coastal_zone and max_slope >= 3 and y >= sl) {
                             block = .stone;
-                        } else if (is_coastal_zone and max_slope <= 1 and y >= sl - 2 and y <= sl + 3) {
+                        } else if (is_coastal_zone and max_slope <= 1 and y >= sl - 2 and y <= sl + 1) {
                             block = .sand;
                         }
                     }
@@ -484,8 +485,9 @@ pub const TerrainGenerator = struct {
         const sea: f32 = @floatFromInt(p.sea_level);
 
         // Section 5.1: Base height from continentalness
-        const land_factor = smoothstep(0.35, 0.75, c);
-        var base_height = std.math.lerp(sea - 55.0, sea + 70.0, land_factor);
+        // Broader smoothstep range to flatten the coast and push it inland (more water)
+        const land_factor = smoothstep(0.30, 0.95, c);
+        var base_height = std.math.lerp(sea - 60.0, sea + 90.0, land_factor);
 
         // Section 5.2: Mountain lift with soft cap
         const m_mask = self.getMountainMask(pv, e, c);
@@ -753,7 +755,7 @@ pub const TerrainGenerator = struct {
                 // Coastal suppression
                 const warp = self.computeWarp(wx, wz);
                 const c_val = self.getContinentalness(wx + warp.x, wz + warp.z);
-                const tree_suppress = smoothstep(0.55, 0.58, c_val);
+                const tree_suppress = smoothstep(0.58, 0.62, c_val);
 
                 const primary = biome_ids[idx];
                 const secondary = secondary_biome_ids[idx];
