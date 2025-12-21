@@ -7,6 +7,7 @@ const noise_mod = @import("noise.zig");
 const Noise = noise_mod.Noise;
 const smoothstep = noise_mod.smoothstep;
 const clamp01 = noise_mod.clamp01;
+const CaveSystem = @import("caves.zig").CaveSystem;
 const Chunk = @import("../chunk.zig").Chunk;
 const CHUNK_SIZE_X = @import("../chunk.zig").CHUNK_SIZE_X;
 const CHUNK_SIZE_Y = @import("../chunk.zig").CHUNK_SIZE_Y;
@@ -52,13 +53,6 @@ const Params = struct {
     river_min: f32 = 0.74,
     river_max: f32 = 0.84,
     river_depth_max: f32 = 12.0,
-
-    // Section 10: Caves
-    cave_mask_scale: f32 = 1.0 / 1200.0,
-    cave_3d_scale: f32 = 0.025,
-    cave_y_scale: f32 = 0.035, // Vertically stretched caves
-    cave_threshold: f32 = 0.55,
-    cave_surface_protection: i32 = 8, // No caves within N blocks of surface
 };
 
 pub const TerrainGenerator = struct {
@@ -80,16 +74,16 @@ pub const TerrainGenerator = struct {
     seabed_noise: Noise,
     river_noise: Noise,
 
-    // Cave noise (2D mask + 3D carving)
-    cave_mask_noise: Noise,
-    cave_3d_noise: Noise,
+    // Cave system (worm caves + noise cavities)
+    cave_system: CaveSystem,
 
     // Filler depth variation
     filler_depth_noise: Noise,
 
     params: Params,
+    allocator: std.mem.Allocator,
 
-    pub fn init(seed: u64) TerrainGenerator {
+    pub fn init(seed: u64, allocator: std.mem.Allocator) TerrainGenerator {
         // Derive seeds for different layers to ensure they are independent
         var prng = std.Random.DefaultPrng.init(seed);
         const random = prng.random();
@@ -106,10 +100,10 @@ pub const TerrainGenerator = struct {
             .coast_jitter_noise = Noise.init(random.int(u64)),
             .seabed_noise = Noise.init(random.int(u64)),
             .river_noise = Noise.init(random.int(u64)),
-            .cave_mask_noise = Noise.init(random.int(u64)),
-            .cave_3d_noise = Noise.init(random.int(u64)),
+            .cave_system = CaveSystem.init(seed),
             .filler_depth_noise = Noise.init(random.int(u64)),
             .params = .{},
+            .allocator = allocator,
         };
     }
 
@@ -120,10 +114,18 @@ pub const TerrainGenerator = struct {
         const p = self.params;
         const sea: f32 = @floatFromInt(p.sea_level);
 
+        // First pass: compute surface heights and basic terrain
+        var surface_heights: [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32 = undefined;
+        var biomes: [CHUNK_SIZE_X * CHUNK_SIZE_Z]Biome = undefined;
+        var filler_depths: [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32 = undefined;
+        var is_ocean_flags: [CHUNK_SIZE_X * CHUNK_SIZE_Z]bool = undefined;
+        var cave_region_values: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
+
         var local_z: u32 = 0;
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
             var local_x: u32 = 0;
             while (local_x < CHUNK_SIZE_X) : (local_x += 1) {
+                const idx = local_x + local_z * CHUNK_SIZE_X;
                 const wx: f32 = @floatFromInt(world_x + @as(i32, @intCast(local_x)));
                 const wz: f32 = @floatFromInt(world_z + @as(i32, @intCast(local_z)));
 
@@ -133,9 +135,9 @@ pub const TerrainGenerator = struct {
                 const zw = wz + warp.z;
 
                 // === Section 4.2-4.5: Sample core 2D fields ===
-                const c = self.getContinentalness(xw, zw); // [0,1]
-                const e = self.getErosion(xw, zw); // [0,1]
-                const pv = self.getPeaksValleys(xw, zw); // [0,1] ridged
+                const c = self.getContinentalness(xw, zw);
+                const e = self.getErosion(xw, zw);
+                const pv = self.getPeaksValleys(xw, zw);
 
                 // === Section 6.1: Coastline jitter ===
                 const coast_jitter = self.coast_jitter_noise.fbm2D(xw, zw, 3, 2.0, 0.5, p.coast_jitter_scale) * 0.05;
@@ -155,7 +157,6 @@ pub const TerrainGenerator = struct {
                 var is_ocean = false;
                 if (terrain_height < sea) {
                     is_ocean = true;
-                    // Apply seabed variation
                     const deep_factor = 1.0 - smoothstep(p.deep_ocean_threshold, 0.5, c_jittered);
                     const seabed_detail = self.seabed_noise.fbm2D(xw, zw, 5, 2.0, 0.5, p.seabed_scale) * p.seabed_amp;
                     const base_seabed = sea - 18.0 - deep_factor * 35.0;
@@ -174,20 +175,57 @@ pub const TerrainGenerator = struct {
                 const mountain_mask = self.getMountainMask(pv, e);
                 const biome = self.selectBiome(c_jittered, e, mountain_mask, terrain_height_i, temperature, humidity, river_mask);
 
-                // === Section 9: Surface layers ===
-                const filler_depth = self.getFillerDepth(xw, zw, e, biome);
+                // Store for second pass
+                surface_heights[idx] = terrain_height_i;
+                biomes[idx] = biome;
+                filler_depths[idx] = self.getFillerDepth(xw, zw, e, biome);
+                is_ocean_flags[idx] = is_ocean;
+                cave_region_values[idx] = self.cave_system.getCaveRegionValue(wx, wz);
+            }
+        }
 
-                // === Section 10: Cave mask ===
-                const cave_allowed = self.getCaveAllowed(xw, zw);
+        // Generate worm caves (crosses chunk boundaries)
+        var worm_carve_map = self.cave_system.generateWormCaves(chunk, &surface_heights, self.allocator) catch {
+            // If allocation fails, continue without worm caves
+            var empty_map: ?@import("caves.zig").CaveCarveMap = null;
+            _ = &empty_map;
+            return self.generateWithoutWormCaves(chunk, &surface_heights, &biomes, &filler_depths, &is_ocean_flags, &cave_region_values, sea);
+        };
+        defer worm_carve_map.deinit();
+
+        // Second pass: fill blocks with cave carving
+        local_z = 0;
+        while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
+            var local_x: u32 = 0;
+            while (local_x < CHUNK_SIZE_X) : (local_x += 1) {
+                const idx = local_x + local_z * CHUNK_SIZE_X;
+                const terrain_height_i = surface_heights[idx];
+                const biome = biomes[idx];
+                const filler_depth = filler_depths[idx];
+                const is_ocean = is_ocean_flags[idx];
+                const cave_region = cave_region_values[idx];
+
+                const wx: f32 = @floatFromInt(world_x + @as(i32, @intCast(local_x)));
+                const wz: f32 = @floatFromInt(world_z + @as(i32, @intCast(local_z)));
 
                 // Fill column
                 var y: i32 = 0;
                 while (y < CHUNK_SIZE_Y) : (y += 1) {
                     var block = self.getBlockAt(y, terrain_height_i, biome, filler_depth, is_ocean, sea);
 
-                    // Cave carving (Section 10)
+                    // Cave carving (worm caves + noise cavities)
                     if (block != .air and block != .water and block != .bedrock) {
-                        if (self.shouldCarve(wx, @floatFromInt(y), wz, terrain_height_i, cave_allowed)) {
+                        const wy: f32 = @floatFromInt(y);
+                        const should_carve_worm = worm_carve_map.get(local_x, @intCast(y), local_z);
+                        const should_carve_cavity = self.cave_system.shouldCarveNoiseCavity(
+                            wx,
+                            wy,
+                            wz,
+                            terrain_height_i,
+                            cave_region,
+                        );
+
+                        if (should_carve_worm or should_carve_cavity) {
                             block = if (y < p.sea_level) .water else .air;
                         }
                     }
@@ -205,6 +243,58 @@ pub const TerrainGenerator = struct {
         // Features (trees, cacti, etc.)
         self.generateFeatures(chunk);
 
+        chunk.dirty = true;
+    }
+
+    /// Fallback generation without worm caves (if allocation fails)
+    fn generateWithoutWormCaves(
+        self: *const TerrainGenerator,
+        chunk: *Chunk,
+        surface_heights: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32,
+        biomes: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]Biome,
+        filler_depths: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32,
+        is_ocean_flags: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]bool,
+        cave_region_values: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32,
+        sea: f32,
+    ) void {
+        const world_x = chunk.getWorldX();
+        const world_z = chunk.getWorldZ();
+        const p = self.params;
+
+        var local_z: u32 = 0;
+        while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
+            var local_x: u32 = 0;
+            while (local_x < CHUNK_SIZE_X) : (local_x += 1) {
+                const idx = local_x + local_z * CHUNK_SIZE_X;
+                const terrain_height_i = surface_heights[idx];
+                const biome = biomes[idx];
+                const filler_depth = filler_depths[idx];
+                const is_ocean = is_ocean_flags[idx];
+                const cave_region = cave_region_values[idx];
+
+                const wx: f32 = @floatFromInt(world_x + @as(i32, @intCast(local_x)));
+                const wz: f32 = @floatFromInt(world_z + @as(i32, @intCast(local_z)));
+
+                var y: i32 = 0;
+                while (y < CHUNK_SIZE_Y) : (y += 1) {
+                    var block = self.getBlockAt(y, terrain_height_i, biome, filler_depth, is_ocean, sea);
+
+                    // Only noise cavities (no worm caves)
+                    if (block != .air and block != .water and block != .bedrock) {
+                        const wy: f32 = @floatFromInt(y);
+                        if (self.cave_system.shouldCarveNoiseCavity(wx, wy, wz, terrain_height_i, cave_region)) {
+                            block = if (y < p.sea_level) .water else .air;
+                        }
+                    }
+
+                    chunk.setBlock(local_x, @intCast(y), local_z, block);
+                }
+            }
+        }
+
+        chunk.generated = true;
+        self.generateOres(chunk);
+        self.generateFeatures(chunk);
         chunk.dirty = true;
     }
 
@@ -417,44 +507,6 @@ pub const TerrainGenerator = struct {
 
         // Stone below
         return .stone;
-    }
-
-    // ========== Section 10: Caves ==========
-
-    fn getCaveAllowed(self: *const TerrainGenerator, x: f32, z: f32) f32 {
-        const p = self.params;
-        const mask_val = self.cave_mask_noise.fbm2DNormalized(x, z, 3, 2.0, 0.5, p.cave_mask_scale);
-        return smoothstep(0.58, 0.80, mask_val);
-    }
-
-    fn shouldCarve(self: *const TerrainGenerator, x: f32, y: f32, z: f32, terrain_height: i32, cave_allowed: f32) bool {
-        const p = self.params;
-
-        // No caves if region doesn't allow
-        if (cave_allowed < 0.1) return false;
-
-        // Surface protection
-        const yi: i32 = @intFromFloat(y);
-        if (yi > terrain_height - p.cave_surface_protection) return false;
-
-        // Depth band preference (caves prefer mid-depths)
-        const band = smoothstep(12, 60, y) * (1.0 - smoothstep(120, 180, y));
-        if (band < 0.1) return false;
-
-        // 3D carving noise
-        const n = self.cave_3d_noise.fbm3D(
-            x * p.cave_3d_scale,
-            y * p.cave_y_scale,
-            z * p.cave_3d_scale,
-            4,
-            2.0,
-            0.5,
-            1.0,
-        );
-
-        // Threshold with cave_allowed influence
-        const threshold = p.cave_threshold + (1.0 - cave_allowed) * 0.2;
-        return n > threshold;
     }
 
     // ========== Ores ==========
