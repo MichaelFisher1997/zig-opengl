@@ -10,7 +10,11 @@ pub const WorldMap = struct {
     height: u32,
 
     pub fn init(width: u32, height: u32) WorldMap {
-        const texture = Texture.initEmpty(width, height, .rgba, .{
+        // Safety: ensure texture size is within typical hardware limits
+        const safe_w = @min(width, 4096);
+        const safe_h = @min(height, 4096);
+
+        const texture = Texture.initEmpty(safe_w, safe_h, .rgba, .{
             .min_filter = .linear,
             .mag_filter = .nearest,
             .generate_mipmaps = false,
@@ -20,8 +24,8 @@ pub const WorldMap = struct {
 
         return .{
             .texture = texture,
-            .width = width,
-            .height = height,
+            .width = safe_w,
+            .height = safe_h,
         };
     }
 
