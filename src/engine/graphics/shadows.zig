@@ -8,6 +8,8 @@ const Vec3 = @import("../math/vec3.zig").Vec3;
 const Texture = @import("texture.zig").Texture;
 const Shader = @import("shader.zig").Shader;
 
+const rhi = @import("rhi.zig");
+
 pub const CASCADE_COUNT = 3;
 
 pub const ShadowMap = struct {
@@ -18,14 +20,15 @@ pub const ShadowMap = struct {
     light_space_matrices: [CASCADE_COUNT]Mat4,
     cascade_splits: [CASCADE_COUNT]f32,
     texel_sizes: [CASCADE_COUNT]f32,
+    rhi_instance: rhi.RHI,
 
-    pub fn init(resolution: u32) !ShadowMap {
+    pub fn init(rhi_instance: rhi.RHI, resolution: u32) !ShadowMap {
         var depth_maps: [CASCADE_COUNT]Texture = undefined;
         var fbos: [CASCADE_COUNT]c.GLuint = undefined;
 
         // Create FBOs and Textures for each cascade
         for (0..CASCADE_COUNT) |i| {
-            depth_maps[i] = Texture.initEmpty(resolution, resolution, .depth, .{
+            depth_maps[i] = Texture.initEmpty(rhi_instance, resolution, resolution, .depth, .{
                 .min_filter = .nearest,
                 .mag_filter = .nearest,
                 .wrap_s = .clamp_to_border,
@@ -35,7 +38,7 @@ pub const ShadowMap = struct {
 
             c.glGenFramebuffers().?(1, &fbos[i]);
             c.glBindFramebuffer().?(c.GL_FRAMEBUFFER, fbos[i]);
-            c.glFramebufferTexture2D().?(c.GL_FRAMEBUFFER, c.GL_DEPTH_ATTACHMENT, c.GL_TEXTURE_2D, depth_maps[i].id, 0);
+            c.glFramebufferTexture2D().?(c.GL_FRAMEBUFFER, c.GL_DEPTH_ATTACHMENT, c.GL_TEXTURE_2D, @intCast(depth_maps[i].handle), 0);
 
             c.glDrawBuffer(c.GL_NONE);
             c.glReadBuffer(c.GL_NONE);
@@ -55,9 +58,10 @@ pub const ShadowMap = struct {
             .fbos = fbos,
             .resolution = resolution,
             .shader = shader,
-            .light_space_matrices = [_]Mat4{Mat4.identity} ** CASCADE_COUNT,
-            .cascade_splits = [_]f32{0} ** CASCADE_COUNT,
-            .texel_sizes = [_]f32{0} ** CASCADE_COUNT,
+            .light_space_matrices = undefined,
+            .cascade_splits = undefined,
+            .texel_sizes = undefined,
+            .rhi_instance = rhi_instance,
         };
     }
 

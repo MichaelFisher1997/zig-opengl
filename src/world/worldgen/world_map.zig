@@ -4,23 +4,33 @@ const TerrainGenerator = @import("generator.zig").TerrainGenerator;
 const BiomeId = @import("biome.zig").BiomeId;
 const Texture = @import("../../engine/graphics/texture.zig").Texture;
 
+const rhi = @import("../../engine/graphics/rhi.zig");
+
 pub const WorldMap = struct {
     texture: Texture,
     width: u32,
     height: u32,
 
-    pub fn init(width: u32, height: u32) WorldMap {
+    pub fn init(rhi_instance: rhi.RHI, width: u32, height: u32) WorldMap {
         // Safety: ensure texture size is within typical hardware limits
         const safe_w = @min(width, 4096);
         const safe_h = @min(height, 4096);
 
-        const texture = Texture.initEmpty(safe_w, safe_h, .rgba, .{
+        const texture = Texture.initEmpty(rhi_instance, safe_w, safe_h, .rgba, .{
             .min_filter = .linear,
             .mag_filter = .nearest,
             .generate_mipmaps = false,
             .wrap_s = .clamp_to_edge,
             .wrap_t = .clamp_to_edge,
         });
+
+        // Fix for hardcoded RHI filter settings (which force mipmaps)
+        // We need NEAREST filtering and NO mipmaps for the map to look crisp and be complete
+        texture.bind(0);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, c.GL_NEAREST);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, c.GL_NEAREST);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_BASE_LEVEL, 0);
+        c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAX_LEVEL, 0);
 
         return .{
             .texture = texture,
@@ -61,7 +71,7 @@ pub const WorldMap = struct {
             }
         }
 
-        self.texture.update(pixels.ptr);
+        self.texture.update(pixels);
     }
 
     fn getBiomeColor(info: TerrainGenerator.ColumnInfo) [3]f32 {

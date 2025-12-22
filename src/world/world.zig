@@ -402,7 +402,7 @@ pub const World = struct {
 
     /// Render all visible chunks using camera-relative coordinates (floating origin)
     /// This prevents floating-point precision issues at large world coordinates
-    pub fn render(self: *World, shader: *const Shader, view_proj: Mat4, camera_pos: Vec3) void {
+    pub fn render(self: *World, shader: ?*const Shader, view_proj: Mat4, camera_pos: Vec3) void {
         const frustum = Frustum.fromViewProj(view_proj);
         self.last_render_stats = .{};
 
@@ -437,8 +437,13 @@ pub const World = struct {
 
             const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
             const mvp = view_proj.multiply(model);
-            shader.setMat4("transform", &mvp.data);
-            shader.setMat4("uModel", &model.data);
+
+            if (shader) |s| {
+                s.setMat4("transform", &mvp.data);
+                s.setMat4("uModel", &model.data);
+            } else {
+                self.rhi.setModelMatrix(model);
+            }
             data.mesh.draw(self.rhi, .solid);
         }
 
@@ -462,8 +467,13 @@ pub const World = struct {
 
             const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
             const mvp = view_proj.multiply(model);
-            shader.setMat4("transform", &mvp.data);
-            shader.setMat4("uModel", &model.data);
+
+            if (shader) |s| {
+                s.setMat4("transform", &mvp.data);
+                s.setMat4("uModel", &model.data);
+            } else {
+                self.rhi.setModelMatrix(model);
+            }
             data.mesh.draw(self.rhi, .fluid);
         }
 
@@ -471,7 +481,7 @@ pub const World = struct {
     }
 
     /// Render scene for shadow mapping (only opaque geometry)
-    pub fn renderShadowPass(self: *World, shader: *const Shader, view_proj: Mat4, camera_pos: Vec3) void {
+    pub fn renderShadowPass(self: *World, shader: ?*const Shader, view_proj: Mat4, camera_pos: Vec3) void {
         const frustum = Frustum.fromViewProj(view_proj);
 
         self.chunks_mutex.lock();
@@ -502,7 +512,11 @@ pub const World = struct {
             const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
             const mvp = view_proj.multiply(model);
 
-            shader.setMat4("transform", &mvp.data);
+            if (shader) |s| {
+                s.setMat4("transform", &mvp.data);
+            } else {
+                self.rhi.setModelMatrix(model);
+            }
 
             // Only render solid mesh (terrain + trees) for shadows
             data.mesh.draw(self.rhi, .solid);

@@ -8,6 +8,8 @@ const Texture = @import("texture.zig").Texture;
 const FilterMode = @import("texture.zig").FilterMode;
 const log = @import("../core/log.zig");
 
+const rhi = @import("rhi.zig");
+
 /// Tile size in pixels (each block face texture)
 pub const TILE_SIZE: u32 = 16;
 
@@ -127,7 +129,7 @@ pub const TextureAtlas = struct {
         };
     }
 
-    pub fn init(allocator: std.mem.Allocator) TextureAtlas {
+    pub fn init(allocator: std.mem.Allocator, rhi_instance: rhi.RHI) TextureAtlas {
         // Allocate pixel data for the atlas (RGBA)
         const pixel_count = ATLAS_SIZE * ATLAS_SIZE * 4;
         var pixels = allocator.alloc(u8, pixel_count) catch @panic("Failed to allocate atlas");
@@ -179,14 +181,8 @@ pub const TextureAtlas = struct {
         generateTile(pixels, TILE_RED_MUSHROOM, .{ 200, 50, 50 }, .mushroom_cap);
         generateTile(pixels, TILE_BROWN_MUSHROOM, .{ 150, 100, 70 }, .mushroom_cap);
 
-        // Create OpenGL texture
-        const texture = Texture.init(ATLAS_SIZE, ATLAS_SIZE, pixels.ptr, .rgba, .{
-            .min_filter = .nearest_mipmap_linear,
-            .mag_filter = .nearest, // Pixelated look for voxels
-            .wrap_s = .repeat,
-            .wrap_t = .repeat,
-            .generate_mipmaps = true,
-        });
+        // Create texture using RHI
+        const texture = Texture.init(rhi_instance, ATLAS_SIZE, ATLAS_SIZE, pixels);
 
         log.log.info("Texture atlas created: {}x{} ({} tiles)", .{ ATLAS_SIZE, ATLAS_SIZE, TILES_PER_ROW * TILES_PER_ROW });
 
