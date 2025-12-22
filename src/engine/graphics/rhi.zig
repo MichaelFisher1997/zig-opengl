@@ -15,6 +15,8 @@ pub const InvalidShaderHandle: ShaderHandle = 0;
 pub const TextureHandle = u32;
 pub const InvalidTextureHandle: TextureHandle = 0;
 
+pub const SHADOW_CASCADE_COUNT = 3;
+
 pub const BufferUsage = enum {
     vertex,
     index,
@@ -35,6 +37,28 @@ pub const DrawMode = enum {
     triangles,
     lines,
     points,
+};
+
+/// Sky rendering parameters
+pub const SkyParams = struct {
+    cam_forward: Vec3,
+    cam_right: Vec3,
+    cam_up: Vec3,
+    aspect: f32,
+    tan_half_fov: f32,
+    sun_dir: Vec3,
+    sky_color: Vec3,
+    horizon_color: Vec3,
+    sun_intensity: f32,
+    moon_intensity: f32,
+    time: f32,
+};
+
+/// Shadow cascade data for GPU sampling
+pub const ShadowParams = struct {
+    light_space_matrices: [SHADOW_CASCADE_COUNT]Mat4,
+    cascade_splits: [SHADOW_CASCADE_COUNT]f32,
+    shadow_texel_sizes: [SHADOW_CASCADE_COUNT]f32,
 };
 
 /// RGBA color for UI rendering
@@ -97,14 +121,23 @@ pub const RHI = struct {
 
         // Command Recording
         beginFrame: *const fn (ctx: *anyopaque) void,
+        setClearColor: *const fn (ctx: *anyopaque, color: Vec3) void,
+        beginMainPass: *const fn (ctx: *anyopaque) void,
+        endMainPass: *const fn (ctx: *anyopaque) void,
         endFrame: *const fn (ctx: *anyopaque) void,
+
+        // Shadow Pass
+        beginShadowPass: *const fn (ctx: *anyopaque, cascade_index: u32) void,
+        endShadowPass: *const fn (ctx: *anyopaque) void,
 
         // Uniforms
         updateGlobalUniforms: *const fn (ctx: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, time: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32) void,
+        updateShadowUniforms: *const fn (ctx: *anyopaque, params: ShadowParams) void,
         setModelMatrix: *const fn (ctx: *anyopaque, model: Mat4) void,
 
         // Draw Calls
         draw: *const fn (ctx: *anyopaque, handle: BufferHandle, count: u32, mode: DrawMode) void,
+        drawSky: *const fn (ctx: *anyopaque, params: SkyParams) void,
 
         // Textures
         createTexture: *const fn (ctx: *anyopaque, width: u32, height: u32, data: []const u8) TextureHandle,
@@ -145,12 +178,36 @@ pub const RHI = struct {
         self.vtable.beginFrame(self.ptr);
     }
 
+    pub fn setClearColor(self: RHI, color: Vec3) void {
+        self.vtable.setClearColor(self.ptr, color);
+    }
+
+    pub fn beginMainPass(self: RHI) void {
+        self.vtable.beginMainPass(self.ptr);
+    }
+
+    pub fn endMainPass(self: RHI) void {
+        self.vtable.endMainPass(self.ptr);
+    }
+
     pub fn endFrame(self: RHI) void {
         self.vtable.endFrame(self.ptr);
     }
 
+    pub fn beginShadowPass(self: RHI, cascade_index: u32) void {
+        self.vtable.beginShadowPass(self.ptr, cascade_index);
+    }
+
+    pub fn endShadowPass(self: RHI) void {
+        self.vtable.endShadowPass(self.ptr);
+    }
+
     pub fn updateGlobalUniforms(self: RHI, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, time: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32) void {
         self.vtable.updateGlobalUniforms(self.ptr, view_proj, cam_pos, sun_dir, time, fog_color, fog_density, fog_enabled, sun_intensity, ambient);
+    }
+
+    pub fn updateShadowUniforms(self: RHI, params: ShadowParams) void {
+        self.vtable.updateShadowUniforms(self.ptr, params);
     }
 
     pub fn setModelMatrix(self: RHI, model: Mat4) void {
@@ -159,6 +216,10 @@ pub const RHI = struct {
 
     pub fn draw(self: RHI, handle: BufferHandle, count: u32, mode: DrawMode) void {
         self.vtable.draw(self.ptr, handle, count, mode);
+    }
+
+    pub fn drawSky(self: RHI, params: SkyParams) void {
+        self.vtable.drawSky(self.ptr, params);
     }
 
     pub fn createTexture(self: RHI, width: u32, height: u32, data: []const u8) TextureHandle {

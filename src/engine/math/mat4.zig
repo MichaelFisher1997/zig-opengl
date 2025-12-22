@@ -60,15 +60,12 @@ pub const Mat4 = extern struct {
 
         result.data[0][0] = 1.0 / (aspect * tan_half_fov);
         result.data[1][1] = 1.0 / tan_half_fov;
-        // Reverse-Z mapping near to 1 and far to 0
+        // Reverse-Z mapping near to 1 and far to 0 (right-handed, z is negative in front)
         // z_ndc = (m22 * z + m32) / -z
-        // 1 = (m22*n + m32) / -n  => -n = m22*n + m32
-        // 0 = (m22*f + m32) / -f  => m32 = -m22*f
-        // -n = m22*n - m22*f = m22*(n-f) => m22 = -n / (n-f) = n / (f-n)
-        // m32 = -(n / (f-n)) * f = -(f*n) / (f-n)
+        // z = -near => z_ndc = 1, z = -far => z_ndc = 0
         result.data[2][2] = near / (far - near);
         result.data[2][3] = -1.0;
-        result.data[3][2] = -(far * near) / (far - near);
+        result.data[3][2] = (far * near) / (far - near);
 
         return result;
     }

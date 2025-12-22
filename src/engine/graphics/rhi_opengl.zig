@@ -23,6 +23,11 @@ const OpenGLContext = struct {
     ui_vbo: c.GLuint,
     ui_screen_width: f32,
     ui_screen_height: f32,
+
+    // Sky rendering state
+    sky_shader: ?Shader,
+    sky_vao: c.GLuint,
+    sky_vbo: c.GLuint,
 };
 
 // UI Shaders (embedded GLSL)
@@ -69,6 +74,117 @@ const ui_tex_fragment_shader =
     \\}
 ;
 
+// Sky shaders (shared with Atmosphere)
+const sky_vertex_shader =
+    \\#version 330 core
+    \\layout (location = 0) in vec2 aPos;
+    \\out vec3 vWorldDir;
+    \\uniform vec3 uCamForward;
+    \\uniform vec3 uCamRight;
+    \\uniform vec3 uCamUp;
+    \\uniform float uAspect;
+    \\uniform float uTanHalfFov;
+    \\void main() {
+    \\    gl_Position = vec4(aPos, 0.9999, 1.0);
+    \\    vec3 rayDir = uCamForward
+    \\                + uCamRight * aPos.x * uAspect * uTanHalfFov
+    \\                + uCamUp * aPos.y * uTanHalfFov;
+    \\    vWorldDir = rayDir;
+    \\}
+;
+
+const sky_fragment_shader =
+    \\#version 330 core
+    \\in vec3 vWorldDir;
+    \\out vec4 FragColor;
+    \\
+    \\uniform vec3 uSunDir;
+    \\uniform vec3 uSkyColor;
+    \\uniform vec3 uHorizonColor;
+    \\uniform float uSunIntensity;
+    \\uniform float uMoonIntensity;
+    \\uniform float uTime;
+    \\
+    \\float hash21(vec2 p) {
+    \\    p = fract(p * vec2(234.34, 435.345));
+    \\    p += dot(p, p + 34.23);
+    \\    return fract(p.x * p.y);
+    \\}
+    \\
+    \\vec2 hash22(vec2 p) {
+    \\    float n = hash21(p);
+    \\    return vec2(n, hash21(p + n));
+    \\}
+    \\
+    \\float stars(vec3 dir) {
+    \\    float theta = atan(dir.z, dir.x);
+    \\    float phi = asin(clamp(dir.y, -1.0, 1.0));
+    \\
+    \\    vec2 gridCoord = vec2(theta * 15.0, phi * 30.0);
+    \\    vec2 cell = floor(gridCoord);
+    \\    vec2 cellFrac = fract(gridCoord);
+    \\
+    \\    float brightness = 0.0;
+    \\
+    \\    for (int dy = -1; dy <= 1; dy++) {
+    \\        for (int dx = -1; dx <= 1; dx++) {
+    \\            vec2 neighbor = cell + vec2(float(dx), float(dy));
+    \\
+    \\            float starChance = hash21(neighbor);
+    \\            if (starChance > 0.92) {
+    \\                vec2 starPos = hash22(neighbor * 1.7);
+    \\                vec2 offset = vec2(float(dx), float(dy)) + starPos - cellFrac;
+    \\                float dist = length(offset);
+    \\
+    \\                float starBright = smoothstep(0.08, 0.0, dist);
+    \\
+    \\                starBright *= 0.5 + 0.5 * hash21(neighbor * 3.14);
+    \\
+    \\                float twinkle = 0.7 + 0.3 * sin(hash21(neighbor) * 50.0 + uTime * 8.0);
+    \\                starBright *= twinkle;
+    \\
+    \\                brightness = max(brightness, starBright);
+    \\            }
+    \\        }
+    \\    }
+    \\
+    \\    return brightness;
+    \\}
+    \\
+    \\void main() {
+    \\    vec3 dir = normalize(vWorldDir);
+    \\
+    \\    float horizon = 1.0 - abs(dir.y);
+    \\    horizon = pow(horizon, 1.5);
+    \\    vec3 sky = mix(uSkyColor, uHorizonColor, horizon);
+    \\
+    \\    float sunDot = dot(dir, uSunDir);
+    \\    float sunDisc = smoothstep(0.9995, 0.9999, sunDot);
+    \\    vec3 sunColor = vec3(1.0, 0.95, 0.8);
+    \\
+    \\    float sunGlow = pow(max(sunDot, 0.0), 8.0) * 0.5;
+    \\    sunGlow += pow(max(sunDot, 0.0), 64.0) * 0.3;
+    \\
+    \\    float moonDot = dot(dir, -uSunDir);
+    \\    float moonDisc = smoothstep(0.9990, 0.9995, moonDot);
+    \\    vec3 moonColor = vec3(0.9, 0.9, 1.0);
+    \\
+    \\    float starIntensity = 0.0;
+    \\    if (uSunIntensity < 0.3 && dir.y > 0.0) {
+    \\        float nightFactor = 1.0 - uSunIntensity * 3.33;
+    \\        starIntensity = stars(dir) * nightFactor * 1.5;
+    \\    }
+    \\
+    \\    vec3 finalColor = sky;
+    \\    finalColor += sunGlow * uSunIntensity * vec3(1.0, 0.8, 0.4);
+    \\    finalColor += sunDisc * sunColor * uSunIntensity;
+    \\    finalColor += moonDisc * moonColor * uMoonIntensity * 3.0;
+    \\    finalColor += vec3(starIntensity);
+    \\
+    \\    FragColor = vec4(finalColor, 1.0);
+    \\}
+;
+
 fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator) anyerror!void {
     const ctx: *OpenGLContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.allocator = allocator;
@@ -98,6 +214,24 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator) anyerror!void {
     c.glBindVertexArray().?(0);
     ctx.ui_screen_width = 1280;
     ctx.ui_screen_height = 720;
+
+    // Initialize sky shader and fullscreen triangle
+    ctx.sky_shader = try Shader.initSimple(sky_vertex_shader, sky_fragment_shader);
+
+    const sky_vertices = [_]f32{
+        -1.0, -1.0,
+        3.0,  -1.0,
+        -1.0, 3.0,
+    };
+
+    c.glGenVertexArrays().?(1, &ctx.sky_vao);
+    c.glGenBuffers().?(1, &ctx.sky_vbo);
+    c.glBindVertexArray().?(ctx.sky_vao);
+    c.glBindBuffer().?(c.GL_ARRAY_BUFFER, ctx.sky_vbo);
+    c.glBufferData().?(c.GL_ARRAY_BUFFER, @sizeOf(@TypeOf(sky_vertices)), &sky_vertices, c.GL_STATIC_DRAW);
+    c.glVertexAttribPointer().?(0, 2, c.GL_FLOAT, c.GL_FALSE, 2 * @sizeOf(f32), null);
+    c.glEnableVertexAttribArray().?(0);
+    c.glBindVertexArray().?(0);
 }
 
 fn deinit(ctx_ptr: *anyopaque) void {
@@ -119,6 +253,11 @@ fn deinit(ctx_ptr: *anyopaque) void {
     if (ctx.ui_tex_shader) |*s| s.deinit();
     if (ctx.ui_vao != 0) c.glDeleteVertexArrays().?(1, &ctx.ui_vao);
     if (ctx.ui_vbo != 0) c.glDeleteBuffers().?(1, &ctx.ui_vbo);
+
+    // Cleanup sky resources
+    if (ctx.sky_shader) |*s| s.deinit();
+    if (ctx.sky_vao != 0) c.glDeleteVertexArrays().?(1, &ctx.sky_vao);
+    if (ctx.sky_vbo != 0) c.glDeleteBuffers().?(1, &ctx.sky_vbo);
 
     ctx.allocator.destroy(ctx);
 }
@@ -238,7 +377,29 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
     _ = ctx_ptr;
 }
 
+fn setClearColor(ctx_ptr: *anyopaque, color: Vec3) void {
+    _ = ctx_ptr;
+    c.glClearColor(color.x, color.y, color.z, 1.0);
+}
+
+fn beginMainPass(ctx_ptr: *anyopaque) void {
+    _ = ctx_ptr;
+}
+
+fn endMainPass(ctx_ptr: *anyopaque) void {
+    _ = ctx_ptr;
+}
+
 fn endFrame(ctx_ptr: *anyopaque) void {
+    _ = ctx_ptr;
+}
+
+fn beginShadowPass(ctx_ptr: *anyopaque, cascade_index: u32) void {
+    _ = ctx_ptr;
+    _ = cascade_index;
+}
+
+fn endShadowPass(ctx_ptr: *anyopaque) void {
     _ = ctx_ptr;
 }
 
@@ -253,6 +414,11 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
     _ = fog_enabled;
     _ = sun_intensity;
     _ = ambient;
+}
+
+fn updateShadowUniforms(ctx_ptr: *anyopaque, params: rhi.ShadowParams) void {
+    _ = ctx_ptr;
+    _ = params;
 }
 
 fn setModelMatrix(ctx_ptr: *anyopaque, model: Mat4) void {
@@ -280,6 +446,32 @@ fn draw(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.Dra
             c.glBindVertexArray().?(0);
         }
     }
+}
+
+fn drawSky(ctx_ptr: *anyopaque, params: rhi.SkyParams) void {
+    const ctx: *OpenGLContext = @ptrCast(@alignCast(ctx_ptr));
+    const shader = ctx.sky_shader orelse return;
+
+    // Disable depth write, keep depth test
+    c.glDepthMask(c.GL_FALSE);
+    defer c.glDepthMask(c.GL_TRUE);
+
+    shader.use();
+    shader.setVec3("uCamForward", params.cam_forward.x, params.cam_forward.y, params.cam_forward.z);
+    shader.setVec3("uCamRight", params.cam_right.x, params.cam_right.y, params.cam_right.z);
+    shader.setVec3("uCamUp", params.cam_up.x, params.cam_up.y, params.cam_up.z);
+    shader.setFloat("uAspect", params.aspect);
+    shader.setFloat("uTanHalfFov", params.tan_half_fov);
+    shader.setVec3("uSunDir", params.sun_dir.x, params.sun_dir.y, params.sun_dir.z);
+    shader.setVec3("uSkyColor", params.sky_color.x, params.sky_color.y, params.sky_color.z);
+    shader.setVec3("uHorizonColor", params.horizon_color.x, params.horizon_color.y, params.horizon_color.z);
+    shader.setFloat("uSunIntensity", params.sun_intensity);
+    shader.setFloat("uMoonIntensity", params.moon_intensity);
+    shader.setFloat("uTime", params.time);
+
+    c.glBindVertexArray().?(ctx.sky_vao);
+    c.glDrawArrays(c.GL_TRIANGLES, 0, 3);
+    c.glBindVertexArray().?(0);
 }
 
 fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, data: []const u8) rhi.TextureHandle {
@@ -461,10 +653,17 @@ const vtable = rhi.RHI.VTable{
     .uploadBuffer = uploadBuffer,
     .destroyBuffer = destroyBuffer,
     .beginFrame = beginFrame,
+    .setClearColor = setClearColor,
+    .beginMainPass = beginMainPass,
+    .endMainPass = endMainPass,
     .endFrame = endFrame,
+    .beginShadowPass = beginShadowPass,
+    .endShadowPass = endShadowPass,
     .updateGlobalUniforms = updateGlobalUniforms,
+    .updateShadowUniforms = updateShadowUniforms,
     .setModelMatrix = setModelMatrix,
     .draw = draw,
+    .drawSky = drawSky,
     .createTexture = createTexture,
     .destroyTexture = destroyTexture,
     .bindTexture = bindTexture,
@@ -489,6 +688,9 @@ pub fn createRHI(allocator: std.mem.Allocator) !rhi.RHI {
         .ui_vbo = 0,
         .ui_screen_width = 1280,
         .ui_screen_height = 720,
+        .sky_shader = null,
+        .sky_vao = 0,
+        .sky_vbo = 0,
     };
 
     return rhi.RHI{

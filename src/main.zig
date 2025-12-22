@@ -415,7 +415,7 @@ pub fn main() !void {
     defer atlas.deinit();
     var ui: ?UISystem = try UISystem.init(rhi, 1280, 720);
     defer if (ui) |*u| u.deinit();
-    var atmosphere: ?Atmosphere = if (!is_vulkan) Atmosphere.init() else null;
+    var atmosphere: ?Atmosphere = if (is_vulkan) Atmosphere.initNoGL() else Atmosphere.init();
     defer if (atmosphere) |*a| a.deinit();
     var clouds: ?Clouds = if (!is_vulkan) try Clouds.init() else null;
     defer if (clouds) |*cl| cl.deinit();
@@ -447,6 +447,7 @@ pub fn main() !void {
 
     while (!input.should_quit) {
         time.update();
+        if (atmosphere) |*a| a.update(time.delta_time);
         input.beginFrame();
         input.pollEvents();
         if (renderer) |*r| r.setViewport(input.window_width, input.window_height);
@@ -588,8 +589,10 @@ pub fn main() !void {
             }
         } else if (input.mouse_captured) input.setMouseCapture(window, false);
 
+        const clear_color = if (in_world or in_pause) (if (atmosphere) |a| a.fog_color else Vec3.init(0.5, 0.7, 1.0)) else Vec3.init(0.07, 0.08, 0.1);
+        rhi.setClearColor(clear_color);
         if (renderer) |*r| {
-            r.setClearColor(if (in_world or in_pause) (if (atmosphere) |a| a.fog_color else Vec3.init(0.5, 0.7, 1.0)) else Vec3.init(0.07, 0.08, 0.1));
+            r.setClearColor(clear_color);
             r.beginFrame();
         }
         rhi.beginFrame();
@@ -597,7 +600,11 @@ pub fn main() !void {
         if (in_world or in_pause) {
             if (world) |active_world| {
                 const aspect = screen_w / screen_h;
-                const view_proj = camera.getViewProjectionMatrixOriginCentered(aspect);
+                const view_proj_cull = camera.getViewProjectionMatrixOriginCentered(aspect);
+                const view_proj_render = if (is_vulkan)
+                    Mat4.perspectiveReverseZ(camera.fov, aspect, camera.near, camera.far).multiply(camera.getViewMatrixOriginCentered())
+                else
+                    view_proj_cull;
                 if (shadow_map) |*sm| {
                     if (atmosphere) |atmo| {
                         var light_dir = atmo.sun_dir;
@@ -613,7 +620,7 @@ pub fn main() !void {
                     }
                 }
                 if (renderer) |*r| {
-                    r.setClearColor(if (in_world or in_pause) (if (atmosphere) |a| a.fog_color else Vec3.init(0.5, 0.7, 1.0)) else Vec3.init(0.07, 0.08, 0.1));
+                    r.setClearColor(clear_color);
                     r.beginFrame();
                 }
                 if (!is_vulkan) if (atmosphere) |*a| a.renderSky(camera.forward, camera.right, camera.up, aspect, camera.fov);
@@ -649,20 +656,66 @@ pub fn main() !void {
                         s.setFloat("uCloudShadowStrength", 0.15);
                         s.setFloat("uCloudHeight", p.cloud_height);
                     }
-                    active_world.render(s, view_proj, camera.position);
+                    active_world.render(s, view_proj_cull, camera.position);
                 } else if (is_vulkan) {
-                    atlas.bind(0);
-                    const sun_dir = if (atmosphere) |a| a.sun_dir else Vec3.init(0.5, 0.8, 0.2);
-                    const time_val = if (atmosphere) |a| a.getHours() else 12.0;
+                    const fallback_sun_dir = Vec3.init(0.5, 0.8, 0.2);
+                    const fallback_sky_color = Vec3.init(0.5, 0.7, 1.0);
+                    const fallback_horizon_color = Vec3.init(0.8, 0.85, 0.95);
+
+                    const sun_dir = if (atmosphere) |a| a.sun_dir else fallback_sun_dir;
+                    const time_val = if (atmosphere) |a| a.time_of_day else 0.25;
                     const fog_color = if (atmosphere) |a| a.fog_color else Vec3.init(0.7, 0.8, 0.9);
                     const fog_density = if (atmosphere) |a| a.fog_density else 0.0;
                     const fog_enabled = if (atmosphere) |a| a.fog_enabled else false;
                     const sun_intensity_val = if (atmosphere) |a| a.sun_intensity else 1.0;
+                    const moon_intensity_val = if (atmosphere) |a| a.moon_intensity else 0.0;
                     const ambient_val = if (atmosphere) |a| a.ambient_intensity else 0.2;
-                    rhi.updateGlobalUniforms(view_proj, camera.position, sun_dir, time_val, fog_color, fog_density, fog_enabled, sun_intensity_val, ambient_val);
-                    active_world.render(null, view_proj, camera.position);
+                    const sky_color = if (atmosphere) |a| a.sky_color else fallback_sky_color;
+                    const horizon_color = if (atmosphere) |a| a.horizon_color else fallback_horizon_color;
+
+                    var light_dir = sun_dir;
+                    var light_active = true;
+                    if (atmosphere) |atmo| {
+                        if (atmo.sun_intensity < 0.05 and atmo.moon_intensity > 0.05) {
+                            light_dir = atmo.moon_dir;
+                        }
+                        light_active = atmo.sun_intensity > 0.05 or atmo.moon_intensity > 0.05;
+                    }
+
+                    if (light_active) {
+                        const cascades = ShadowMap.computeCascades(settings.shadow_resolution, camera.fov, aspect, 0.1, settings.shadow_distance, light_dir, camera.getViewMatrixOriginCentered());
+                        rhi.updateShadowUniforms(.{
+                            .light_space_matrices = cascades.light_space_matrices,
+                            .cascade_splits = cascades.cascade_splits,
+                            .shadow_texel_sizes = cascades.texel_sizes,
+                        });
+                        for (0..ShadowMap.CASCADE_COUNT) |i| {
+                            rhi.beginShadowPass(@intCast(i));
+                            rhi.updateGlobalUniforms(cascades.light_space_matrices[i], camera.position, light_dir, time_val, fog_color, fog_density, false, 0.0, 0.0);
+                            active_world.renderShadowPass(null, cascades.light_space_matrices[i], camera.position);
+                            rhi.endShadowPass();
+                        }
+                    }
+
+                    rhi.drawSky(.{
+                        .cam_forward = camera.forward,
+                        .cam_right = camera.right,
+                        .cam_up = camera.up,
+                        .aspect = aspect,
+                        .tan_half_fov = @tan(camera.fov / 2.0),
+                        .sun_dir = sun_dir,
+                        .sky_color = sky_color,
+                        .horizon_color = horizon_color,
+                        .sun_intensity = sun_intensity_val,
+                        .moon_intensity = moon_intensity_val,
+                        .time = time_val,
+                    });
+
+                    atlas.bind(0);
+                    rhi.updateGlobalUniforms(view_proj_render, camera.position, sun_dir, time_val, fog_color, fog_density, fog_enabled, sun_intensity_val, ambient_val);
+                    active_world.render(null, view_proj_cull, camera.position);
                 }
-                if (clouds) |*cl| if (atmosphere) |atmo| if (!is_vulkan) cl.render(camera.position, &view_proj.data, atmo.sun_dir, atmo.sun_intensity, atmo.fog_color, atmo.fog_density);
+                if (clouds) |*cl| if (atmosphere) |atmo| if (!is_vulkan) cl.render(camera.position, &view_proj_cull.data, atmo.sun_dir, atmo.sun_intensity, atmo.fog_color, atmo.fog_density);
                 if (debug_shadows and debug_shader != null and shadow_map != null) {
                     debug_shader.?.use();
                     c.glActiveTexture().?(c.GL_TEXTURE0);
