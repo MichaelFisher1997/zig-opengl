@@ -157,8 +157,8 @@ pub const ShadowMap = struct {
             light_ortho.data[1][1] = 2.0 / (maxY - minY);
             light_ortho.data[3][1] = -(maxY + minY) / (maxY - minY);
 
-            const A = 1.0 / (minZ - maxZ);
-            const B = -A * maxZ;
+            const A = 1.0 / (maxZ - minZ);
+            const B = -A * minZ;
             light_ortho.data[2][2] = A;
             light_ortho.data[3][2] = B;
 

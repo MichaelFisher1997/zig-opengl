@@ -44,12 +44,21 @@ float calculateShadow(vec3 fragPosWorld, float nDotL, int layer) {
 
     // XY [-1,1] -> [0,1]
     projCoords.xy = projCoords.xy * 0.5 + 0.5;
+    
+    // No Y-flip needed - shadow vertex shader also doesn't flip Y,
+    // so the coordinate spaces match and texel snapping works correctly.
 
-    if (projCoords.z > 1.0 || projCoords.z < 0.0) return 0.0;
+    // Check bounds - areas outside the shadow frustum should not be shadowed
+    if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0 ||
+        projCoords.z > 1.0 || projCoords.z < 0.0) return 0.0;
 
     float currentDepth = projCoords.z;
 
-    float bias = max(0.002 * (1.0 - nDotL), 0.0005);
+    // Reverse-Z: closer objects have LARGER Z.
+    // Fragment is in shadow if it's further than the depth stored in the shadow map.
+    // Further means SMALLER Z.
+    float bias = max(0.0005 * (1.0 - nDotL), 0.0001);
     if (layer == 1) bias *= 2.0;
     if (layer == 2) bias *= 4.0;
 
@@ -67,7 +76,7 @@ float calculateShadow(vec3 fragPosWorld, float nDotL, int layer) {
                 pcfDepth = texture(uShadowMap2, projCoords.xy + vec2(x, y) * texelSize).r;
             }
 
-            shadow += currentDepth > pcfDepth + bias ? 1.0 : 0.0;
+            shadow += currentDepth < pcfDepth - bias ? 1.0 : 0.0;
         }
     }
     shadow /= 9.0;

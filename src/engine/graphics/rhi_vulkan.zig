@@ -55,6 +55,7 @@ const ShadowUniforms = extern struct {
 
 /// Per-draw model matrix, passed via push constants for efficiency.
 const ModelUniforms = extern struct {
+    view_proj: Mat4,
     model: Mat4,
 };
 
@@ -162,6 +163,8 @@ const VulkanContext = struct {
     main_pass_active: bool,
     shadow_pass_active: bool,
     shadow_pass_index: u32,
+    shadow_pass_matrix: Mat4,
+    current_view_proj: Mat4,
 
     clear_color: [4]f32,
 
@@ -892,16 +895,23 @@ fn waitIdle(ctx_ptr: *anyopaque) void {
     }
 }
 
-fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, time: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32) void {
+fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, time_val: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frame_in_progress) return;
+
+    if (ctx.shadow_pass_active) {
+        ctx.shadow_pass_matrix = view_proj;
+        return;
+    }
+
+    ctx.current_view_proj = view_proj;
 
     const uniforms = GlobalUniforms{
         .view_proj = view_proj,
         .cam_pos = .{ cam_pos.x, cam_pos.y, cam_pos.z, 0 },
         .sun_dir = .{ sun_dir.x, sun_dir.y, sun_dir.z, 0 },
         .fog_color = .{ fog_color.x, fog_color.y, fog_color.z, 1 },
-        .time = time,
+        .time = time_val,
         .fog_density = fog_density,
         .fog_enabled = if (fog_enabled) 1.0 else 0.0,
         .sun_intensity = sun_intensity,
@@ -1322,7 +1332,10 @@ fn draw(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.Dra
         }
 
         // Push constants are cheap, always update per-draw
-        const uniforms = ModelUniforms{ .model = ctx.current_model };
+        const uniforms = ModelUniforms{
+            .view_proj = if (use_shadow) ctx.shadow_pass_matrix else ctx.current_view_proj,
+            .model = ctx.current_model,
+        };
         c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
 
         const offset: c.VkDeviceSize = 0;
@@ -1446,7 +1459,7 @@ fn beginShadowPass(ctx_ptr: *anyopaque, cascade_index: u32) void {
     render_pass_info.renderArea.extent = ctx.shadow_extent;
 
     var clear_value = std.mem.zeroes(c.VkClearValue);
-    clear_value.depthStencil = .{ .depth = 1.0, .stencil = 0 };
+    clear_value.depthStencil = .{ .depth = 0.0, .stencil = 0 }; // Reverse-Z: clear to 0.0 (far plane)
     render_pass_info.clearValueCount = 1;
     render_pass_info.pClearValues = &clear_value;
 
@@ -1455,6 +1468,7 @@ fn beginShadowPass(ctx_ptr: *anyopaque, cascade_index: u32) void {
 
     ctx.shadow_pass_active = true;
     ctx.shadow_pass_index = cascade_index;
+    ctx.shadow_pass_matrix = Mat4.identity;
 
     var viewport = std.mem.zeroes(c.VkViewport);
     viewport.x = 0.0;
@@ -2085,6 +2099,8 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
     }
 
     ctx.current_model = Mat4.identity;
+    ctx.current_view_proj = Mat4.identity;
+    ctx.shadow_pass_matrix = Mat4.identity;
 
     // 12. Pipeline Layout
     var push_constant_range = std.mem.zeroes(c.VkPushConstantRange);
@@ -2376,12 +2392,12 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
     shadow_depth_stencil.sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     shadow_depth_stencil.depthTestEnable = c.VK_TRUE;
     shadow_depth_stencil.depthWriteEnable = c.VK_TRUE;
-    shadow_depth_stencil.depthCompareOp = c.VK_COMPARE_OP_LESS_OR_EQUAL;
+    shadow_depth_stencil.depthCompareOp = c.VK_COMPARE_OP_GREATER_OR_EQUAL;
     shadow_depth_stencil.depthBoundsTestEnable = c.VK_FALSE;
     shadow_depth_stencil.stencilTestEnable = c.VK_FALSE;
 
     var shadow_rasterizer = rasterizer;
-    shadow_rasterizer.cullMode = c.VK_CULL_MODE_BACK_BIT;
+    shadow_rasterizer.cullMode = c.VK_CULL_MODE_NONE; // Disable culling for shadows to prevent issues with winding order after Y-flip
 
     var shadow_color_blending = std.mem.zeroes(c.VkPipelineColorBlendStateCreateInfo);
     shadow_color_blending.sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -2587,7 +2603,8 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
     shadow_sampler_info.addressModeU = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     shadow_sampler_info.addressModeV = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     shadow_sampler_info.addressModeW = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-    shadow_sampler_info.borderColor = c.VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    // Reverse-Z: border = 0.0 means "no occluder" (far plane), so out-of-bounds = no shadow
+    shadow_sampler_info.borderColor = c.VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
     try checkVk(c.vkCreateSampler(ctx.device, &shadow_sampler_info, null, &ctx.shadow_sampler));
 
     // Initialize shadow layouts to undefined
