@@ -135,6 +135,7 @@ pub const RHI = struct {
 
         // Command Recording
         beginFrame: *const fn (ctx: *anyopaque) void,
+        abortFrame: *const fn (ctx: *anyopaque) void,
         setClearColor: *const fn (ctx: *anyopaque, color: Vec3) void,
         beginMainPass: *const fn (ctx: *anyopaque) void,
         endMainPass: *const fn (ctx: *anyopaque) void,
@@ -196,6 +197,10 @@ pub const RHI = struct {
 
     pub fn beginFrame(self: RHI) void {
         self.vtable.beginFrame(self.ptr);
+    }
+
+    pub fn abortFrame(self: RHI) void {
+        self.vtable.abortFrame(self.ptr);
     }
 
     pub fn setClearColor(self: RHI, color: Vec3) void {

@@ -118,6 +118,7 @@ pub const World = struct {
     }
 
     pub fn deinit(self: *World) void {
+        self.rhi.waitIdle();
         self.gen_queue.stop();
         self.mesh_queue.stop();
 
@@ -170,7 +171,11 @@ pub const World = struct {
         defer chunk_data.chunk.unpin();
 
         if (chunk_data.chunk.state == .generating and chunk_data.chunk.job_token == job.job_token) {
-            self.generator.generate(&chunk_data.chunk);
+            self.generator.generate(&chunk_data.chunk, &self.gen_queue.stopped);
+            if (self.gen_queue.stopped) {
+                chunk_data.chunk.state = .missing;
+                return;
+            }
             chunk_data.chunk.state = .generated;
             self.markNeighborsForRemesh(job.chunk_x, job.chunk_z);
         }
@@ -232,6 +237,10 @@ pub const World = struct {
             chunk_data.mesh.buildWithNeighbors(&chunk_data.chunk, neighbors) catch |err| {
                 log.log.err("Mesh build failed for chunk ({}, {}): {}", .{ job.chunk_x, job.chunk_z, err });
             };
+            if (self.mesh_queue.stopped) {
+                chunk_data.chunk.state = .generated;
+                return;
+            }
             chunk_data.chunk.state = .mesh_ready;
         }
     }

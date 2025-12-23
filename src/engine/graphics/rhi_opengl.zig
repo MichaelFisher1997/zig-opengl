@@ -390,6 +390,10 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
     _ = ctx_ptr;
 }
 
+fn abortFrame(ctx_ptr: *anyopaque) void {
+    _ = ctx_ptr;
+}
+
 fn setClearColor(ctx_ptr: *anyopaque, color: Vec3) void {
     _ = ctx_ptr;
     c.glClearColor(color.x, color.y, color.z, 1.0);
@@ -397,6 +401,7 @@ fn setClearColor(ctx_ptr: *anyopaque, color: Vec3) void {
 
 fn beginMainPass(ctx_ptr: *anyopaque) void {
     _ = ctx_ptr;
+    c.glClear(c.GL_COLOR_BUFFER_BIT | c.GL_DEPTH_BUFFER_BIT);
 }
 
 fn endMainPass(ctx_ptr: *anyopaque) void {
@@ -694,6 +699,7 @@ const vtable = rhi.RHI.VTable{
     .uploadBuffer = uploadBuffer,
     .destroyBuffer = destroyBuffer,
     .beginFrame = beginFrame,
+    .abortFrame = abortFrame,
     .setClearColor = setClearColor,
     .beginMainPass = beginMainPass,
     .endMainPass = endMainPass,

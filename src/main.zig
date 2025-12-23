@@ -809,12 +809,15 @@ pub fn main() !void {
                         }
                         py += ph + 16.0;
                         if (drawButton(u, .{ .x = px, .y = py, .width = pw, .height = ph }, "QUIT TO TITLE", 2.0, mouse_x, mouse_y, mouse_clicked)) {
-                            rhi.waitIdle();
                             app_state = .home;
                             if (world) |w| {
                                 w.deinit();
                                 world = null;
                             }
+                            // Skip rest of this frame to avoid using destroyed resources
+                            u.end();
+                            rhi.abortFrame();
+                            continue;
                         }
                     }
                     u.end();
@@ -882,7 +885,7 @@ pub fn main() !void {
                     drawText(u, "VSYNC", lx, sy, 2.0, Color.white);
                     if (drawButton(u, .{ .x = vx, .y = sy - 5.0, .width = 130.0, .height = 30.0 }, if (settings.vsync) "ENABLED" else "DISABLED", 1.5, mouse_x, mouse_y, mouse_clicked)) {
                         settings.vsync = !settings.vsync;
-                        if (!is_vulkan) setVSync(settings.vsync);
+                        rhi.setVSync(settings.vsync);
                     }
                     sy += 50.0;
                     drawText(u, "SHADOW DISTANCE", lx, sy, 2.0, Color.white);
@@ -930,7 +933,6 @@ pub fn main() !void {
                     if (drawButton(u, .{ .x = px + 24.0 + hw + 12.0, .y = byy, .width = hw, .height = 40.0 }, "CREATE", 1.9, mouse_x, mouse_y, mouse_clicked) or input.isKeyPressed(.enter)) {
                         const seed = try resolveSeed(&seed_input, allocator);
                         if (world) |w| {
-                            rhi.waitIdle();
                             w.deinit();
                             world = null;
                         }
@@ -942,6 +944,11 @@ pub fn main() !void {
                         seed_focused = false;
                         camera = Camera.init(.{ .position = Vec3.init(8, 100, 8), .pitch = -0.3, .move_speed = 50.0 });
                         log.log.info("World seed: {}", .{seed});
+
+                        // Terminate frame early to avoid rendering partially initialized state
+                        u.end();
+                        rhi.abortFrame();
+                        continue;
                     }
                 },
                 .world, .paused => unreachable,

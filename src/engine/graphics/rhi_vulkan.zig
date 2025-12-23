@@ -194,7 +194,7 @@ const VulkanContext = struct {
 
     ui_pipeline: c.VkPipeline,
     ui_pipeline_layout: c.VkPipelineLayout,
-    ui_vbo: VulkanBuffer,
+    ui_vbos: [MAX_FRAMES_IN_FLIGHT]VulkanBuffer,
     ui_screen_width: f32,
     ui_screen_height: f32,
     ui_in_progress: bool,
@@ -274,8 +274,10 @@ fn deinit(ctx_ptr: *anyopaque) void {
         // Clean up UI pipeline
         if (ctx.ui_pipeline != null) c.vkDestroyPipeline(ctx.device, ctx.ui_pipeline, null);
         if (ctx.ui_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.device, ctx.ui_pipeline_layout, null);
-        if (ctx.ui_vbo.buffer != null) c.vkDestroyBuffer(ctx.device, ctx.ui_vbo.buffer, null);
-        if (ctx.ui_vbo.memory != null) c.vkFreeMemory(ctx.device, ctx.ui_vbo.memory, null);
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            if (ctx.ui_vbos[i].buffer != null) c.vkDestroyBuffer(ctx.device, ctx.ui_vbos[i].buffer, null);
+            if (ctx.ui_vbos[i].memory != null) c.vkFreeMemory(ctx.device, ctx.ui_vbos[i].memory, null);
+        }
 
         // Clean up sky pipeline
         if (ctx.sky_pipeline != null) c.vkDestroyPipeline(ctx.device, ctx.sky_pipeline, null);
@@ -639,58 +641,79 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
 
     ctx.frame_in_progress = true;
 
-    // Update descriptors once per frame at the start
-    // This assumes the main texture doesn't change during the frame
-    // (True for this voxel engine's terrain pass)
+    // Static descriptor updates (Shadow maps) - only update if they changed or on first frame
+    // For now, we update them here once per frame but they are safe because we waited for the fence.
     ctx.mutex.lock();
     const tex_opt = ctx.textures.get(ctx.current_texture);
     ctx.mutex.unlock();
 
+    var writes: [4]c.VkWriteDescriptorSet = undefined;
+    var write_count: u32 = 0;
+
+    var image_info: c.VkDescriptorImageInfo = undefined;
     if (tex_opt) |tex| {
-        var image_info = c.VkDescriptorImageInfo{
+        image_info = .{
             .sampler = tex.sampler,
             .imageView = tex.view,
             .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         };
 
-        var write = std.mem.zeroes(c.VkWriteDescriptorSet);
-        write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
-        write.dstBinding = 1;
-        write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &image_info;
-
-        c.vkUpdateDescriptorSets(ctx.device, 1, &write, 0, null);
+        writes[write_count] = std.mem.zeroes(c.VkWriteDescriptorSet);
+        writes[write_count].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[write_count].dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
+        writes[write_count].dstBinding = 1;
+        writes[write_count].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[write_count].descriptorCount = 1;
+        writes[write_count].pImageInfo = &image_info;
+        write_count += 1;
     }
 
-    // Update shadow map descriptors (bindings 3, 4, 5)
-    for (0..3) |i| {
-        const view = if (ctx.shadow_image_views[i] != null) ctx.shadow_image_views[i] else blk: {
-            ctx.mutex.lock();
-            const t = ctx.textures.get(ctx.current_texture);
-            ctx.mutex.unlock();
-            break :blk if (t) |tex| tex.view else null;
-        };
-        if (view == null) continue;
+    var shadow_infos: [3]c.VkDescriptorImageInfo = undefined;
+    for (0..3) |si| {
+        if (ctx.shadow_image_views[si] != null) {
+            shadow_infos[si] = .{
+                .sampler = ctx.shadow_sampler,
+                .imageView = ctx.shadow_image_views[si],
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
 
-        var image_info = c.VkDescriptorImageInfo{
-            .sampler = ctx.shadow_sampler,
-            .imageView = view,
-            .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        };
-        var write = std.mem.zeroes(c.VkWriteDescriptorSet);
-        write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
-        write.dstBinding = @intCast(3 + i);
-        write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &image_info;
-        c.vkUpdateDescriptorSets(ctx.device, 1, &write, 0, null);
+            writes[write_count] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[write_count].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[write_count].dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
+            writes[write_count].dstBinding = @intCast(3 + si);
+            writes[write_count].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[write_count].descriptorCount = 1;
+            writes[write_count].pImageInfo = &shadow_infos[si];
+            write_count += 1;
+        }
+    }
+
+    if (write_count > 0) {
+        c.vkUpdateDescriptorSets(ctx.device, write_count, &writes[0], 0, null);
     }
 
     ctx.descriptors_updated = true;
     ctx.bound_texture = ctx.current_texture;
+}
+
+fn abortFrame(ctx_ptr: *anyopaque) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (!ctx.frame_in_progress) return;
+
+    if (ctx.main_pass_active) {
+        endMainPass(ctx_ptr);
+    }
+    if (ctx.shadow_pass_active) {
+        endShadowPass(ctx_ptr);
+    }
+
+    const command_buffer = ctx.command_buffers[ctx.current_sync_frame];
+    _ = c.vkEndCommandBuffer(command_buffer);
+
+    // We don't submit it. We just signal that frame is over.
+    // Next beginFrame will wait for the fence (which is already signaled from previous successful endFrame)
+    // and reset this command buffer.
+    ctx.frame_in_progress = false;
 }
 
 fn endFrame(ctx_ptr: *anyopaque) void {
@@ -699,6 +722,9 @@ fn endFrame(ctx_ptr: *anyopaque) void {
 
     if (ctx.main_pass_active) {
         endMainPass(ctx_ptr);
+    }
+    if (ctx.shadow_pass_active) {
+        endShadowPass(ctx_ptr);
     }
 
     const command_buffer = ctx.command_buffers[ctx.current_sync_frame];
@@ -1224,6 +1250,62 @@ fn draw(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.Dra
                 if (selected_pipeline == null) return;
                 c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, selected_pipeline);
 
+                // Update descriptors if they haven't been updated this frame, or if the texture changed
+                if (!ctx.descriptors_updated or ctx.current_texture != ctx.bound_texture) {
+                    ctx.mutex.lock();
+                    const tex_opt = ctx.textures.get(ctx.current_texture);
+                    ctx.mutex.unlock();
+
+                    // Update texture descriptor
+                    if (tex_opt) |tex| {
+                        var image_info = c.VkDescriptorImageInfo{
+                            .sampler = tex.sampler,
+                            .imageView = tex.view,
+                            .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        };
+
+                        var write = std.mem.zeroes(c.VkWriteDescriptorSet);
+                        write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                        write.dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
+                        write.dstBinding = 1;
+                        write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                        write.descriptorCount = 1;
+                        write.pImageInfo = &image_info;
+
+                        c.vkUpdateDescriptorSets(ctx.device, 1, &write, 0, null);
+                    }
+
+                    // Update shadow map descriptors (bindings 3, 4, 5) if this is the first update of the frame
+                    if (!ctx.descriptors_updated) {
+                        for (0..3) |i| {
+                            const view = if (ctx.shadow_image_views[i] != null) ctx.shadow_image_views[i] else blk: {
+                                ctx.mutex.lock();
+                                const t = ctx.textures.get(ctx.current_texture);
+                                ctx.mutex.unlock();
+                                break :blk if (t) |tex| tex.view else null;
+                            };
+                            if (view == null) continue;
+
+                            var image_info = c.VkDescriptorImageInfo{
+                                .sampler = ctx.shadow_sampler,
+                                .imageView = view,
+                                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            };
+                            var write = std.mem.zeroes(c.VkWriteDescriptorSet);
+                            write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                            write.dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
+                            write.dstBinding = @intCast(3 + i);
+                            write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                            write.descriptorCount = 1;
+                            write.pImageInfo = &image_info;
+                            c.vkUpdateDescriptorSets(ctx.device, 1, &write, 0, null);
+                        }
+                    }
+
+                    ctx.descriptors_updated = true;
+                    ctx.bound_texture = ctx.current_texture;
+                }
+
                 c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, &ctx.descriptor_sets[ctx.current_sync_frame], 0, null);
                 ctx.terrain_pipeline_bound = true;
             }
@@ -1250,8 +1332,9 @@ fn beginUI(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void {
     ctx.ui_in_progress = true;
     ctx.ui_vertex_offset = 0;
 
-    // Map UI VBO memory for the duration of UI rendering
-    if (c.vkMapMemory(ctx.device, ctx.ui_vbo.memory, 0, ctx.ui_vbo.size, 0, &ctx.ui_mapped_ptr) != c.VK_SUCCESS) {
+    // Map current frame's UI VBO memory
+    const ui_vbo = ctx.ui_vbos[ctx.current_sync_frame];
+    if (c.vkMapMemory(ctx.device, ui_vbo.memory, 0, ui_vbo.size, 0, &ctx.ui_mapped_ptr) != c.VK_SUCCESS) {
         std.log.err("Failed to map UI VBO memory!", .{});
         ctx.ui_mapped_ptr = null;
     }
@@ -1270,14 +1353,16 @@ fn endUI(ctx_ptr: *anyopaque) void {
     if (!ctx.ui_in_progress) return;
 
     if (ctx.ui_mapped_ptr != null) {
-        c.vkUnmapMemory(ctx.device, ctx.ui_vbo.memory);
+        const ui_vbo = ctx.ui_vbos[ctx.current_sync_frame];
+        c.vkUnmapMemory(ctx.device, ui_vbo.memory);
         ctx.ui_mapped_ptr = null;
     }
 
     if (ctx.ui_vertex_offset > 0) {
+        const ui_vbo = ctx.ui_vbos[ctx.current_sync_frame];
         const offset: c.VkDeviceSize = 0;
         const command_buffer = ctx.command_buffers[ctx.current_sync_frame];
-        c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &ctx.ui_vbo.buffer, &offset);
+        c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vbo.buffer, &offset);
         const vertex_count: u32 = @intCast(ctx.ui_vertex_offset / (6 * @sizeOf(f32)));
         c.vkCmdDraw(command_buffer, vertex_count, 1, 0, 0);
     }
@@ -1306,7 +1391,8 @@ fn drawUIQuad(ctx_ptr: *anyopaque, rect: rhi.Rect, color: rhi.Color) void {
     const size = @sizeOf(@TypeOf(vertices));
 
     // Check overflow
-    if (ctx.ui_vertex_offset + size > ctx.ui_vbo.size) {
+    const ui_vbo = ctx.ui_vbos[ctx.current_sync_frame];
+    if (ctx.ui_vertex_offset + size > ui_vbo.size) {
         return;
     }
 
@@ -1436,6 +1522,7 @@ const vtable = rhi.RHI.VTable{
     .uploadBuffer = uploadBuffer,
     .destroyBuffer = destroyBuffer,
     .beginFrame = beginFrame,
+    .abortFrame = abortFrame,
     .setClearColor = setClearColor,
     .beginMainPass = beginMainPass,
     .endMainPass = endMainPass,
@@ -1535,6 +1622,7 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
         ctx.in_flight_fences[i] = null;
         ctx.global_ubos[i] = .{ .buffer = null, .memory = null, .size = 0 };
         ctx.shadow_ubos[i] = .{ .buffer = null, .memory = null, .size = 0 };
+        ctx.ui_vbos[i] = .{ .buffer = null, .memory = null, .size = 0 };
         ctx.descriptor_sets[i] = null;
     }
     ctx.model_ubo = .{ .buffer = null, .memory = null, .size = 0 };
@@ -1983,7 +2071,7 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
         write2.pBufferInfo = &shadow_buffer_info;
 
         var descriptor_writes = [_]c.VkWriteDescriptorSet{ write0, write2 };
-        c.vkUpdateDescriptorSets(ctx.device, 2, &descriptor_writes, 0, null);
+        c.vkUpdateDescriptorSets(ctx.device, 2, &descriptor_writes[0], 0, null);
     }
 
     ctx.current_model = Mat4.identity;
@@ -2464,18 +2552,20 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
 
     try checkVk(c.vkCreateGraphicsPipelines(ctx.device, null, 1, &ui_pipeline_info, null, &ctx.ui_pipeline));
 
-    // Create UI VBO (enough for many quads)
-    ctx.ui_vbo = createVulkanBuffer(ctx, 6 * 6 * @sizeOf(f32) * 20000, c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    // Create UI VBOs (enough for many quads)
+    for (0..MAX_FRAMES_IN_FLIGHT) |vbo_sync_i| {
+        ctx.ui_vbos[vbo_sync_i] = createVulkanBuffer(ctx, 1024 * 1024, c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    }
     ctx.ui_screen_width = 1280;
     ctx.ui_screen_height = 720;
     ctx.ui_in_progress = false;
 
-    // 11b. Create Dummy Texture for Descriptor set validity
+    // 15. Create Dummy Texture for Descriptor set validity
     const white_pixel = [_]u8{ 255, 255, 255, 255 };
     const dummy_handle = createTexture(ctx, 1, 1, &white_pixel);
     ctx.current_texture = dummy_handle;
 
-    // Create Shadow Sampler
+    // 16. Create Shadow Sampler
     var shadow_sampler_info = std.mem.zeroes(c.VkSamplerCreateInfo);
     shadow_sampler_info.sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     shadow_sampler_info.magFilter = c.VK_FILTER_LINEAR;
