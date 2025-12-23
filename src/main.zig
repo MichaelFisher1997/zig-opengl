@@ -535,6 +535,7 @@ pub fn main() !void {
             if (input.isKeyPressed(.u)) debug_shadows = !debug_shadows;
             if (input.isKeyPressed(.m)) {
                 show_map = !show_map;
+                log.log.info("Toggle map: show={}", .{show_map});
                 if (show_map) {
                     map_pos_x = camera.position.x;
                     map_pos_z = camera.position.z;

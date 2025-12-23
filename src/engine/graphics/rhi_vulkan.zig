@@ -199,14 +199,18 @@ const VulkanContext = struct {
     shadow_extent: c.VkExtent2D,
 
     // UI Pipeline
-
     ui_pipeline: c.VkPipeline,
     ui_pipeline_layout: c.VkPipelineLayout,
+    ui_tex_pipeline: c.VkPipeline,
+    ui_tex_pipeline_layout: c.VkPipelineLayout,
+    ui_tex_descriptor_set_layout: c.VkDescriptorSetLayout,
+    ui_tex_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSet,
     ui_vbos: [MAX_FRAMES_IN_FLIGHT]VulkanBuffer,
     ui_screen_width: f32,
     ui_screen_height: f32,
     ui_in_progress: bool,
     ui_vertex_offset: u64,
+    ui_flushed_vertex_count: u32,
     ui_mapped_ptr: ?*anyopaque,
 };
 
@@ -282,6 +286,9 @@ fn deinit(ctx_ptr: *anyopaque) void {
         // Clean up UI pipeline
         if (ctx.ui_pipeline != null) c.vkDestroyPipeline(ctx.device, ctx.ui_pipeline, null);
         if (ctx.ui_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.device, ctx.ui_pipeline_layout, null);
+        if (ctx.ui_tex_pipeline != null) c.vkDestroyPipeline(ctx.device, ctx.ui_tex_pipeline, null);
+        if (ctx.ui_tex_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.device, ctx.ui_tex_pipeline_layout, null);
+        if (ctx.ui_tex_descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(ctx.device, ctx.ui_tex_descriptor_set_layout, null);
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             if (ctx.ui_vbos[i].buffer != null) c.vkDestroyBuffer(ctx.device, ctx.ui_vbos[i].buffer, null);
             if (ctx.ui_vbos[i].memory != null) c.vkFreeMemory(ctx.device, ctx.ui_vbos[i].memory, null);
@@ -955,20 +962,6 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
     _ = format;
     _ = config;
 
-    const data = data_opt orelse return 0; // Vulkan backend currently expects data
-
-    const staging_buffer = createVulkanBuffer(ctx, data.len, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-    defer {
-        c.vkDestroyBuffer(ctx.device, staging_buffer.buffer, null);
-        c.vkFreeMemory(ctx.device, staging_buffer.memory, null);
-    }
-
-    var map_ptr: ?*anyopaque = null;
-    if (c.vkMapMemory(ctx.device, staging_buffer.memory, 0, data.len, 0, &map_ptr) == c.VK_SUCCESS) {
-        @memcpy(@as([*]u8, @ptrCast(map_ptr))[0..data.len], data);
-        c.vkUnmapMemory(ctx.device, staging_buffer.memory);
-    }
-
     var image: c.VkImage = null;
     var image_info = std.mem.zeroes(c.VkImageCreateInfo);
     image_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1006,7 +999,72 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
         return 0;
     }
 
-    {
+    if (data_opt) |data| {
+        const staging_buffer = createVulkanBuffer(ctx, data.len, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        defer {
+            c.vkDestroyBuffer(ctx.device, staging_buffer.buffer, null);
+            c.vkFreeMemory(ctx.device, staging_buffer.memory, null);
+        }
+
+        var map_ptr: ?*anyopaque = null;
+        if (c.vkMapMemory(ctx.device, staging_buffer.memory, 0, data.len, 0, &map_ptr) == c.VK_SUCCESS) {
+            @memcpy(@as([*]u8, @ptrCast(map_ptr))[0..data.len], data);
+            c.vkUnmapMemory(ctx.device, staging_buffer.memory);
+        }
+
+        {
+            ctx.mutex.lock();
+            defer ctx.mutex.unlock();
+
+            var begin_info = std.mem.zeroes(c.VkCommandBufferBeginInfo);
+            begin_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin_info.flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+            _ = c.vkBeginCommandBuffer(ctx.transfer_command_buffer, &begin_info);
+
+            var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
+            barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
+            barrier.newLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = image;
+            barrier.subresourceRange.aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+
+            c.vkCmdPipelineBarrier(ctx.transfer_command_buffer, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &barrier);
+
+            var region = std.mem.zeroes(c.VkBufferImageCopy);
+            region.imageSubresource.aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent = .{ .width = width, .height = height, .depth = 1 };
+
+            c.vkCmdCopyBufferToImage(ctx.transfer_command_buffer, staging_buffer.buffer, image, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+            barrier.oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+
+            c.vkCmdPipelineBarrier(ctx.transfer_command_buffer, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
+
+            _ = c.vkEndCommandBuffer(ctx.transfer_command_buffer);
+
+            var submit_info = std.mem.zeroes(c.VkSubmitInfo);
+            submit_info.sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submit_info.commandBufferCount = 1;
+            submit_info.pCommandBuffers = &ctx.transfer_command_buffer;
+
+            _ = c.vkQueueSubmit(ctx.queue, 1, &submit_info, null);
+            _ = c.vkQueueWaitIdle(ctx.queue);
+        }
+    } else {
+        // Transition from UNDEFINED to SHADER_READ_ONLY_OPTIMAL directly
         ctx.mutex.lock();
         defer ctx.mutex.unlock();
 
@@ -1019,7 +1077,7 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
         var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
         barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barrier.oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
         barrier.image = image;
@@ -1029,23 +1087,9 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
         barrier.subresourceRange.baseArrayLayer = 0;
         barrier.subresourceRange.layerCount = 1;
         barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
-
-        c.vkCmdPipelineBarrier(ctx.transfer_command_buffer, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &barrier);
-
-        var region = std.mem.zeroes(c.VkBufferImageCopy);
-        region.imageSubresource.aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT;
-        region.imageSubresource.layerCount = 1;
-        region.imageExtent = .{ .width = width, .height = height, .depth = 1 };
-
-        c.vkCmdCopyBufferToImage(ctx.transfer_command_buffer, staging_buffer.buffer, image, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-        barrier.oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
 
-        c.vkCmdPipelineBarrier(ctx.transfer_command_buffer, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
+        c.vkCmdPipelineBarrier(ctx.transfer_command_buffer, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
 
         _ = c.vkEndCommandBuffer(ctx.transfer_command_buffer);
 
@@ -1364,6 +1408,18 @@ fn draw(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.Dra
     }
 }
 
+fn flushUI(ctx: *VulkanContext) void {
+    if (ctx.ui_vertex_offset / (6 * @sizeOf(f32)) > ctx.ui_flushed_vertex_count) {
+        const command_buffer = ctx.command_buffers[ctx.current_sync_frame];
+
+        const total_vertices: u32 = @intCast(ctx.ui_vertex_offset / (6 * @sizeOf(f32)));
+        const count = total_vertices - ctx.ui_flushed_vertex_count;
+
+        c.vkCmdDraw(command_buffer, count, 1, ctx.ui_flushed_vertex_count, 0);
+        ctx.ui_flushed_vertex_count = total_vertices;
+    }
+}
+
 // UI Rendering functions
 fn beginUI(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
@@ -1374,6 +1430,7 @@ fn beginUI(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void {
     ctx.ui_screen_height = screen_height;
     ctx.ui_in_progress = true;
     ctx.ui_vertex_offset = 0;
+    ctx.ui_flushed_vertex_count = 0;
 
     // Map current frame's UI VBO memory
     const ui_vbo = ctx.ui_vbos[ctx.current_sync_frame];
@@ -1382,9 +1439,12 @@ fn beginUI(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void {
         ctx.ui_mapped_ptr = null;
     }
 
-    // Bind UI pipeline
+    // Bind UI pipeline and VBO
     const command_buffer = ctx.command_buffers[ctx.current_sync_frame];
     c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.ui_pipeline);
+
+    const offset: c.VkDeviceSize = 0;
+    c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vbo.buffer, &offset);
 
     // Set orthographic projection
     const proj = Mat4.orthographic(0, ctx.ui_screen_width, ctx.ui_screen_height, 0, -1, 1);
@@ -1401,15 +1461,7 @@ fn endUI(ctx_ptr: *anyopaque) void {
         ctx.ui_mapped_ptr = null;
     }
 
-    if (ctx.ui_vertex_offset > 0) {
-        const ui_vbo = ctx.ui_vbos[ctx.current_sync_frame];
-        const offset: c.VkDeviceSize = 0;
-        const command_buffer = ctx.command_buffers[ctx.current_sync_frame];
-        c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vbo.buffer, &offset);
-        const vertex_count: u32 = @intCast(ctx.ui_vertex_offset / (6 * @sizeOf(f32)));
-        c.vkCmdDraw(command_buffer, vertex_count, 1, 0, 0);
-    }
-
+    flushUI(ctx);
     ctx.ui_in_progress = false;
 }
 
@@ -1447,9 +1499,79 @@ fn drawUIQuad(ctx_ptr: *anyopaque, rect: rhi.Rect, color: rhi.Color) void {
 }
 
 fn drawUITexturedQuad(ctx_ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.Rect) void {
-    // For now, just draw a white quad - textured UI requires a separate pipeline
-    _ = texture;
-    drawUIQuad(ctx_ptr, rect, rhi.Color.white);
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (!ctx.frame_in_progress or !ctx.ui_in_progress) return;
+
+    // 1. Flush normal UI if any
+    flushUI(ctx);
+
+    const tex_opt = ctx.textures.get(texture);
+    if (tex_opt == null) {
+        std.log.err("drawUITexturedQuad: Texture handle {} not found in textures map!", .{texture});
+        return;
+    }
+    const tex = tex_opt.?;
+
+    const command_buffer = ctx.command_buffers[ctx.current_sync_frame];
+
+    // 2. Bind Textured UI Pipeline
+    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.ui_tex_pipeline);
+
+    // 3. Update & Bind Descriptor Set
+    var image_info = std.mem.zeroes(c.VkDescriptorImageInfo);
+    image_info.imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    image_info.imageView = tex.view;
+    image_info.sampler = tex.sampler;
+
+    var write = std.mem.zeroes(c.VkWriteDescriptorSet);
+    write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = ctx.ui_tex_descriptor_sets[ctx.current_sync_frame];
+    write.dstBinding = 0;
+    write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &image_info;
+
+    c.vkUpdateDescriptorSets(ctx.device, 1, &write, 0, null);
+    c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.ui_tex_pipeline_layout, 0, 1, &ctx.ui_tex_descriptor_sets[ctx.current_sync_frame], 0, null);
+
+    // 4. Set Push Constants (Projection)
+    const proj = Mat4.orthographic(0, ctx.ui_screen_width, ctx.ui_screen_height, 0, -1, 1);
+    c.vkCmdPushConstants(command_buffer, ctx.ui_tex_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
+
+    // 5. Draw
+    const x = rect.x;
+    const y = rect.y;
+    const w = rect.width;
+    const h = rect.height;
+
+    // Use 6 floats per vertex (stride 24) to match untextured UI layout
+    // position (2), texcoord (2), padding (2)
+    const vertices = [_]f32{
+        x,     y,     0.0, 0.0, 0.0, 0.0,
+        x + w, y,     1.0, 0.0, 0.0, 0.0,
+        x + w, y + h, 1.0, 1.0, 0.0, 0.0,
+        x,     y,     0.0, 0.0, 0.0, 0.0,
+        x + w, y + h, 1.0, 1.0, 0.0, 0.0,
+        x,     y + h, 0.0, 1.0, 0.0, 0.0,
+    };
+
+    const size = @sizeOf(@TypeOf(vertices));
+    if (ctx.ui_mapped_ptr) |ptr| {
+        const ui_vbo = ctx.ui_vbos[ctx.current_sync_frame];
+        if (ctx.ui_vertex_offset + size <= ui_vbo.size) {
+            const dest = @as([*]u8, @ptrCast(ptr)) + ctx.ui_vertex_offset;
+            @memcpy(dest[0..size], std.mem.asBytes(&vertices));
+
+            const start_vertex = @as(u32, @intCast(ctx.ui_vertex_offset / (6 * @sizeOf(f32))));
+            c.vkCmdDraw(command_buffer, 6, 1, start_vertex, 0);
+
+            ctx.ui_vertex_offset += size;
+            ctx.ui_flushed_vertex_count = @intCast(ctx.ui_vertex_offset / (6 * @sizeOf(f32)));
+        }
+    }
+
+    // 6. Restore normal UI state for subsequent calls
+    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.ui_pipeline);
 }
 
 fn beginShadowPass(ctx_ptr: *anyopaque, cascade_index: u32) void {
@@ -2067,14 +2189,14 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
 
     var pool_sizes = [_]c.VkDescriptorPoolSize{
         .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 2 * MAX_FRAMES_IN_FLIGHT },
-        .{ .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 4 * MAX_FRAMES_IN_FLIGHT },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 6 * MAX_FRAMES_IN_FLIGHT },
     };
 
     var pool_info_desc = std.mem.zeroes(c.VkDescriptorPoolCreateInfo);
     pool_info_desc.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool_info_desc.poolSizeCount = 2;
     pool_info_desc.pPoolSizes = &pool_sizes[0];
-    pool_info_desc.maxSets = MAX_FRAMES_IN_FLIGHT;
+    pool_info_desc.maxSets = 2 * MAX_FRAMES_IN_FLIGHT; // Enough for UI too
 
     try checkVk(c.vkCreateDescriptorPool(ctx.device, &pool_info_desc, null, &ctx.descriptor_pool));
 
@@ -2602,6 +2724,108 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
     ui_pipeline_info.subpass = 0;
 
     try checkVk(c.vkCreateGraphicsPipelines(ctx.device, null, 1, &ui_pipeline_info, null, &ctx.ui_pipeline));
+
+    // 14a. Create Textured UI Pipeline
+    const ui_tex_vert_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/ui_tex.vert.spv", ctx.allocator, @enumFromInt(1024 * 1024));
+    defer ctx.allocator.free(ui_tex_vert_code);
+    const ui_tex_frag_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/ui_tex.frag.spv", ctx.allocator, @enumFromInt(1024 * 1024));
+    defer ctx.allocator.free(ui_tex_frag_code);
+
+    const ui_tex_vert_module = try createShaderModule(ctx.device, ui_tex_vert_code);
+    defer c.vkDestroyShaderModule(ctx.device, ui_tex_vert_module, null);
+    const ui_tex_frag_module = try createShaderModule(ctx.device, ui_tex_frag_code);
+    defer c.vkDestroyShaderModule(ctx.device, ui_tex_frag_module, null);
+
+    var ui_tex_vert_stage = std.mem.zeroes(c.VkPipelineShaderStageCreateInfo);
+    ui_tex_vert_stage.sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ui_tex_vert_stage.stage = c.VK_SHADER_STAGE_VERTEX_BIT;
+    ui_tex_vert_stage.module = ui_tex_vert_module;
+    ui_tex_vert_stage.pName = "main";
+
+    var ui_tex_frag_stage = std.mem.zeroes(c.VkPipelineShaderStageCreateInfo);
+    ui_tex_frag_stage.sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ui_tex_frag_stage.stage = c.VK_SHADER_STAGE_FRAGMENT_BIT;
+    ui_tex_frag_stage.module = ui_tex_frag_module;
+    ui_tex_frag_stage.pName = "main";
+
+    var ui_tex_shader_stages = [_]c.VkPipelineShaderStageCreateInfo{ ui_tex_vert_stage, ui_tex_frag_stage };
+
+    // UI Tex vertex format: shared with untextured UI (stride of 6 floats)
+    const ui_tex_binding_description = c.VkVertexInputBindingDescription{
+        .binding = 0,
+        .stride = 6 * @sizeOf(f32),
+        .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+
+    var ui_tex_attribute_descriptions: [2]c.VkVertexInputAttributeDescription = undefined;
+    ui_tex_attribute_descriptions[0] = .{ .binding = 0, .location = 0, .format = c.VK_FORMAT_R32G32_SFLOAT, .offset = 0 };
+    ui_tex_attribute_descriptions[1] = .{ .binding = 0, .location = 1, .format = c.VK_FORMAT_R32G32_SFLOAT, .offset = 2 * 4 };
+
+    var ui_tex_vertex_input_info = std.mem.zeroes(c.VkPipelineVertexInputStateCreateInfo);
+    ui_tex_vertex_input_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    ui_tex_vertex_input_info.vertexBindingDescriptionCount = 1;
+    ui_tex_vertex_input_info.pVertexBindingDescriptions = &ui_tex_binding_description;
+    ui_tex_vertex_input_info.vertexAttributeDescriptionCount = 2;
+    ui_tex_vertex_input_info.pVertexAttributeDescriptions = &ui_tex_attribute_descriptions[0];
+
+    // UI Tex Descriptor Set Layout
+    var ui_tex_ds_binding = c.VkDescriptorSetLayoutBinding{
+        .binding = 0,
+        .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = null,
+    };
+    var ui_tex_ds_layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
+    ui_tex_ds_layout_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    ui_tex_ds_layout_info.bindingCount = 1;
+    ui_tex_ds_layout_info.pBindings = &ui_tex_ds_binding;
+    try checkVk(c.vkCreateDescriptorSetLayout(ctx.device, &ui_tex_ds_layout_info, null, &ctx.ui_tex_descriptor_set_layout));
+
+    var ui_tex_pipeline_layout_info = std.mem.zeroes(c.VkPipelineLayoutCreateInfo);
+    ui_tex_pipeline_layout_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    ui_tex_pipeline_layout_info.setLayoutCount = 1;
+    ui_tex_pipeline_layout_info.pSetLayouts = &ctx.ui_tex_descriptor_set_layout;
+    ui_tex_pipeline_layout_info.pushConstantRangeCount = 1;
+    ui_tex_pipeline_layout_info.pPushConstantRanges = &ui_push_constant_range;
+    try checkVk(c.vkCreatePipelineLayout(ctx.device, &ui_tex_pipeline_layout_info, null, &ctx.ui_tex_pipeline_layout));
+
+    var ui_tex_color_blend_attachment = std.mem.zeroes(c.VkPipelineColorBlendAttachmentState);
+    ui_tex_color_blend_attachment.colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT;
+    ui_tex_color_blend_attachment.blendEnable = c.VK_FALSE; // Disable blending for opaque map
+
+    var ui_tex_color_blending = std.mem.zeroes(c.VkPipelineColorBlendStateCreateInfo);
+    ui_tex_color_blending.sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    ui_tex_color_blending.attachmentCount = 1;
+    ui_tex_color_blending.pAttachments = &ui_tex_color_blend_attachment;
+
+    var ui_tex_pipeline_info = std.mem.zeroes(c.VkGraphicsPipelineCreateInfo);
+    ui_tex_pipeline_info.sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    ui_tex_pipeline_info.stageCount = 2;
+    ui_tex_pipeline_info.pStages = &ui_tex_shader_stages[0];
+    ui_tex_pipeline_info.pVertexInputState = &ui_tex_vertex_input_info;
+    ui_tex_pipeline_info.pInputAssemblyState = &input_assembly;
+    ui_tex_pipeline_info.pViewportState = &viewport_state;
+    ui_tex_pipeline_info.pRasterizationState = &rasterizer;
+    ui_tex_pipeline_info.pMultisampleState = &multisampling;
+    ui_tex_pipeline_info.pDepthStencilState = &ui_depth_stencil;
+    ui_tex_pipeline_info.pColorBlendState = &ui_tex_color_blending; // Use opaque blending
+    ui_tex_pipeline_info.pDynamicState = &dynamic_state;
+    ui_tex_pipeline_info.layout = ctx.ui_tex_pipeline_layout;
+    ui_tex_pipeline_info.renderPass = ctx.render_pass;
+    ui_tex_pipeline_info.subpass = 0;
+
+    try checkVk(c.vkCreateGraphicsPipelines(ctx.device, null, 1, &ui_tex_pipeline_info, null, &ctx.ui_tex_pipeline));
+
+    // Allocate UI Tex Descriptor Sets
+    for (0..MAX_FRAMES_IN_FLIGHT) |ui_ds_i| {
+        var ui_ds_alloc_info = std.mem.zeroes(c.VkDescriptorSetAllocateInfo);
+        ui_ds_alloc_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ui_ds_alloc_info.descriptorPool = ctx.descriptor_pool;
+        ui_ds_alloc_info.descriptorSetCount = 1;
+        ui_ds_alloc_info.pSetLayouts = &ctx.ui_tex_descriptor_set_layout;
+        try checkVk(c.vkAllocateDescriptorSets(ctx.device, &ui_ds_alloc_info, &ctx.ui_tex_descriptor_sets[ui_ds_i]));
+    }
 
     // Create UI VBOs (enough for many quads)
     for (0..MAX_FRAMES_IN_FLIGHT) |vbo_sync_i| {
