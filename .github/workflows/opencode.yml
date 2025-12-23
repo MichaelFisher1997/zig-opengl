@@ -25,7 +25,5 @@ jobs:
 
       - name: Run opencode
         uses: sst/opencode/github@latest
-        env:
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
         with:
-          model: minimax/MiniMax-M2.1
+          model: opencode/glm-4.7-free
