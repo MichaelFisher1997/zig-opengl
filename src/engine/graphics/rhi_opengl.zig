@@ -682,8 +682,9 @@ fn setWireframe(ctx_ptr: *anyopaque, enabled: bool) void {
 fn setTexturesEnabled(ctx_ptr: *anyopaque, enabled: bool) void {
     _ = ctx_ptr;
     _ = enabled;
-    // OpenGL texture toggle is handled via shader uniform in renderer.zig
-    // This is a no-op here since the old code path handles it
+    // OpenGL texture toggle is handled via shader uniform 'uUseTexture' in main.zig.
+    // The RHI interface provides this method for consistency with Vulkan or future usage where
+    // RHI manages the shader state directly.
 }
 
 fn setVSync(ctx_ptr: *anyopaque, enabled: bool) void {

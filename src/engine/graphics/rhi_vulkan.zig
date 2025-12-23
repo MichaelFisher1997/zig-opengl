@@ -405,9 +405,12 @@ fn uploadBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8)
 
     if (buf_opt) |buf| {
         var map_ptr: ?*anyopaque = null;
-        if (c.vkMapMemory(ctx.device, buf.memory, 0, @intCast(data.len), 0, &map_ptr) == c.VK_SUCCESS) {
+        const result = c.vkMapMemory(ctx.device, buf.memory, 0, @intCast(data.len), 0, &map_ptr);
+        if (result == c.VK_SUCCESS) {
             @memcpy(@as([*]u8, @ptrCast(map_ptr))[0..data.len], data);
             c.vkUnmapMemory(ctx.device, buf.memory);
+        } else {
+            std.log.err("Failed to map buffer memory for upload: {}", .{result});
         }
     }
 }

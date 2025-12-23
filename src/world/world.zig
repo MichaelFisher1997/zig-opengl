@@ -354,7 +354,6 @@ pub const World = struct {
 
                     switch (data.chunk.state) {
                         .missing => {
-                            data.chunk.state = .generating;
                             try self.gen_queue.push(.{
                                 .type = .generation,
                                 .chunk_x = cx,
@@ -362,6 +361,7 @@ pub const World = struct {
                                 .job_token = data.chunk.job_token,
                                 .dist_sq = dist_sq,
                             });
+                            data.chunk.state = .generating;
                         },
                         else => {},
                     }
@@ -377,7 +377,6 @@ pub const World = struct {
                 const dx = data.chunk.chunk_x - pc.chunk_x;
                 const dz = data.chunk.chunk_z - pc.chunk_z;
                 if (dx * dx + dz * dz <= self.render_distance * self.render_distance) {
-                    data.chunk.state = .meshing;
                     try self.mesh_queue.push(.{
                         .type = .meshing,
                         .chunk_x = data.chunk.chunk_x,
@@ -385,6 +384,7 @@ pub const World = struct {
                         .job_token = data.chunk.job_token,
                         .dist_sq = dx * dx + dz * dz,
                     });
+                    data.chunk.state = .meshing;
                 }
             } else if (data.chunk.state == .mesh_ready) {
                 data.chunk.state = .uploading;
