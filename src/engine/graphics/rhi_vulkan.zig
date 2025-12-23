@@ -29,6 +29,8 @@ const shadows = @import("shadows.zig");
 const Mat4 = @import("../math/mat4.zig").Mat4;
 const Vec3 = @import("../math/vec3.zig").Vec3;
 
+const MAX_FRAMES_IN_FLIGHT = 2;
+
 /// Global uniform buffer layout (std140). Bound to descriptor set 0, binding 0.
 const GlobalUniforms = extern struct {
     view_proj: Mat4, // Combined view-projection matrix
@@ -101,9 +103,10 @@ const VulkanContext = struct {
     transfer_command_buffer: c.VkCommandBuffer,
 
     // Sync
-    image_available_semaphore: c.VkSemaphore,
-    render_finished_semaphore: c.VkSemaphore,
-    in_flight_fence: c.VkFence,
+    image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]c.VkSemaphore,
+    render_finished_semaphores: [MAX_FRAMES_IN_FLIGHT]c.VkSemaphore,
+    in_flight_fences: [MAX_FRAMES_IN_FLIGHT]c.VkFence,
+    current_sync_frame: u32,
 
     // Swapchain
     swapchain: c.VkSwapchainKHR,
@@ -281,10 +284,12 @@ fn deinit(ctx_ptr: *anyopaque) void {
         // Clean up shadow pipeline
         if (ctx.shadow_pipeline != null) c.vkDestroyPipeline(ctx.device, ctx.shadow_pipeline, null);
 
-        for (ctx.shadow_framebuffers) |fb| if (fb != null) c.vkDestroyFramebuffer(ctx.device, fb, null);
-        for (ctx.shadow_image_views) |view| if (view != null) c.vkDestroyImageView(ctx.device, view, null);
-        for (ctx.shadow_images) |image| if (image != null) c.vkDestroyImage(ctx.device, image, null);
-        for (ctx.shadow_image_memory) |mem| if (mem != null) c.vkFreeMemory(ctx.device, mem, null);
+        for (0..shadows.ShadowMap.CASCADE_COUNT) |i| {
+            if (ctx.shadow_framebuffers[i] != null) c.vkDestroyFramebuffer(ctx.device, ctx.shadow_framebuffers[i], null);
+            if (ctx.shadow_image_views[i] != null) c.vkDestroyImageView(ctx.device, ctx.shadow_image_views[i], null);
+            if (ctx.shadow_images[i] != null) c.vkDestroyImage(ctx.device, ctx.shadow_images[i], null);
+            if (ctx.shadow_image_memory[i] != null) c.vkFreeMemory(ctx.device, ctx.shadow_image_memory[i], null);
+        }
         if (ctx.shadow_render_pass != null) c.vkDestroyRenderPass(ctx.device, ctx.shadow_render_pass, null);
         if (ctx.shadow_sampler != null) c.vkDestroySampler(ctx.device, ctx.shadow_sampler, null);
 
@@ -306,9 +311,11 @@ fn deinit(ctx_ptr: *anyopaque) void {
         if (ctx.swapchain != null) c.vkDestroySwapchainKHR(ctx.device, ctx.swapchain, null);
         if (ctx.render_pass != null) c.vkDestroyRenderPass(ctx.device, ctx.render_pass, null);
 
-        if (ctx.image_available_semaphore != null) c.vkDestroySemaphore(ctx.device, ctx.image_available_semaphore, null);
-        if (ctx.render_finished_semaphore != null) c.vkDestroySemaphore(ctx.device, ctx.render_finished_semaphore, null);
-        if (ctx.in_flight_fence != null) c.vkDestroyFence(ctx.device, ctx.in_flight_fence, null);
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            if (ctx.image_available_semaphores[i] != null) c.vkDestroySemaphore(ctx.device, ctx.image_available_semaphores[i], null);
+            if (ctx.render_finished_semaphores[i] != null) c.vkDestroySemaphore(ctx.device, ctx.render_finished_semaphores[i], null);
+            if (ctx.in_flight_fences[i] != null) c.vkDestroyFence(ctx.device, ctx.in_flight_fences[i], null);
+        }
 
         if (ctx.command_pool != null) c.vkDestroyCommandPool(ctx.device, ctx.command_pool, null);
         if (ctx.transfer_command_pool != null) c.vkDestroyCommandPool(ctx.device, ctx.transfer_command_pool, null);
@@ -429,23 +436,35 @@ fn cleanupSwapchain(ctx: *VulkanContext) void {
 /// Returns true on success, false if recreation failed (caller should retry).
 fn recreateSwapchain(ctx: *VulkanContext) void {
     // Wait for device idle before destroying resources
-    const wait_result = c.vkDeviceWaitIdle(ctx.device);
-    if (wait_result != c.VK_SUCCESS) {
-        std.log.err("vkDeviceWaitIdle failed during swapchain recreation: {}", .{wait_result});
-        return;
-    }
+    _ = c.vkDeviceWaitIdle(ctx.device);
 
     // Get new window size
     var w: c_int = 0;
     var h: c_int = 0;
     _ = c.SDL_GetWindowSize(ctx.window, &w, &h);
 
-    // Handle minimized window - return and try again next frame
-    if (w == 0 or h == 0) {
-        return;
-    }
+    // Handle minimized window
+    if (w == 0 or h == 0) return;
 
     cleanupSwapchain(ctx);
+
+    // Recreate semaphores to reset their state
+    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+        c.vkDestroySemaphore(ctx.device, ctx.image_available_semaphores[i], null);
+        c.vkDestroySemaphore(ctx.device, ctx.render_finished_semaphores[i], null);
+        c.vkDestroyFence(ctx.device, ctx.in_flight_fences[i], null);
+
+        var semaphore_info = std.mem.zeroes(c.VkSemaphoreCreateInfo);
+        semaphore_info.sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        _ = c.vkCreateSemaphore(ctx.device, &semaphore_info, null, &ctx.image_available_semaphores[i]);
+        _ = c.vkCreateSemaphore(ctx.device, &semaphore_info, null, &ctx.render_finished_semaphores[i]);
+
+        var fence_info = std.mem.zeroes(c.VkFenceCreateInfo);
+        fence_info.sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fence_info.flags = c.VK_FENCE_CREATE_SIGNALED_BIT;
+        _ = c.vkCreateFence(ctx.device, &fence_info, null, &ctx.in_flight_fences[i]);
+    }
+    ctx.current_sync_frame = 0;
 
     // Get surface capabilities
     var cap: c.VkSurfaceCapabilitiesKHR = undefined;
@@ -589,18 +608,16 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
     ctx.descriptors_updated = false;
     ctx.bound_texture = 0;
 
-    _ = c.vkWaitForFences(ctx.device, 1, &ctx.in_flight_fence, c.VK_TRUE, std.math.maxInt(u64));
+    const fence = ctx.in_flight_fences[ctx.current_sync_frame];
+    const acquire_semaphore = ctx.image_available_semaphores[ctx.current_sync_frame];
+
+    _ = c.vkWaitForFences(ctx.device, 1, &fence, c.VK_TRUE, std.math.maxInt(u64));
 
     var image_index: u32 = 0;
-    const result = c.vkAcquireNextImageKHR(ctx.device, ctx.swapchain, 1000000000, ctx.image_available_semaphore, null, &image_index);
+    const result = c.vkAcquireNextImageKHR(ctx.device, ctx.swapchain, 1000000000, acquire_semaphore, null, &image_index);
 
     if (result == c.VK_ERROR_OUT_OF_DATE_KHR) {
         recreateSwapchain(ctx);
-        // Semaphore might be in an inconsistent state if acquire failed
-        c.vkDestroySemaphore(ctx.device, ctx.image_available_semaphore, null);
-        var semaphore_info = std.mem.zeroes(c.VkSemaphoreCreateInfo);
-        semaphore_info.sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        _ = c.vkCreateSemaphore(ctx.device, &semaphore_info, null, &ctx.image_available_semaphore);
         return;
     } else if (result != c.VK_SUCCESS and result != c.VK_SUBOPTIMAL_KHR) {
         return;
@@ -608,7 +625,7 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
 
     ctx.image_index = image_index;
 
-    _ = c.vkResetFences(ctx.device, 1, &ctx.in_flight_fence);
+    _ = c.vkResetFences(ctx.device, 1, &fence);
     _ = c.vkResetCommandBuffer(ctx.command_buffer, 0);
 
     var begin_info = std.mem.zeroes(c.VkCommandBufferBeginInfo);
@@ -617,7 +634,6 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
     _ = c.vkBeginCommandBuffer(ctx.command_buffer, &begin_info);
 
     ctx.frame_in_progress = true;
-    ctx.main_pass_active = false;
 }
 
 fn setClearColor(ctx_ptr: *anyopaque, color: Vec3) void {
@@ -740,7 +756,7 @@ fn endFrame(ctx_ptr: *anyopaque) void {
     var submit_info = std.mem.zeroes(c.VkSubmitInfo);
     submit_info.sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-    const wait_semaphores = [_]c.VkSemaphore{ctx.image_available_semaphore};
+    const wait_semaphores = [_]c.VkSemaphore{ctx.image_available_semaphores[ctx.current_sync_frame]};
     const wait_stages = [_]c.VkPipelineStageFlags{c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
     submit_info.waitSemaphoreCount = 1;
     submit_info.pWaitSemaphores = &wait_semaphores;
@@ -749,11 +765,11 @@ fn endFrame(ctx_ptr: *anyopaque) void {
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &ctx.command_buffer;
 
-    const signal_semaphores = [_]c.VkSemaphore{ctx.render_finished_semaphore};
+    const signal_semaphores = [_]c.VkSemaphore{ctx.render_finished_semaphores[ctx.current_sync_frame]};
     submit_info.signalSemaphoreCount = 1;
     submit_info.pSignalSemaphores = &signal_semaphores;
 
-    _ = c.vkQueueSubmit(ctx.queue, 1, &submit_info, ctx.in_flight_fence);
+    _ = c.vkQueueSubmit(ctx.queue, 1, &submit_info, ctx.in_flight_fences[ctx.current_sync_frame]);
 
     var present_info = std.mem.zeroes(c.VkPresentInfoKHR);
     present_info.sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -772,6 +788,7 @@ fn endFrame(ctx_ptr: *anyopaque) void {
         recreateSwapchain(ctx);
     }
 
+    ctx.current_sync_frame = (ctx.current_sync_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     ctx.frame_index += 1;
     ctx.frame_in_progress = false;
 }
@@ -1469,6 +1486,7 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
     ctx.ui_mapped_ptr = null;
     ctx.ui_vertex_offset = 0;
     ctx.frame_index = 0;
+    ctx.current_sync_frame = 0;
     ctx.image_index = 0;
 
     // Optimization state tracking
@@ -1512,6 +1530,11 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
         ctx.shadow_image_views[i] = null;
         ctx.shadow_framebuffers[i] = null;
         ctx.shadow_image_layouts[i] = c.VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+        ctx.image_available_semaphores[i] = null;
+        ctx.render_finished_semaphores[i] = null;
+        ctx.in_flight_fences[i] = null;
     }
 
     // 1. Create Instance
@@ -1838,9 +1861,11 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
     fence_info.sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fence_info.flags = c.VK_FENCE_CREATE_SIGNALED_BIT;
 
-    try checkVk(c.vkCreateSemaphore(ctx.device, &semaphore_info, null, &ctx.image_available_semaphore));
-    try checkVk(c.vkCreateSemaphore(ctx.device, &semaphore_info, null, &ctx.render_finished_semaphore));
-    try checkVk(c.vkCreateFence(ctx.device, &fence_info, null, &ctx.in_flight_fence));
+    for (0..MAX_FRAMES_IN_FLIGHT) |sync_i| {
+        try checkVk(c.vkCreateSemaphore(ctx.device, &semaphore_info, null, &ctx.image_available_semaphores[sync_i]));
+        try checkVk(c.vkCreateSemaphore(ctx.device, &semaphore_info, null, &ctx.render_finished_semaphores[sync_i]));
+        try checkVk(c.vkCreateFence(ctx.device, &fence_info, null, &ctx.in_flight_fences[sync_i]));
+    }
 
     // 10. Uniform Buffers
     ctx.global_ubo = createVulkanBuffer(ctx, @sizeOf(GlobalUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
