@@ -354,7 +354,6 @@ pub const World = struct {
 
                     switch (data.chunk.state) {
                         .missing => {
-                            data.chunk.state = .generating;
                             try self.gen_queue.push(.{
                                 .type = .generation,
                                 .chunk_x = cx,
@@ -362,6 +361,7 @@ pub const World = struct {
                                 .job_token = data.chunk.job_token,
                                 .dist_sq = dist_sq,
                             });
+                            data.chunk.state = .generating;
                         },
                         else => {},
                     }
@@ -377,7 +377,6 @@ pub const World = struct {
                 const dx = data.chunk.chunk_x - pc.chunk_x;
                 const dz = data.chunk.chunk_z - pc.chunk_z;
                 if (dx * dx + dz * dz <= self.render_distance * self.render_distance) {
-                    data.chunk.state = .meshing;
                     try self.mesh_queue.push(.{
                         .type = .meshing,
                         .chunk_x = data.chunk.chunk_x,
@@ -385,6 +384,7 @@ pub const World = struct {
                         .job_token = data.chunk.job_token,
                         .dist_sq = dx * dx + dz * dz,
                     });
+                    data.chunk.state = .meshing;
                 }
             } else if (data.chunk.state == .mesh_ready) {
                 data.chunk.state = .uploading;
@@ -438,7 +438,7 @@ pub const World = struct {
         self.chunks_mutex.unlock();
     }
 
-    pub fn render(self: *World, shader: ?*const Shader, view_proj: Mat4, camera_pos: Vec3) void {
+    pub fn render(self: *World, view_proj: Mat4, camera_pos: Vec3) void {
         const frustum = Frustum.fromViewProj(view_proj);
         self.last_render_stats = .{};
 
@@ -468,14 +468,7 @@ pub const World = struct {
             const rel_y = -camera_pos.y;
 
             const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
-            const mvp = view_proj.multiply(model);
-
-            if (shader) |s| {
-                s.setMat4("transform", &mvp.data);
-                s.setMat4("uModel", &model.data);
-            } else {
-                self.rhi.setModelMatrix(model);
-            }
+            self.rhi.setModelMatrix(model);
             data.mesh.draw(self.rhi, .solid);
         }
 
@@ -497,21 +490,14 @@ pub const World = struct {
             const rel_y = -camera_pos.y;
 
             const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
-            const mvp = view_proj.multiply(model);
-
-            if (shader) |s| {
-                s.setMat4("transform", &mvp.data);
-                s.setMat4("uModel", &model.data);
-            } else {
-                self.rhi.setModelMatrix(model);
-            }
+            self.rhi.setModelMatrix(model);
             data.mesh.draw(self.rhi, .fluid);
         }
 
         self.chunks_mutex.unlock();
     }
 
-    pub fn renderShadowPass(self: *World, shader: ?*const Shader, view_proj: Mat4, camera_pos: Vec3) void {
+    pub fn renderShadowPass(self: *World, view_proj: Mat4, camera_pos: Vec3) void {
         const frustum = Frustum.fromViewProj(view_proj);
 
         self.chunks_mutex.lock();
@@ -536,13 +522,7 @@ pub const World = struct {
             const rel_y = -camera_pos.y;
 
             const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
-
-            if (shader) |s| {
-                const mvp = view_proj.multiply(model);
-                s.setMat4("transform", &mvp.data);
-            } else {
-                self.rhi.setModelMatrix(model);
-            }
+            self.rhi.setModelMatrix(model);
 
             data.mesh.draw(self.rhi, .solid);
         }

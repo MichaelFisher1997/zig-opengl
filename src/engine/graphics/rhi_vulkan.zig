@@ -405,9 +405,12 @@ fn uploadBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8)
 
     if (buf_opt) |buf| {
         var map_ptr: ?*anyopaque = null;
-        if (c.vkMapMemory(ctx.device, buf.memory, 0, @intCast(data.len), 0, &map_ptr) == c.VK_SUCCESS) {
+        const result = c.vkMapMemory(ctx.device, buf.memory, 0, @intCast(data.len), 0, &map_ptr);
+        if (result == c.VK_SUCCESS) {
             @memcpy(@as([*]u8, @ptrCast(map_ptr))[0..data.len], data);
             c.vkUnmapMemory(ctx.device, buf.memory);
+        } else {
+            std.log.err("Failed to map buffer memory for upload: {}", .{result});
         }
     }
 }
@@ -1231,6 +1234,13 @@ fn updateTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u
     }
 }
 
+fn setViewport(ctx_ptr: *anyopaque, width: u32, height: u32) void {
+    _ = ctx_ptr;
+    _ = width;
+    _ = height;
+    // Vulkan handles viewport dynamically in render passes
+}
+
 fn getAllocator(ctx_ptr: *anyopaque) std.mem.Allocator {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     return ctx.allocator;
@@ -1702,6 +1712,7 @@ const vtable = rhi.RHI.VTable{
     .bindTexture = bindTexture,
     .updateTexture = updateTexture,
     .getAllocator = getAllocator,
+    .setViewport = setViewport,
     .setWireframe = setWireframe,
     .setTexturesEnabled = setTexturesEnabled,
     .setVSync = setVSync,
