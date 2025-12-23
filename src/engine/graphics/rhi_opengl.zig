@@ -523,6 +523,29 @@ fn getAllocator(ctx_ptr: *anyopaque) std.mem.Allocator {
     return ctx.allocator;
 }
 
+fn setWireframe(ctx_ptr: *anyopaque, enabled: bool) void {
+    _ = ctx_ptr;
+    // OpenGL wireframe is handled via glPolygonMode in renderer.zig
+    // This is a no-op here since the old renderer handles it directly
+    if (enabled) {
+        c.glPolygonMode(c.GL_FRONT_AND_BACK, c.GL_LINE);
+    } else {
+        c.glPolygonMode(c.GL_FRONT_AND_BACK, c.GL_FILL);
+    }
+}
+
+fn setTexturesEnabled(ctx_ptr: *anyopaque, enabled: bool) void {
+    _ = ctx_ptr;
+    _ = enabled;
+    // OpenGL texture toggle is handled via shader uniform in renderer.zig
+    // This is a no-op here since the old code path handles it
+}
+
+fn setVSync(ctx_ptr: *anyopaque, enabled: bool) void {
+    _ = ctx_ptr;
+    _ = c.SDL_GL_SetSwapInterval(if (enabled) 1 else 0);
+}
+
 fn updateTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u8) void {
     _ = ctx_ptr;
     // This assumes the texture is already bound or we bind it temporarily
@@ -682,6 +705,9 @@ const vtable = rhi.RHI.VTable{
     .bindTexture = bindTexture,
     .updateTexture = updateTexture,
     .getAllocator = getAllocator,
+    .setWireframe = setWireframe,
+    .setTexturesEnabled = setTexturesEnabled,
+    .setVSync = setVSync,
     .beginUI = beginUI,
     .endUI = endUI,
     .drawUIQuad = drawUIQuad,

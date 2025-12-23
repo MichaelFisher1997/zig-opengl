@@ -161,6 +161,11 @@ pub const RHI = struct {
 
         getAllocator: *const fn (ctx: *anyopaque) std.mem.Allocator,
 
+        // Rendering options
+        setWireframe: *const fn (ctx: *anyopaque, enabled: bool) void,
+        setTexturesEnabled: *const fn (ctx: *anyopaque, enabled: bool) void,
+        setVSync: *const fn (ctx: *anyopaque, enabled: bool) void,
+
         // UI Rendering (2D orthographic)
         beginUI: *const fn (ctx: *anyopaque, screen_width: f32, screen_height: f32) void,
         endUI: *const fn (ctx: *anyopaque) void,
@@ -254,6 +259,19 @@ pub const RHI = struct {
 
     pub fn getAllocator(self: RHI) std.mem.Allocator {
         return self.vtable.getAllocator(self.ptr);
+    }
+
+    // Rendering options
+    pub fn setWireframe(self: RHI, enabled: bool) void {
+        self.vtable.setWireframe(self.ptr, enabled);
+    }
+
+    pub fn setTexturesEnabled(self: RHI, enabled: bool) void {
+        self.vtable.setTexturesEnabled(self.ptr, enabled);
+    }
+
+    pub fn setVSync(self: RHI, enabled: bool) void {
+        self.vtable.setVSync(self.ptr, enabled);
     }
 
     // UI Rendering methods

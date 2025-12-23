@@ -277,6 +277,7 @@ const Settings = struct {
     vsync: bool = true,
     fov: f32 = 45.0,
     textures_enabled: bool = true,
+    wireframe_enabled: bool = false,
     shadow_resolution: u32 = 2048,
     shadow_distance: f32 = 250.0,
 };
@@ -491,11 +492,18 @@ pub fn main() !void {
             if (input.isKeyPressed(.c)) if (clouds) |*cl| {
                 cl.enabled = !cl.enabled;
             };
-            if (input.isKeyPressed(.f)) if (renderer) |*r| r.toggleWireframe();
-            if (input.isKeyPressed(.t)) settings.textures_enabled = !settings.textures_enabled;
+            if (input.isKeyPressed(.f)) {
+                settings.wireframe_enabled = !settings.wireframe_enabled;
+                if (renderer) |*r| r.toggleWireframe();
+                rhi.setWireframe(settings.wireframe_enabled);
+            }
+            if (input.isKeyPressed(.t)) {
+                settings.textures_enabled = !settings.textures_enabled;
+                rhi.setTexturesEnabled(settings.textures_enabled);
+            }
             if (input.isKeyPressed(.v)) {
                 settings.vsync = !settings.vsync;
-                if (!is_vulkan) setVSync(settings.vsync);
+                rhi.setVSync(settings.vsync);
             }
             if (input.isKeyPressed(.u)) debug_shadows = !debug_shadows;
             if (input.isKeyPressed(.m)) {
@@ -728,7 +736,10 @@ pub fn main() !void {
                 if (ui) |*u| {
                     u.begin();
                     if (show_map) if (world_map) |*m| {
-                        if (map_needs_update) try m.update(&active_world.generator, map_pos_x, map_pos_z, map_zoom);
+                        if (map_needs_update) {
+                            try m.update(&active_world.generator, map_pos_x, map_pos_z, map_zoom);
+                            map_needs_update = false;
+                        }
                         const sz: f32 = @min(screen_w, screen_h) * 0.8;
                         const mx = (screen_w - sz) * 0.5;
                         const my = (screen_h - sz) * 0.5;

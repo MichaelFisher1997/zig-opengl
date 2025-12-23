@@ -22,7 +22,8 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
     float fog_enabled;
     float sun_intensity;
     float ambient;
-    float padding[3];
+    float use_texture;  // 0.0 = vertex colors only, 1.0 = use textures
+    float padding[2];
 } global;
 
 layout(set = 0, binding = 1) uniform sampler2D uTexture;
@@ -109,17 +110,22 @@ void main() {
     lightLevel = max(lightLevel, global.ambient * 0.5);
     lightLevel = clamp(lightLevel, 0.0, 1.0);
 
-    vec2 atlasSize = vec2(16.0, 16.0);
-    vec2 tileSize = 1.0 / atlasSize;
-    vec2 tilePos = vec2(mod(float(vTileID), atlasSize.x), floor(float(vTileID) / atlasSize.x));
-    vec2 tiledUV = fract(vTexCoord);
-    tiledUV = clamp(tiledUV, 0.001, 0.999);
-    vec2 uv = (tilePos + tiledUV) * tileSize;
+    vec3 color;
+    if (global.use_texture > 0.5) {
+        vec2 atlasSize = vec2(16.0, 16.0);
+        vec2 tileSize = 1.0 / atlasSize;
+        vec2 tilePos = vec2(mod(float(vTileID), atlasSize.x), floor(float(vTileID) / atlasSize.x));
+        vec2 tiledUV = fract(vTexCoord);
+        tiledUV = clamp(tiledUV, 0.001, 0.999);
+        vec2 uv = (tilePos + tiledUV) * tileSize;
 
-    vec4 texColor = texture(uTexture, uv);
-    if (texColor.a < 0.1) discard;
+        vec4 texColor = texture(uTexture, uv);
+        if (texColor.a < 0.1) discard;
 
-    vec3 color = texColor.rgb * vColor * lightLevel;
+        color = texColor.rgb * vColor * lightLevel;
+    } else {
+        color = vColor * lightLevel;
+    }
 
     if (global.fog_enabled > 0.5) {
         float fogFactor = 1.0 - exp(-vDistance * global.fog_density);

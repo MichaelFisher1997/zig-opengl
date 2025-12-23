@@ -40,7 +40,8 @@ const GlobalUniforms = extern struct {
     fog_enabled: f32, // 0.0 or 1.0
     sun_intensity: f32,
     ambient: f32,
-    padding: [3]f32, // Align to 16 bytes
+    use_texture: f32, // 0.0 = vertex colors, 1.0 = textures
+    padding: [2]f32, // Align to 16 bytes
 };
 
 /// Shadow cascade uniforms for CSM. Bound to descriptor set 0, binding 2.
@@ -164,6 +165,19 @@ const VulkanContext = struct {
     // Debug
     draw_call_count: u32,
 
+    // Frame-level state tracking (for optimization)
+    terrain_pipeline_bound: bool,
+    shadow_pipeline_bound: bool,
+    descriptors_updated: bool,
+    bound_texture: rhi.TextureHandle,
+
+    // Rendering options
+    wireframe_enabled: bool,
+    textures_enabled: bool,
+    wireframe_pipeline: c.VkPipeline,
+    vsync_enabled: bool,
+    present_mode: c.VkPresentModeKHR,
+
     // Shadow resources
     shadow_images: [shadows.ShadowMap.CASCADE_COUNT]c.VkImage,
     shadow_image_memory: [shadows.ShadowMap.CASCADE_COUNT]c.VkDeviceMemory,
@@ -274,6 +288,7 @@ fn deinit(ctx_ptr: *anyopaque) void {
     c.vkDestroySampler(ctx.device, ctx.shadow_sampler, null);
 
     c.vkDestroyPipeline(ctx.device, ctx.pipeline, null);
+    if (ctx.wireframe_pipeline != null) c.vkDestroyPipeline(ctx.device, ctx.wireframe_pipeline, null);
     c.vkDestroyPipelineLayout(ctx.device, ctx.pipeline_layout, null);
 
     for (ctx.swapchain_framebuffers.items) |fb| c.vkDestroyFramebuffer(ctx.device, fb, null);
@@ -453,7 +468,7 @@ fn recreateSwapchain(ctx: *VulkanContext) void {
     swapchain_info.imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
     swapchain_info.preTransform = cap.currentTransform;
     swapchain_info.compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    swapchain_info.presentMode = c.VK_PRESENT_MODE_FIFO_KHR;
+    swapchain_info.presentMode = ctx.present_mode;
     swapchain_info.clipped = c.VK_TRUE;
 
     const create_result = c.vkCreateSwapchainKHR(ctx.device, &swapchain_info, null, &ctx.swapchain);
@@ -557,6 +572,12 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
     ctx.main_pass_active = false;
     ctx.shadow_pass_active = false;
 
+    // Reset per-frame optimization state
+    ctx.terrain_pipeline_bound = false;
+    ctx.shadow_pipeline_bound = false;
+    ctx.descriptors_updated = false;
+    ctx.bound_texture = 0;
+
     _ = c.vkWaitForFences(ctx.device, 1, &ctx.in_flight_fence, c.VK_TRUE, std.math.maxInt(u64));
 
     var image_index: u32 = 0;
@@ -643,6 +664,9 @@ fn beginMainPass(ctx_ptr: *anyopaque) void {
     if (ctx.shadow_pass_active) {
         endShadowPass(ctx_ptr);
     }
+
+    // Reset pipeline state when switching passes
+    ctx.terrain_pipeline_bound = false;
 
     var render_pass_info = std.mem.zeroes(c.VkRenderPassBeginInfo);
     render_pass_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -757,7 +781,8 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
         .fog_enabled = if (fog_enabled) 1.0 else 0.0,
         .sun_intensity = sun_intensity,
         .ambient = ambient,
-        .padding = .{ 0, 0, 0 },
+        .use_texture = if (ctx.textures_enabled) 1.0 else 0.0,
+        .padding = .{ 0, 0 },
     };
 
     var map_ptr: ?*anyopaque = null;
@@ -1004,6 +1029,68 @@ fn getAllocator(ctx_ptr: *anyopaque) std.mem.Allocator {
     return ctx.allocator;
 }
 
+fn setWireframe(ctx_ptr: *anyopaque, enabled: bool) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (ctx.wireframe_enabled != enabled) {
+        ctx.wireframe_enabled = enabled;
+        // Force pipeline rebind next draw
+        ctx.terrain_pipeline_bound = false;
+    }
+}
+
+fn setTexturesEnabled(ctx_ptr: *anyopaque, enabled: bool) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.textures_enabled = enabled;
+    // Texture toggle is handled in shader via UBO uniform
+}
+
+fn setVSync(ctx_ptr: *anyopaque, enabled: bool) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (ctx.vsync_enabled == enabled) return;
+
+    ctx.vsync_enabled = enabled;
+
+    // Query available present modes
+    var mode_count: u32 = 0;
+    _ = c.vkGetPhysicalDeviceSurfacePresentModesKHR(ctx.physical_device, ctx.surface, &mode_count, null);
+
+    if (mode_count == 0) return;
+
+    var modes: [8]c.VkPresentModeKHR = undefined;
+    var actual_count: u32 = @min(mode_count, 8);
+    _ = c.vkGetPhysicalDeviceSurfacePresentModesKHR(ctx.physical_device, ctx.surface, &actual_count, &modes);
+
+    // Select present mode based on vsync preference
+    if (enabled) {
+        // VSync ON: FIFO is always available
+        ctx.present_mode = c.VK_PRESENT_MODE_FIFO_KHR;
+    } else {
+        // VSync OFF: Prefer IMMEDIATE, fallback to MAILBOX, then FIFO
+        ctx.present_mode = c.VK_PRESENT_MODE_FIFO_KHR; // Default fallback
+        for (modes[0..actual_count]) |mode| {
+            if (mode == c.VK_PRESENT_MODE_IMMEDIATE_KHR) {
+                ctx.present_mode = c.VK_PRESENT_MODE_IMMEDIATE_KHR;
+                break;
+            } else if (mode == c.VK_PRESENT_MODE_MAILBOX_KHR) {
+                ctx.present_mode = c.VK_PRESENT_MODE_MAILBOX_KHR;
+                // Don't break, keep looking for IMMEDIATE
+            }
+        }
+    }
+
+    // Trigger swapchain recreation on next frame
+    ctx.framebuffer_resized = true;
+
+    const mode_name: []const u8 = switch (ctx.present_mode) {
+        c.VK_PRESENT_MODE_IMMEDIATE_KHR => "IMMEDIATE (VSync OFF)",
+        c.VK_PRESENT_MODE_MAILBOX_KHR => "MAILBOX (Triple Buffer)",
+        c.VK_PRESENT_MODE_FIFO_KHR => "FIFO (VSync ON)",
+        c.VK_PRESENT_MODE_FIFO_RELAXED_KHR => "FIFO_RELAXED",
+        else => "UNKNOWN",
+    };
+    std.log.info("Vulkan present mode: {s}", .{mode_name});
+}
+
 fn draw(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.DrawMode) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frame_in_progress) return;
@@ -1015,57 +1102,91 @@ fn draw(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.Dra
 
     ctx.mutex.lock();
     const vbo_opt = ctx.buffers.get(handle);
-    const tex_opt = ctx.textures.get(ctx.current_texture);
     ctx.mutex.unlock();
 
     if (vbo_opt) |vbo| {
         ctx.draw_call_count += 1;
-        const pipeline = if (use_shadow) ctx.shadow_pipeline else ctx.pipeline;
-        if (pipeline == null) return;
-        c.vkCmdBindPipeline(ctx.command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-        if (!use_shadow) {
-            if (tex_opt) |tex| {
-                var image_info = c.VkDescriptorImageInfo{
-                    .sampler = tex.sampler,
-                    .imageView = tex.view,
-                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-
-                var write = std.mem.zeroes(c.VkWriteDescriptorSet);
-                write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                write.dstSet = ctx.descriptor_set;
-                write.dstBinding = 1;
-                write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                write.descriptorCount = 1;
-                write.pImageInfo = &image_info;
-
-                c.vkUpdateDescriptorSets(ctx.device, 1, &write, 0, null);
+        // Bind pipeline only if not already bound (major optimization)
+        if (use_shadow) {
+            if (!ctx.shadow_pipeline_bound) {
+                if (ctx.shadow_pipeline == null) return;
+                c.vkCmdBindPipeline(ctx.command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.shadow_pipeline);
+                c.vkCmdBindDescriptorSets(ctx.command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, &ctx.descriptor_set, 0, null);
+                ctx.shadow_pipeline_bound = true;
             }
+        } else {
+            if (!ctx.terrain_pipeline_bound) {
+                // Select solid or wireframe pipeline
+                const selected_pipeline = if (ctx.wireframe_enabled and ctx.wireframe_pipeline != null)
+                    ctx.wireframe_pipeline
+                else
+                    ctx.pipeline;
+                if (selected_pipeline == null) return;
+                c.vkCmdBindPipeline(ctx.command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, selected_pipeline);
 
-            // Bind Shadow Maps (3, 4, 5) - use dummy or main texture for now if shadow views are not ready
-            for (0..3) |i| {
-                const view = if (ctx.shadow_image_views[i] != null) ctx.shadow_image_views[i] else if (ctx.textures.get(ctx.current_texture)) |t| t.view else null;
-                if (view == null) continue;
+                // Update descriptors if they haven't been updated this frame, or if the texture changed
+                if (!ctx.descriptors_updated or ctx.current_texture != ctx.bound_texture) {
+                    ctx.mutex.lock();
+                    const tex_opt = ctx.textures.get(ctx.current_texture);
+                    ctx.mutex.unlock();
 
-                var image_info = c.VkDescriptorImageInfo{
-                    .sampler = ctx.shadow_sampler,
-                    .imageView = view,
-                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-                var write = std.mem.zeroes(c.VkWriteDescriptorSet);
-                write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                write.dstSet = ctx.descriptor_set;
-                write.dstBinding = @intCast(3 + i);
-                write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                write.descriptorCount = 1;
-                write.pImageInfo = &image_info;
-                c.vkUpdateDescriptorSets(ctx.device, 1, &write, 0, null);
+                    // Update texture descriptor
+                    if (tex_opt) |tex| {
+                        var image_info = c.VkDescriptorImageInfo{
+                            .sampler = tex.sampler,
+                            .imageView = tex.view,
+                            .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        };
+
+                        var write = std.mem.zeroes(c.VkWriteDescriptorSet);
+                        write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                        write.dstSet = ctx.descriptor_set;
+                        write.dstBinding = 1;
+                        write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                        write.descriptorCount = 1;
+                        write.pImageInfo = &image_info;
+
+                        c.vkUpdateDescriptorSets(ctx.device, 1, &write, 0, null);
+                    }
+
+                    // Update shadow map descriptors (bindings 3, 4, 5) if this is the first update of the frame
+                    if (!ctx.descriptors_updated) {
+                        for (0..3) |i| {
+                            const view = if (ctx.shadow_image_views[i] != null) ctx.shadow_image_views[i] else blk: {
+                                ctx.mutex.lock();
+                                const t = ctx.textures.get(ctx.current_texture);
+                                ctx.mutex.unlock();
+                                break :blk if (t) |tex| tex.view else null;
+                            };
+                            if (view == null) continue;
+
+                            var image_info = c.VkDescriptorImageInfo{
+                                .sampler = ctx.shadow_sampler,
+                                .imageView = view,
+                                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            };
+                            var write = std.mem.zeroes(c.VkWriteDescriptorSet);
+                            write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                            write.dstSet = ctx.descriptor_set;
+                            write.dstBinding = @intCast(3 + i);
+                            write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                            write.descriptorCount = 1;
+                            write.pImageInfo = &image_info;
+                            c.vkUpdateDescriptorSets(ctx.device, 1, &write, 0, null);
+                        }
+                    }
+
+                    ctx.descriptors_updated = true;
+                    ctx.bound_texture = ctx.current_texture;
+                }
+
+                c.vkCmdBindDescriptorSets(ctx.command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, &ctx.descriptor_set, 0, null);
+                ctx.terrain_pipeline_bound = true;
             }
         }
 
-        c.vkCmdBindDescriptorSets(ctx.command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, &ctx.descriptor_set, 0, null);
-
+        // Push constants are cheap, always update per-draw
         const uniforms = ModelUniforms{ .model = ctx.current_model };
         c.vkCmdPushConstants(ctx.command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
 
@@ -1168,6 +1289,9 @@ fn beginShadowPass(ctx_ptr: *anyopaque, cascade_index: u32) void {
     if (ctx.shadow_pass_active) {
         endShadowPass(ctx_ptr);
     }
+
+    // Reset pipeline state when switching passes
+    ctx.shadow_pipeline_bound = false;
 
     if (ctx.shadow_framebuffers[cascade_index] == null) return;
 
@@ -1280,6 +1404,9 @@ const vtable = rhi.RHI.VTable{
     .bindTexture = bindTexture,
     .updateTexture = updateTexture,
     .getAllocator = getAllocator,
+    .setWireframe = setWireframe,
+    .setTexturesEnabled = setTexturesEnabled,
+    .setVSync = setVSync,
     .beginUI = beginUI,
     .endUI = endUI,
     .drawUIQuad = drawUIQuad,
@@ -1317,6 +1444,18 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
     ctx.frame_index = 0;
     ctx.image_index = 0;
 
+    // Optimization state tracking
+    ctx.terrain_pipeline_bound = false;
+    ctx.shadow_pipeline_bound = false;
+    ctx.descriptors_updated = false;
+    ctx.bound_texture = 0;
+
+    // Rendering options
+    ctx.wireframe_enabled = false;
+    ctx.textures_enabled = true;
+    ctx.vsync_enabled = true;
+    ctx.present_mode = c.VK_PRESENT_MODE_FIFO_KHR; // VSync on by default
+
     // Explicitly null out pointers that are not yet initialized
     ctx.instance = null;
     ctx.surface = null;
@@ -1333,6 +1472,7 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
     ctx.depth_image_memory = null;
     ctx.pipeline = null;
     ctx.pipeline_layout = null;
+    ctx.wireframe_pipeline = null;
     ctx.shadow_pipeline = null;
     ctx.shadow_render_pass = null;
     ctx.sky_pipeline = null;
@@ -1490,7 +1630,7 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
     swapchain_info.imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
     swapchain_info.preTransform = cap.currentTransform;
     swapchain_info.compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    swapchain_info.presentMode = c.VK_PRESENT_MODE_FIFO_KHR;
+    swapchain_info.presentMode = ctx.present_mode;
     swapchain_info.clipped = c.VK_TRUE;
 
     try checkVk(c.vkCreateSwapchainKHR(ctx.device, &swapchain_info, null, &ctx.swapchain));
@@ -1914,6 +2054,17 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
     pipeline_info.subpass = 0;
 
     try checkVk(c.vkCreateGraphicsPipelines(ctx.device, null, 1, &pipeline_info, null, &ctx.pipeline));
+
+    // 13a. Create wireframe pipeline variant
+    var wireframe_rasterizer = rasterizer;
+    wireframe_rasterizer.polygonMode = c.VK_POLYGON_MODE_LINE;
+    wireframe_rasterizer.lineWidth = 1.0;
+
+    pipeline_info.pRasterizationState = &wireframe_rasterizer;
+    try checkVk(c.vkCreateGraphicsPipelines(ctx.device, null, 1, &pipeline_info, null, &ctx.wireframe_pipeline));
+
+    // Restore solid rasterizer for other pipelines
+    pipeline_info.pRasterizationState = &rasterizer;
 
     // 13b. Shadow resources
     const shadow_format = c.VK_FORMAT_D32_SFLOAT;
