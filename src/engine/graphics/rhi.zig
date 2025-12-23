@@ -139,6 +139,7 @@ pub const RHI = struct {
         beginMainPass: *const fn (ctx: *anyopaque) void,
         endMainPass: *const fn (ctx: *anyopaque) void,
         endFrame: *const fn (ctx: *anyopaque) void,
+        waitIdle: *const fn (ctx: *anyopaque) void,
 
         // Shadow Pass
         beginShadowPass: *const fn (ctx: *anyopaque, cascade_index: u32) void,
@@ -211,6 +212,10 @@ pub const RHI = struct {
 
     pub fn endFrame(self: RHI) void {
         self.vtable.endFrame(self.ptr);
+    }
+
+    pub fn waitIdle(self: RHI) void {
+        self.vtable.waitIdle(self.ptr);
     }
 
     pub fn beginShadowPass(self: RHI, cascade_index: u32) void {

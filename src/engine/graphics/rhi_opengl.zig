@@ -407,6 +407,11 @@ fn endFrame(ctx_ptr: *anyopaque) void {
     _ = ctx_ptr;
 }
 
+fn waitIdle(ctx_ptr: *anyopaque) void {
+    _ = ctx_ptr;
+    c.glFinish();
+}
+
 fn beginShadowPass(ctx_ptr: *anyopaque, cascade_index: u32) void {
     _ = ctx_ptr;
     _ = cascade_index;
@@ -693,6 +698,7 @@ const vtable = rhi.RHI.VTable{
     .beginMainPass = beginMainPass,
     .endMainPass = endMainPass,
     .endFrame = endFrame,
+    .waitIdle = waitIdle,
     .beginShadowPass = beginShadowPass,
     .endShadowPass = endShadowPass,
     .updateGlobalUniforms = updateGlobalUniforms,

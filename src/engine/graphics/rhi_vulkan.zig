@@ -736,9 +736,6 @@ fn endFrame(ctx_ptr: *anyopaque) void {
     if (ctx.main_pass_active) {
         endMainPass(ctx_ptr);
     }
-    if (ctx.shadow_pass_active) {
-        endShadowPass(ctx_ptr);
-    }
 
     _ = c.vkEndCommandBuffer(ctx.command_buffer);
 
@@ -758,9 +755,7 @@ fn endFrame(ctx_ptr: *anyopaque) void {
     submit_info.signalSemaphoreCount = 1;
     submit_info.pSignalSemaphores = &signal_semaphores;
 
-    if (c.vkQueueSubmit(ctx.queue, 1, &submit_info, ctx.in_flight_fence) != c.VK_SUCCESS) {
-        std.log.err("Failed to submit draw command buffer", .{});
-    }
+    _ = c.vkQueueSubmit(ctx.queue, 1, &submit_info, ctx.in_flight_fence);
 
     var present_info = std.mem.zeroes(c.VkPresentInfoKHR);
     present_info.sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -780,6 +775,14 @@ fn endFrame(ctx_ptr: *anyopaque) void {
     }
 
     ctx.frame_index += 1;
+    ctx.frame_in_progress = false;
+}
+
+fn waitIdle(ctx_ptr: *anyopaque) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (ctx.device != null) {
+        _ = c.vkDeviceWaitIdle(ctx.device);
+    }
 }
 
 fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, time: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32) void {
@@ -1414,6 +1417,7 @@ const vtable = rhi.RHI.VTable{
     .beginMainPass = beginMainPass,
     .endMainPass = endMainPass,
     .endFrame = endFrame,
+    .waitIdle = waitIdle,
     .updateGlobalUniforms = updateGlobalUniforms,
     .setModelMatrix = setModelMatrix,
     .draw = draw,
@@ -2440,8 +2444,6 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
     // Initialize shadow layouts to undefined
     for (0..shadows.ShadowMap.CASCADE_COUNT) |si| {
         ctx.shadow_image_layouts[si] = c.VK_IMAGE_LAYOUT_UNDEFINED;
-        ctx.shadow_images[si] = null;
-        ctx.shadow_image_views[si] = null;
     }
 
     std.log.info("Vulkan initialized successfully!", .{});

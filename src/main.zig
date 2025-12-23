@@ -809,6 +809,7 @@ pub fn main() !void {
                         }
                         py += ph + 16.0;
                         if (drawButton(u, .{ .x = px, .y = py, .width = pw, .height = ph }, "QUIT TO TITLE", 2.0, mouse_x, mouse_y, mouse_clicked)) {
+                            rhi.waitIdle();
                             app_state = .home;
                             if (world) |w| {
                                 w.deinit();
@@ -929,6 +930,7 @@ pub fn main() !void {
                     if (drawButton(u, .{ .x = px + 24.0 + hw + 12.0, .y = byy, .width = hw, .height = 40.0 }, "CREATE", 1.9, mouse_x, mouse_y, mouse_clicked) or input.isKeyPressed(.enter)) {
                         const seed = try resolveSeed(&seed_input, allocator);
                         if (world) |w| {
+                            rhi.waitIdle();
                             w.deinit();
                             world = null;
                         }
