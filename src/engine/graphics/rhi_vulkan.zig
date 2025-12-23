@@ -440,16 +440,9 @@ fn recreateSwapchain(ctx: *VulkanContext) void {
     var h: c_int = 0;
     _ = c.SDL_GetWindowSize(ctx.window, &w, &h);
 
-    // Handle minimized window - wait for valid size
-    var wait_count: u32 = 0;
-    while (w == 0 or h == 0) {
-        _ = c.SDL_GetWindowSize(ctx.window, &w, &h);
-        _ = c.SDL_WaitEvent(null);
-        wait_count += 1;
-        if (wait_count > 1000) {
-            std.log.warn("Timed out waiting for non-zero window size", .{});
-            return;
-        }
+    // Handle minimized window - return and try again next frame
+    if (w == 0 or h == 0) {
+        return;
     }
 
     cleanupSwapchain(ctx);
@@ -603,6 +596,11 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
 
     if (result == c.VK_ERROR_OUT_OF_DATE_KHR) {
         recreateSwapchain(ctx);
+        // Semaphore might be in an inconsistent state if acquire failed
+        c.vkDestroySemaphore(ctx.device, ctx.image_available_semaphore, null);
+        var semaphore_info = std.mem.zeroes(c.VkSemaphoreCreateInfo);
+        semaphore_info.sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        _ = c.vkCreateSemaphore(ctx.device, &semaphore_info, null, &ctx.image_available_semaphore);
         return;
     } else if (result != c.VK_SUCCESS and result != c.VK_SUBOPTIMAL_KHR) {
         return;
@@ -861,8 +859,15 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, data: []const u8)
     alloc_info.allocationSize = mem_reqs.size;
     alloc_info.memoryTypeIndex = findMemoryType(ctx.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    if (c.vkAllocateMemory(ctx.device, &alloc_info, null, &memory) != c.VK_SUCCESS) return 0;
-    _ = c.vkBindImageMemory(ctx.device, image, memory, 0);
+    if (c.vkAllocateMemory(ctx.device, &alloc_info, null, &memory) != c.VK_SUCCESS) {
+        c.vkDestroyImage(ctx.device, image, null);
+        return 0;
+    }
+    if (c.vkBindImageMemory(ctx.device, image, memory, 0) != c.VK_SUCCESS) {
+        c.vkFreeMemory(ctx.device, memory, null);
+        c.vkDestroyImage(ctx.device, image, null);
+        return 0;
+    }
 
     {
         ctx.mutex.lock();
