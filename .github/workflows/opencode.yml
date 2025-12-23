@@ -26,6 +26,6 @@ jobs:
       - name: Run opencode
         uses: sst/opencode/github@latest
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
         with:
-          model: openrouter/kwaipilot/kat-coder-pro:free
+          model: zai-coding-plan/glm-4.7
