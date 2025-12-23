@@ -60,6 +60,14 @@ pub const Atmosphere = struct {
         atmo.initSkyShader() catch {
             // Sky shader optional - will use fallback
         };
+        atmo.setTimeOfDay(0.25);
+        return atmo;
+    }
+
+    pub fn initNoGL() Atmosphere {
+        // No GL resources created; used for Vulkan/RHI sky rendering.
+        var atmo = Atmosphere{};
+        atmo.setTimeOfDay(0.25);
         return atmo;
     }
 

@@ -51,19 +51,20 @@ pub const Renderer = struct {
         log.log.info("OpenGL Version: {s}", .{version});
         log.log.info("GLSL Version: {s}", .{glsl_version});
 
-        // Enable depth testing with reverse-Z for better precision at distance
+        // Enable depth testing with standard Z for compatibility
         c.glEnable(c.GL_DEPTH_TEST);
-        c.glDepthFunc(c.GL_GEQUAL); // Reverse-Z: greater values are closer
-        c.glClearDepth(0.0); // Clear to 0 (far plane in reverse-Z)
-        // glClipControl for [0,1] depth range - use function pointer from GLEW
-        if (c.glClipControl()) |clip_fn| {
-            clip_fn(c.GL_LOWER_LEFT, c.GL_ZERO_TO_ONE);
-        }
+        c.glDepthFunc(c.GL_LESS); // Standard Z: smaller values are closer
+        c.glClearDepth(1.0); // Clear to 1 (far plane in standard Z)
+
+        // Disable ClipControl for now to ensure compatibility
+        // if (c.glClipControl()) |clip_fn| {
+        //     clip_fn(c.GL_LOWER_LEFT, c.GL_ZERO_TO_ONE);
+        // }
 
         // Enable backface culling
-        c.glEnable(c.GL_CULL_FACE);
-        c.glCullFace(c.GL_BACK);
-        c.glFrontFace(c.GL_CCW);
+        // c.glEnable(c.GL_CULL_FACE);
+        // c.glCullFace(c.GL_BACK);
+        // c.glFrontFace(c.GL_CCW);
 
         // Enable blending for transparency
         c.glEnable(c.GL_BLEND);
@@ -82,11 +83,14 @@ pub const Renderer = struct {
     pub fn beginFrame(self: *Renderer) void {
         self.stats.reset();
 
-        // Ensure main pass depth state (Reverse-Z)
+        // Ensure we are rendering to the default framebuffer
+        c.glBindFramebuffer().?(c.GL_FRAMEBUFFER, 0);
+
+        // Ensure main pass depth state (Standard Z)
         c.glEnable(c.GL_DEPTH_TEST);
         c.glDepthMask(c.GL_TRUE);
-        c.glClearDepth(0.0);
-        c.glDepthFunc(c.GL_GEQUAL);
+        c.glClearDepth(1.0);
+        c.glDepthFunc(c.GL_LESS);
 
         c.glClearColor(self.clear_color.x, self.clear_color.y, self.clear_color.z, 1.0);
         c.glClear(c.GL_COLOR_BUFFER_BIT | c.GL_DEPTH_BUFFER_BIT);

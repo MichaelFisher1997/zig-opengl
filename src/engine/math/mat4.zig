@@ -2,7 +2,7 @@ const std = @import("std");
 const Vec3 = @import("vec3.zig").Vec3;
 
 /// Column-major 4x4 matrix for OpenGL compatibility
-pub const Mat4 = struct {
+pub const Mat4 = extern struct {
     /// Stored as columns: data[col][row]
     data: [4][4]f32,
 
@@ -53,14 +53,16 @@ pub const Mat4 = struct {
 
     /// Perspective projection with reverse-Z for better depth precision at distance
     /// Maps near plane to z=1 and far plane to z=0 (reversed from standard)
-    /// Use with glDepthFunc(GL_GEQUAL) and glClearDepth(0.0)
+    /// This version is compatible with Vulkan [0, 1] range.
     pub fn perspectiveReverseZ(fov_radians: f32, aspect: f32, near: f32, far: f32) Mat4 {
         const tan_half_fov = std.math.tan(fov_radians / 2.0);
         var result = Mat4.zero;
 
         result.data[0][0] = 1.0 / (aspect * tan_half_fov);
         result.data[1][1] = 1.0 / tan_half_fov;
-        // Reverse-Z: swap near and far in depth calculation
+        // Reverse-Z mapping near to 1 and far to 0 (right-handed, z is negative in front)
+        // z_ndc = (m22 * z + m32) / -z
+        // z = -near => z_ndc = 1, z = -far => z_ndc = 0
         result.data[2][2] = near / (far - near);
         result.data[2][3] = -1.0;
         result.data[3][2] = (far * near) / (far - near);

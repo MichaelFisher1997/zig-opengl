@@ -117,9 +117,10 @@ pub const Camera = struct {
         return Mat4.lookAt(self.position, target, Vec3.up);
     }
 
-    /// Get projection matrix with reverse-Z for better depth precision
+    /// Get projection matrix
     pub fn getProjectionMatrix(self: *const Camera, aspect_ratio: f32) Mat4 {
-        return Mat4.perspectiveReverseZ(self.fov, aspect_ratio, self.near, self.far);
+        // Standard perspective for compatibility (matches GL_LESS depth test)
+        return Mat4.perspective(self.fov, aspect_ratio, self.near, self.far);
     }
 
     /// Get view matrix centered at origin (for floating origin rendering)
