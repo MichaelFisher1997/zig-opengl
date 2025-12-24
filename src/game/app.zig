@@ -215,12 +215,10 @@ pub const App = struct {
                 }
                 if (self.input.isKeyPressed(.u)) self.debug_shadows = !self.debug_shadows;
 
-                self.map_controller.handleInput(&self.input, &self.camera, self.time.delta_time, self.window_manager.window);
-                if (self.world_map) |m| {
-                    self.map_controller.updateDrag(&self.input, screen_w, screen_h, m.width);
-                }
+                self.map_controller.update(&self.input, &self.camera, self.time.delta_time, self.window_manager.window, screen_w, screen_h, if (self.world_map) |m| m.width else 256);
 
                 if (self.debug_shadows and self.input.isKeyPressed(.k)) self.debug_cascade_idx = (self.debug_cascade_idx + 1) % 3;
+
                 if (self.input.isKeyPressed(.@"1")) if (self.render_system.atmosphere) |*a| a.setTimeOfDay(0.0);
                 if (self.input.isKeyPressed(.@"2")) if (self.render_system.atmosphere) |*a| a.setTimeOfDay(0.25);
                 if (self.input.isKeyPressed(.@"3")) if (self.render_system.atmosphere) |*a| a.setTimeOfDay(0.5);

@@ -20,7 +20,7 @@ pub const MapController = struct {
     last_mouse_x: f32 = 0.0,
     last_mouse_y: f32 = 0.0,
 
-    pub fn handleInput(self: *MapController, input: *Input, camera: *const Camera, time_delta: f32, window: *c.SDL_Window) void {
+    pub fn update(self: *MapController, input: *Input, camera: *const Camera, time_delta: f32, window: *c.SDL_Window, screen_w: f32, screen_h: f32, world_map_width: u32) void {
         if (input.isKeyPressed(.m)) {
             self.show_map = !self.show_map;
             log.log.info("Toggle map: show={}", .{self.show_map});
@@ -35,52 +35,31 @@ pub const MapController = struct {
             }
         }
 
-        if (self.show_map) {
-            const dt = @min(time_delta, 0.033);
-            if (input.isKeyDown(.plus) or input.isKeyDown(.kp_plus)) {
-                self.map_target_zoom /= @exp(1.2 * dt);
-                self.map_needs_update = true;
-            }
-            if (input.isKeyDown(.minus) or input.isKeyDown(.kp_minus)) {
-                self.map_target_zoom *= @exp(1.2 * dt);
-                self.map_needs_update = true;
-            }
-            if (input.scroll_y != 0) {
-                self.map_target_zoom *= @exp(-input.scroll_y * 0.12);
-                self.map_needs_update = true;
-            }
-            self.map_target_zoom = std.math.clamp(self.map_target_zoom, 0.05, 128.0);
-            const old_zoom = self.map_zoom;
-            self.map_zoom = std.math.lerp(self.map_zoom, self.map_target_zoom, 20.0 * dt);
-            if (@abs(self.map_zoom - old_zoom) > 0.001 * self.map_zoom) self.map_needs_update = true;
-
-            if (input.isKeyPressed(.space)) {
-                self.map_pos_x = camera.position.x;
-                self.map_pos_z = camera.position.z;
-                self.map_needs_update = true;
-            }
-
-            const mouse_pos = input.getMousePosition();
-            const mouse_x: f32 = @floatFromInt(mouse_pos.x);
-            const mouse_y: f32 = @floatFromInt(mouse_pos.y);
-
-            // Assuming screen size is needed for drag ratio?
-            // Actually app logic used map_ui_size based on screen dimensions.
-            // I might need screen dimensions passed here.
-            // But drag logic used `world_to_screen_ratio`.
-
-            if (input.isMouseButtonPressed(.left)) {
-                self.last_mouse_x = mouse_x;
-                self.last_mouse_y = mouse_y;
-            }
-
-            // We need world_to_screen_ratio.
-            // Let's defer drag handling or pass screen size.
-        }
-    }
-
-    pub fn updateDrag(self: *MapController, input: *const Input, screen_w: f32, screen_h: f32, world_map_width: u32) void {
         if (!self.show_map) return;
+
+        const dt = @min(time_delta, 0.033);
+        if (input.isKeyDown(.plus) or input.isKeyDown(.kp_plus)) {
+            self.map_target_zoom /= @exp(1.2 * dt);
+            self.map_needs_update = true;
+        }
+        if (input.isKeyDown(.minus) or input.isKeyDown(.kp_minus)) {
+            self.map_target_zoom *= @exp(1.2 * dt);
+            self.map_needs_update = true;
+        }
+        if (input.scroll_y != 0) {
+            self.map_target_zoom *= @exp(-input.scroll_y * 0.12);
+            self.map_needs_update = true;
+        }
+        self.map_target_zoom = std.math.clamp(self.map_target_zoom, 0.05, 128.0);
+        const old_zoom = self.map_zoom;
+        self.map_zoom = std.math.lerp(self.map_zoom, self.map_target_zoom, 20.0 * dt);
+        if (@abs(self.map_zoom - old_zoom) > 0.001 * self.map_zoom) self.map_needs_update = true;
+
+        if (input.isKeyPressed(.space)) {
+            self.map_pos_x = camera.position.x;
+            self.map_pos_z = camera.position.z;
+            self.map_needs_update = true;
+        }
 
         const mouse_pos = input.getMousePosition();
         const mouse_x: f32 = @floatFromInt(mouse_pos.x);
@@ -88,6 +67,11 @@ pub const MapController = struct {
 
         const map_ui_size: f32 = @min(screen_w, screen_h) * 0.8;
         const world_to_screen_ratio = @as(f32, @floatFromInt(world_map_width)) / map_ui_size;
+
+        if (input.isMouseButtonPressed(.left)) {
+            self.last_mouse_x = mouse_x;
+            self.last_mouse_y = mouse_y;
+        }
 
         if (input.isMouseButtonDown(.left)) {
             const drag_dx = mouse_x - self.last_mouse_x;
@@ -100,10 +84,18 @@ pub const MapController = struct {
             self.last_mouse_x = mouse_x;
             self.last_mouse_y = mouse_y;
         } else {
-            // Pan keys (WASD) - Conflict with camera movement if not handled carefully?
-            // App checked `if (show_map)`.
-            // I'll skip WASD implementation here for brevity or include it?
-            // Original code had WASD.
+            const pan_kb_speed = 800.0 * self.map_zoom;
+            var dx: f32 = 0;
+            var dz: f32 = 0;
+            if (input.isKeyDown(.w)) dz -= 1;
+            if (input.isKeyDown(.s)) dz += 1;
+            if (input.isKeyDown(.a)) dx -= 1;
+            if (input.isKeyDown(.d)) dx += 1;
+            if (dx != 0 or dz != 0) {
+                self.map_pos_x += dx * pan_kb_speed * dt;
+                self.map_pos_z += dz * pan_kb_speed * dt;
+                self.map_needs_update = true;
+            }
         }
     }
 
