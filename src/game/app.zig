@@ -191,11 +191,11 @@ pub const App = struct {
                     self.settings.vsync = !self.settings.vsync;
                     self.render_system.rhi.setVSync(self.settings.vsync);
                 }
-                if (self.input.isKeyPressed(.u)) self.debug_state.shadows = !self.debug_state.shadows;
+                if (debug_build and self.input.isKeyPressed(.u)) self.debug_state.shadows = !self.debug_state.shadows;
 
                 self.map_controller.update(&self.input, &self.camera, self.time.delta_time, self.window_manager.window, screen_w, screen_h, if (self.world_map) |m| m.width else 256);
 
-                if (self.debug_state.shadows and self.input.isKeyPressed(.k)) self.debug_state.cascade_idx = (self.debug_state.cascade_idx + 1) % 3;
+                if (debug_build and self.debug_state.shadows and self.input.isKeyPressed(.k)) self.debug_state.cascade_idx = (self.debug_state.cascade_idx + 1) % 3;
 
                 if (self.input.isKeyPressed(.@"1")) if (self.render_system.atmosphere) |*a| a.setTimeOfDay(0.0);
                 if (self.input.isKeyPressed(.@"2")) if (self.render_system.atmosphere) |*a| a.setTimeOfDay(0.25);
