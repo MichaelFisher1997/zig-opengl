@@ -1,7 +1,30 @@
 const std = @import("std");
 const c = @import("../c.zig").c;
+const builtin = @import("builtin");
 
-const debug_build = @import("builtin").mode == .Debug;
+const log = @import("../engine/core/log.zig");
+const WindowManager = @import("../engine/core/window.zig").WindowManager;
+const RenderSystem = @import("render_system.zig").RenderSystem;
+const Input = @import("../engine/input/input.zig").Input;
+const Time = @import("../engine/core/time.zig").Time;
+const Camera = @import("../engine/graphics/camera.zig").Camera;
+const UISystem = @import("../engine/ui/ui_system.zig").UISystem;
+const Color = @import("../engine/ui/ui_system.zig").Color;
+const Font = @import("../engine/ui/font.zig");
+const Widgets = @import("../engine/ui/widgets.zig");
+const Menus = @import("menus.zig");
+const AppState = @import("state.zig").AppState;
+const Settings = @import("state.zig").Settings;
+const World = @import("../world/world.zig").World;
+const WorldMap = @import("../world/worldgen/world_map.zig").WorldMap;
+const MapController = @import("map_controller.zig").MapController;
+const Vec3 = @import("../engine/math/vec3.zig").Vec3;
+const Mat4 = @import("../engine/math/mat4.zig").Mat4;
+const ShadowMap = @import("../engine/graphics/shadows.zig").ShadowMap;
+const worldToChunk = @import("../world/chunk.zig").worldToChunk;
+const rhi_pkg = @import("../engine/graphics/rhi.zig");
+
+const debug_build = builtin.mode == .Debug;
 
 const DebugState = packed struct {
     shadows: bool = false,
