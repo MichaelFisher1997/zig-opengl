@@ -374,10 +374,10 @@ pub const App = struct {
                         s.setInt("uTexture", 0);
                         s.setBool("uUseTexture", self.settings.textures_enabled);
                         if (self.shadow_map) |*sm| {
+                            const shadow_map_names = [_][:0]const u8{ "uShadowMap0", "uShadowMap1", "uShadowMap2" };
                             for (0..3) |i| {
                                 sm.depth_maps[i].bind(@intCast(1 + i));
-                                var buf: [64]u8 = undefined;
-                                s.setInt(std.fmt.bufPrintZ(&buf, "uShadowMap{}", .{i}) catch "uShadowMap0", @intCast(1 + i));
+                                s.setInt(shadow_map_names[i], @intCast(1 + i));
                             }
                             self.rhi.updateShadowUniforms(.{
                                 .light_space_matrices = sm.light_space_matrices,
