@@ -81,6 +81,7 @@ const VulkanBuffer = struct {
     buffer: c.VkBuffer,
     memory: c.VkDeviceMemory,
     size: c.VkDeviceSize,
+    is_host_visible: bool,
 };
 
 /// Vulkan texture with image, view, and sampler.
@@ -271,11 +272,12 @@ fn createVulkanBuffer(ctx: *VulkanContext, size: usize, usage: c.VkBufferUsageFl
     // Existing code ignored errors here mostly. Ideally we check result.
     if (c.vkAllocateMemory(ctx.device, &alloc_info, null, &memory) != c.VK_SUCCESS) {
         c.vkDestroyBuffer(ctx.device, buffer, null);
-        return .{ .buffer = null, .memory = null, .size = 0 };
+        return .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
     }
     _ = c.vkBindBufferMemory(ctx.device, buffer, memory, 0);
 
-    return .{ .buffer = buffer, .memory = memory, .size = mem_reqs.size };
+    const is_host_visible = (properties & c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+    return .{ .buffer = buffer, .memory = memory, .size = mem_reqs.size, .is_host_visible = is_host_visible };
 }
 
 fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator) anyerror!void {
@@ -1480,12 +1482,14 @@ fn uploadBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8)
 
     if (buf_opt) |buf| {
         // Try mapping directly first (for HOST_VISIBLE buffers like UBOs)
-        var map_ptr: ?*anyopaque = null;
-        const result = c.vkMapMemory(ctx.device, buf.memory, 0, @intCast(data.len), 0, &map_ptr);
-        if (result == c.VK_SUCCESS) {
-            @memcpy(@as([*]u8, @ptrCast(map_ptr))[0..data.len], data);
-            c.vkUnmapMemory(ctx.device, buf.memory);
-            return;
+        if (buf.is_host_visible) {
+            var map_ptr: ?*anyopaque = null;
+            const result = c.vkMapMemory(ctx.device, buf.memory, 0, @intCast(data.len), 0, &map_ptr);
+            if (result == c.VK_SUCCESS) {
+                @memcpy(@as([*]u8, @ptrCast(map_ptr))[0..data.len], data);
+                c.vkUnmapMemory(ctx.device, buf.memory);
+                return;
+            }
         }
 
         // If mapping failed, assume DEVICE_LOCAL and use staging buffer
@@ -1501,6 +1505,7 @@ fn uploadBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8)
         }
 
         // Copy to staging
+        var map_ptr: ?*anyopaque = null;
         if (c.vkMapMemory(ctx.device, staging.memory, 0, @intCast(data.len), 0, &map_ptr) == c.VK_SUCCESS) {
             @memcpy(@as([*]u8, @ptrCast(map_ptr))[0..data.len], data);
             c.vkUnmapMemory(ctx.device, staging.memory);
@@ -2920,12 +2925,12 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window) !rhi.RHI {
         ctx.image_available_semaphores[i] = null;
         ctx.render_finished_semaphores[i] = null;
         ctx.in_flight_fences[i] = null;
-        ctx.global_ubos[i] = .{ .buffer = null, .memory = null, .size = 0 };
-        ctx.shadow_ubos[i] = .{ .buffer = null, .memory = null, .size = 0 };
-        ctx.ui_vbos[i] = .{ .buffer = null, .memory = null, .size = 0 };
+        ctx.global_ubos[i] = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
+        ctx.shadow_ubos[i] = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
+        ctx.ui_vbos[i] = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
         ctx.descriptor_sets[i] = null;
     }
-    ctx.model_ubo = .{ .buffer = null, .memory = null, .size = 0 };
+    ctx.model_ubo = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
 
     return rhi.RHI{
         .ptr = ctx,
