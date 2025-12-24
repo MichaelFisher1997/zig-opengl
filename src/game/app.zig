@@ -469,6 +469,7 @@ pub const App = struct {
                         self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, sun_dir, time_val, fog_color, fog_density, fog_enabled, sun_intensity_val, ambient_val, cp);
                         active_world.render(view_proj_cull, self.camera.position);
                     }
+
                     if (self.clouds) |*cl| if (self.atmosphere) |atmo| if (!self.is_vulkan) cl.render(self.camera.position, &view_proj_cull.data, atmo.sun_dir, atmo.sun_intensity, atmo.fog_color, atmo.fog_density);
                     if (debug_build and !self.is_vulkan and self.debug_state.shadows and self.debug_shader != null and self.shadow_map != null) {
                         self.debug_shader.?.use();
@@ -479,6 +480,7 @@ pub const App = struct {
                         c.glDrawArrays(c.GL_TRIANGLES, 0, 6);
                         c.glBindVertexArray().?(0);
                     }
+
                     if (self.ui) |*u| {
                         u.begin();
                         if (self.world_map) |*m| {
