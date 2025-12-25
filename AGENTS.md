@@ -4,15 +4,14 @@ This document provides essential instructions for agentic coding agents operatin
 
 ## Development Environment & Commands
 
-The project uses Nix for dependency management and the Zig build system.
+The project uses Nix for dependency management. **IMPORTANT**: All build and test commands MUST be wrapped in `nix develop --command` to ensure dependencies (SDL3, OpenGL, Vulkan) are available.
 
 ### Build & Run
 - **Build**: `nix develop --command zig build`
 - **Run (Default/OpenGL)**: `nix develop --command zig build run`
 - **Run (Vulkan)**: `nix develop --command zig build run -- --backend vulkan`
 - **Release Build**: `nix develop --command zig build -Doptimize=ReleaseFast`
-- **Clean**: `rm -rf zig-out/ .zig-cache/`
-- **Note on CI**: In GitHub Actions, the environment is pre-configured with Nix. You can run `zig build`, `nix build`, etc., directly without the `nix develop --command` prefix.
+- **Clean**: `nix develop --command rm -rf zig-out/ .zig-cache/`
 
 ### Testing
 - **Run All Tests**: `nix develop --command zig build test`
