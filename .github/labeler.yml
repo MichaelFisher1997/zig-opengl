@@ -1,0 +1,38 @@
+# Configuration for actions/labeler
+# Automatically labels PRs based on file paths
+
+engine:
+  - changed-files:
+      - any-glob-to-any-file: 'src/engine/**/*'
+
+world:
+  - changed-files:
+      - any-glob-to-any-file: 'src/world/**/*'
+
+game:
+  - changed-files:
+      - any-glob-to-any-file: 'src/game/**/*'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: '.github/**/*'
+
+shaders:
+  - changed-files:
+      - any-glob-to-any-file: 'assets/shaders/**/*'
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*.md'
+          - 'docs/**/*'
+          - '!assets/**/*.md'
+          - '!.github/**/*.md'
+
+build:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'build.zig'
+          - 'build.zig.zon'
+          - 'flake.nix'
+          - 'flake.lock'
