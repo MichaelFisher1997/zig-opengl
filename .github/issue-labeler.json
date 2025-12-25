@@ -1,0 +1,18 @@
+{
+  "bug": [
+    { "title": ["bug", "fix", "error", "crash", "broken"] },
+    { "body": ["bug", "fix", "error", "crash", "broken"] }
+  ],
+  "enhancement": [
+    { "title": ["feature", "enhancement", "improve", "optimize", "refactor"] },
+    { "body": ["feature", "enhancement", "improve", "optimize", "refactor"] }
+  ],
+  "documentation": [
+    { "title": ["doc", "readme", "wiki"] },
+    { "body": ["doc", "readme", "wiki"] }
+  ],
+  "question": [
+    { "title": ["?", "question", "how", "help"] },
+    { "body": ["?", "question", "how", "help"] }
+  ]
+}
