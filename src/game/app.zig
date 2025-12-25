@@ -191,7 +191,6 @@ const CloudState = struct {
     cloud_height: f32 = 160.0,
     cloud_thickness: f32 = 12.0,
     base_color: Vec3 = Vec3.init(1.0, 1.0, 1.0),
-    enabled: bool = true,
 
     pub fn update(self: *CloudState, delta_time: f32) void {
         const wind_dir_x: f32 = 1.0;
@@ -446,9 +445,6 @@ pub const App = struct {
 
             if (in_world or in_pause) {
                 if (in_world and self.input.isKeyPressed(.tab)) self.input.setMouseCapture(self.window_manager.window, !self.input.mouse_captured);
-                if (self.input.isKeyPressed(.c)) {
-                    self.clouds.enabled = !self.clouds.enabled;
-                }
                 if (self.input.isKeyPressed(.f)) {
                     self.settings.wireframe_enabled = !self.settings.wireframe_enabled;
                     self.rhi.setWireframe(self.settings.wireframe_enabled);
@@ -638,23 +634,22 @@ pub const App = struct {
                         active_world.render(view_proj_cull, self.camera.position);
                     }
 
-                    if (self.clouds.enabled) {
-                        const p = self.clouds.getShadowParams();
-                        self.rhi.drawClouds(.{
-                            .cam_pos = self.camera.position,
-                            .view_proj = view_proj_cull,
-                            .sun_dir = self.atmosphere.sun_dir,
-                            .sun_intensity = self.atmosphere.sun_intensity,
-                            .fog_color = self.atmosphere.fog_color,
-                            .fog_density = self.atmosphere.fog_density,
-                            .wind_offset_x = p.wind_offset_x,
-                            .wind_offset_z = p.wind_offset_z,
-                            .cloud_scale = p.cloud_scale,
-                            .cloud_coverage = p.cloud_coverage,
-                            .cloud_height = p.cloud_height,
-                            .base_color = self.clouds.base_color,
-                        });
-                    }
+                    const p = self.clouds.getShadowParams();
+                    self.rhi.drawClouds(.{
+                        .cam_pos = self.camera.position,
+                        .view_proj = view_proj_cull,
+                        .sun_dir = self.atmosphere.sun_dir,
+                        .sun_intensity = self.atmosphere.sun_intensity,
+                        .fog_color = self.atmosphere.fog_color,
+                        .fog_density = self.atmosphere.fog_density,
+                        .wind_offset_x = p.wind_offset_x,
+                        .wind_offset_z = p.wind_offset_z,
+                        .cloud_scale = p.cloud_scale,
+                        .cloud_coverage = p.cloud_coverage,
+                        .cloud_height = p.cloud_height,
+                        .base_color = self.clouds.base_color,
+                    });
+
                     if (debug_build and !self.is_vulkan and self.debug_state.shadows and self.shadow_map != null) {
                         self.rhi.drawDebugShadowMap(self.debug_state.cascade_idx, self.shadow_map.?.depth_maps[self.debug_state.cascade_idx].handle);
                     }
