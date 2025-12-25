@@ -37,7 +37,7 @@ jobs:
         cp -L result/bin/zig-triangle dist/zig-voxel-engine-linux
         
     - name: Upload Artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: zig-voxel-engine-${{ matrix.os }}
         path: dist/
