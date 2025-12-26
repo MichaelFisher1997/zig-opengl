@@ -637,7 +637,7 @@ fn beginMainPass(ctx_ptr: *anyopaque) void {
     c.glEnable(c.GL_DEPTH_TEST);
     c.glDepthMask(c.GL_TRUE);
     c.glDepthFunc(c.GL_LESS);
-    
+
     // Disable culling for now to ensure all voxel faces are visible regardless of winding
     c.glDisable(c.GL_CULL_FACE);
 
@@ -699,7 +699,6 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
     _ = cam_pos;
     _ = time;
 }
-
 
 fn setTextureUniforms(ctx_ptr: *anyopaque, texture_enabled: bool, shadow_map_handles: [3]rhi.TextureHandle) void {
     const ctx: *OpenGLContext = @ptrCast(@alignCast(ctx_ptr));
