@@ -4,20 +4,33 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable(.{
-        .name = "zig-triangle",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    const zig_math = b.createModule(.{
+        .root_source_file = b.path("libs/zig-math/math.zig"),
+        .target = target,
+        .optimize = optimize,
     });
 
-    // 1. Link C Standard Library (Required for SDL/GL)
+    const zig_noise = b.createModule(.{
+        .root_source_file = b.path("libs/zig-noise/noise.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const root_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    root_module.addImport("zig-math", zig_math);
+    root_module.addImport("zig-noise", zig_noise);
+
+    const exe = b.addExecutable(.{
+        .name = "zig-triangle",
+        .root_module = root_module,
+    });
+
     exe.linkLibC();
 
-    // 2. Link System Libraries (Nix provides these paths)
-    // 'pkg-config' will automatically find the flags
     exe.linkSystemLibrary("sdl3");
     exe.linkSystemLibrary("glew");
     exe.linkSystemLibrary("gl");
@@ -35,12 +48,16 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
+    const test_root_module = b.createModule(.{
+        .root_source_file = b.path("src/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_root_module.addImport("zig-math", zig_math);
+    test_root_module.addImport("zig-noise", zig_noise);
+
     const exe_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tests.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = test_root_module,
     });
     exe_tests.linkLibC();
 
