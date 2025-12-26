@@ -10,12 +10,11 @@
 const std = @import("std");
 const testing = std.testing;
 
-// Math modules
-const Vec3 = @import("engine/math/vec3.zig").Vec3;
-const Mat4 = @import("engine/math/mat4.zig").Mat4;
-const AABB = @import("engine/math/aabb.zig").AABB;
-const Frustum = @import("engine/math/frustum.zig").Frustum;
-const Plane = @import("engine/math/frustum.zig").Plane;
+const Vec3 = @import("zig-math").Vec3;
+const Mat4 = @import("zig-math").Mat4;
+const AABB = @import("zig-math").AABB;
+const Frustum = @import("zig-math").Frustum;
+const Plane = @import("zig-math").Plane;
 
 // World modules
 const Chunk = @import("world/chunk.zig").Chunk;
@@ -28,7 +27,7 @@ const worldToLocal = @import("world/chunk.zig").worldToLocal;
 const BlockType = @import("world/block.zig").BlockType;
 
 // Worldgen modules
-const Noise = @import("world/worldgen/noise.zig").Noise;
+const Noise = @import("zig-noise").Noise;
 
 // ============================================================================
 // Vec3 Tests
