@@ -26,10 +26,11 @@ void main() {
     vNormal = aNormal;
     vTexCoord = aTexCoord;
     vTileID = int(aTileID);
-    vDistance = length(aPos);
     vSkyLight = aSkyLight;
     vBlockLight = aBlockLight;
     
     vFragPosWorld = (uModel * vec4(aPos, 1.0)).xyz;
+    vDistance = length(vFragPosWorld);
     vViewDepth = clipPos.w;
 }
+

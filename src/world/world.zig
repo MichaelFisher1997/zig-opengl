@@ -462,6 +462,7 @@ pub const World = struct {
                 if (self.chunks.get(.{ .x = cx, .z = cz })) |data| {
 
 
+
                     if (data.chunk.state == .renderable) {
                         self.visible_chunks.append(self.allocator, data) catch {};
                     }
