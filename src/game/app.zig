@@ -25,6 +25,7 @@ const rhi_opengl = @import("../engine/graphics/rhi_opengl.zig");
 const rhi_vulkan = @import("../engine/graphics/rhi_vulkan.zig");
 const Shader = @import("../engine/graphics/shader.zig").Shader;
 const TextureAtlas = @import("../engine/graphics/texture_atlas.zig").TextureAtlas;
+const RenderGraph = @import("../engine/graphics/render_graph.zig").RenderGraph;
 
 const AppState = @import("state.zig").AppState;
 const Settings = @import("state.zig").Settings;
@@ -230,6 +231,7 @@ pub const App = struct {
     is_vulkan: bool,
     shader: rhi_pkg.ShaderHandle,
     atlas: TextureAtlas,
+    render_graph: RenderGraph,
     atmosphere: AtmosphereState,
     clouds: CloudState,
     shadow_map: ?ShadowMap,
@@ -330,6 +332,7 @@ pub const App = struct {
         var atmosphere = AtmosphereState{};
         atmosphere.setTimeOfDay(0.25);
         const clouds = CloudState{};
+        const render_graph = RenderGraph.init(allocator);
         const shadow_map = if (!actual_is_vulkan) blk: {
             const sm = ShadowMap.init(rhi, settings.shadow_resolution) catch |err| {
                 log.log.warn("ShadowMap initialization failed: {}. Shadows disabled.", .{err});
@@ -356,6 +359,7 @@ pub const App = struct {
             .is_vulkan = actual_is_vulkan,
             .shader = shader,
             .atlas = atlas,
+            .render_graph = render_graph,
             .atmosphere = atmosphere,
             .clouds = clouds,
             .shadow_map = shadow_map,
@@ -534,6 +538,7 @@ pub const App = struct {
                             sm.end(self.input.window_width, self.input.window_height);
                         }
                     }
+                    self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect);
                     self.rhi.beginMainPass();
                     self.rhi.drawSky(.{
                         .cam_pos = self.camera.position,
