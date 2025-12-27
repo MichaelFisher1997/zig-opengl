@@ -64,4 +64,25 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     const run_exe_tests = b.addRunArtifact(exe_tests);
     test_step.dependOn(&run_exe_tests.step);
+
+    const integration_root_module = b.createModule(.{
+        .root_source_file = b.path("src/integration_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    integration_root_module.addImport("zig-math", zig_math);
+    integration_root_module.addImport("zig-noise", zig_noise);
+
+    const exe_integration_tests = b.addTest(.{
+        .root_module = integration_root_module,
+    });
+    exe_integration_tests.linkLibC();
+    exe_integration_tests.linkSystemLibrary("sdl3");
+    exe_integration_tests.linkSystemLibrary("glew");
+    exe_integration_tests.linkSystemLibrary("gl");
+    exe_integration_tests.linkSystemLibrary("vulkan");
+
+    const test_integration_step = b.step("test-integration", "Run integration smoke test");
+    const run_integration_tests = b.addRunArtifact(exe_integration_tests);
+    test_integration_step.dependOn(&run_integration_tests.step);
 }
