@@ -18,6 +18,8 @@ const Plane = @import("zig-math").Plane;
 
 // World modules
 const Chunk = @import("world/chunk.zig").Chunk;
+const ChunkMesh = @import("world/chunk_mesh.zig").ChunkMesh;
+const NeighborChunks = @import("world/chunk_mesh.zig").NeighborChunks;
 const PackedLight = @import("world/chunk.zig").PackedLight;
 const CHUNK_SIZE_X = @import("world/chunk.zig").CHUNK_SIZE_X;
 const CHUNK_SIZE_Y = @import("world/chunk.zig").CHUNK_SIZE_Y;
@@ -857,4 +859,64 @@ test "WorldGen golden output for known seed at origin" {
     const surface_height = chunk.getHighestSolidY(8, 8);
     try testing.expect(surface_height > 0);
     try testing.expect(surface_height < CHUNK_SIZE_Y);
+}
+
+// ============================================================================
+// Chunk Meshing Tests
+// ============================================================================
+
+test "single block generates 6 faces" {
+    var chunk = Chunk.init(0, 0);
+    chunk.setBlock(8, 64, 8, .stone);
+
+    var mesh = ChunkMesh.init(testing.allocator);
+    defer mesh.deinitWithoutRHI();
+    try mesh.buildWithNeighbors(&chunk, .empty);
+
+    var total_verts: u32 = 0;
+    for (mesh.pending_solid) |p| {
+        if (p) |v| total_verts += @intCast(v.len);
+    }
+    for (mesh.pending_fluid) |p| {
+        if (p) |v| total_verts += @intCast(v.len);
+    }
+    try testing.expectEqual(@as(u32, 36), total_verts);
+}
+
+test "adjacent blocks share face (no internal faces)" {
+    var chunk = Chunk.init(0, 0);
+    chunk.setBlock(8, 64, 8, .stone);
+    chunk.setBlock(9, 64, 8, .stone);
+
+    var mesh = ChunkMesh.init(testing.allocator);
+    defer mesh.deinitWithoutRHI();
+    try mesh.buildWithNeighbors(&chunk, .empty);
+
+    var total_verts: u32 = 0;
+    for (mesh.pending_solid) |p| {
+        if (p) |v| total_verts += @intCast(v.len);
+    }
+    for (mesh.pending_fluid) |p| {
+        if (p) |v| total_verts += @intCast(v.len);
+    }
+    try testing.expect(total_verts < 72);
+}
+
+test "adjacent transparent blocks share face" {
+    var chunk = Chunk.init(0, 0);
+    chunk.setBlock(8, 64, 8, .water);
+    chunk.setBlock(9, 64, 8, .water);
+
+    var mesh = ChunkMesh.init(testing.allocator);
+    defer mesh.deinitWithoutRHI();
+    try mesh.buildWithNeighbors(&chunk, .empty);
+
+    var total_verts: u32 = 0;
+    for (mesh.pending_solid) |p| {
+        if (p) |v| total_verts += @intCast(v.len);
+    }
+    for (mesh.pending_fluid) |p| {
+        if (p) |v| total_verts += @intCast(v.len);
+    }
+    try testing.expect(total_verts < 72);
 }
