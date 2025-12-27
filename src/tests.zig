@@ -25,6 +25,7 @@ const CHUNK_SIZE_Z = @import("world/chunk.zig").CHUNK_SIZE_Z;
 const worldToChunk = @import("world/chunk.zig").worldToChunk;
 const worldToLocal = @import("world/chunk.zig").worldToLocal;
 const BlockType = @import("world/block.zig").BlockType;
+const BiomeId = @import("world/worldgen/biome.zig").BiomeId;
 
 // Worldgen modules
 const Noise = @import("zig-noise").Noise;
@@ -699,4 +700,161 @@ test "Noise getHeight returns normalized value" {
     const noise = Noise.init(42);
     const height = noise.getHeight(10.0, 20.0, 64.0);
     try testing.expect(height >= 0.0 and height <= 1.0);
+}
+
+// ============================================================================
+// WorldGen Determinism Tests
+// ============================================================================
+
+const TerrainGenerator = @import("world/worldgen/generator.zig").TerrainGenerator;
+
+test "WorldGen same seed produces identical blocks at origin" {
+    const allocator = testing.allocator;
+
+    const gen1 = TerrainGenerator.init(12345, allocator);
+    const gen2 = TerrainGenerator.init(12345, allocator);
+
+    var chunk1 = Chunk.init(0, 0);
+    var chunk2 = Chunk.init(0, 0);
+
+    gen1.generate(&chunk1, null);
+    gen2.generate(&chunk2, null);
+
+    try testing.expectEqualSlices(BlockType, &chunk1.blocks, &chunk2.blocks);
+}
+
+test "WorldGen same seed produces identical biomes at origin" {
+    const allocator = testing.allocator;
+
+    const gen1 = TerrainGenerator.init(12345, allocator);
+    const gen2 = TerrainGenerator.init(12345, allocator);
+
+    var chunk1 = Chunk.init(0, 0);
+    var chunk2 = Chunk.init(0, 0);
+
+    gen1.generate(&chunk1, null);
+    gen2.generate(&chunk2, null);
+
+    try testing.expectEqualSlices(BiomeId, &chunk1.biomes, &chunk2.biomes);
+}
+
+test "WorldGen same seed produces identical blocks at different positions" {
+    const allocator = testing.allocator;
+
+    const seed: u64 = 54321;
+
+    var gen1 = TerrainGenerator.init(seed, allocator);
+    var chunk1a = Chunk.init(0, 0);
+    var chunk1b = Chunk.init(1, 0);
+    var chunk1c = Chunk.init(0, 1);
+
+    gen1.generate(&chunk1a, null);
+    gen1.generate(&chunk1b, null);
+    gen1.generate(&chunk1c, null);
+
+    var gen2 = TerrainGenerator.init(seed, allocator);
+    var chunk2a = Chunk.init(0, 0);
+    var chunk2b = Chunk.init(1, 0);
+    var chunk2c = Chunk.init(0, 1);
+
+    gen2.generate(&chunk2a, null);
+    gen2.generate(&chunk2b, null);
+    gen2.generate(&chunk2c, null);
+
+    try testing.expectEqualSlices(BlockType, &chunk1a.blocks, &chunk2a.blocks);
+    try testing.expectEqualSlices(BlockType, &chunk1b.blocks, &chunk2b.blocks);
+    try testing.expectEqualSlices(BlockType, &chunk1c.blocks, &chunk2c.blocks);
+
+    try testing.expect(!std.mem.eql(BlockType, &chunk1a.blocks, &chunk1b.blocks));
+    try testing.expect(!std.mem.eql(BlockType, &chunk1a.blocks, &chunk1c.blocks));
+}
+
+test "WorldGen different seeds produce different blocks" {
+    const allocator = testing.allocator;
+
+    const gen1 = TerrainGenerator.init(11111, allocator);
+    const gen2 = TerrainGenerator.init(99999, allocator);
+
+    var chunk1 = Chunk.init(0, 0);
+    var chunk2 = Chunk.init(0, 0);
+
+    gen1.generate(&chunk1, null);
+    gen2.generate(&chunk2, null);
+
+    const all_same = std.mem.eql(BlockType, &chunk1.blocks, &chunk2.blocks);
+    try testing.expect(!all_same);
+}
+
+test "WorldGen different seeds produce different biomes" {
+    const allocator = testing.allocator;
+
+    const gen1 = TerrainGenerator.init(11111, allocator);
+    const gen2 = TerrainGenerator.init(99999, allocator);
+
+    var chunk1 = Chunk.init(0, 0);
+    var chunk2 = Chunk.init(0, 0);
+
+    gen1.generate(&chunk1, null);
+    gen2.generate(&chunk2, null);
+
+    const all_same = std.mem.eql(BiomeId, &chunk1.biomes, &chunk2.biomes);
+    try testing.expect(!all_same);
+}
+
+test "WorldGen determinism across multiple chunks with same seed" {
+    const allocator = testing.allocator;
+    const seed: u64 = 987654321;
+
+    const gens = [_]TerrainGenerator{
+        TerrainGenerator.init(seed, allocator),
+        TerrainGenerator.init(seed, allocator),
+        TerrainGenerator.init(seed, allocator),
+    };
+
+    var chunks1 = [_]Chunk{
+        Chunk.init(0, 0),
+        Chunk.init(5, -3),
+        Chunk.init(-7, 12),
+    };
+
+    var chunks2 = [_]Chunk{
+        Chunk.init(0, 0),
+        Chunk.init(5, -3),
+        Chunk.init(-7, 12),
+    };
+
+    for (gens, 0..) |gen, i| {
+        gen.generate(&chunks1[i], null);
+    }
+
+    for (gens, 0..) |gen, i| {
+        gen.generate(&chunks2[i], null);
+    }
+
+    for (0..3) |i| {
+        try testing.expectEqualSlices(BlockType, &chunks1[i].blocks, &chunks2[i].blocks);
+        try testing.expectEqualSlices(BiomeId, &chunks1[i].biomes, &chunks2[i].biomes);
+    }
+}
+
+test "WorldGen golden output for known seed at origin" {
+    const allocator = testing.allocator;
+
+    const gen = TerrainGenerator.init(42, allocator);
+    var chunk = Chunk.init(0, 0);
+
+    gen.generate(&chunk, null);
+
+    try testing.expect(chunk.generated);
+    try testing.expect(chunk.dirty);
+
+    const top_block = chunk.getBlock(8, 64, 8);
+    try testing.expect(top_block.isSolid());
+
+    const bedrock_present = chunk.getBlock(0, 0, 0) == .bedrock;
+    try testing.expect(bedrock_present);
+
+    const surface_height = chunk.getHighestSolidY(8, 8);
+    try testing.expect(surface_height > 0);
+    try testing.expect(surface_height < CHUNK_SIZE_Y);
 }
