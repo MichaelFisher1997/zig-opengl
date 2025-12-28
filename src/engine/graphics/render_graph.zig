@@ -48,6 +48,7 @@ pub const RenderGraph = struct {
         sky_params: rhi_pkg.SkyParams,
         cloud_params: rhi_pkg.CloudParams,
         main_shader: rhi_pkg.ShaderHandle,
+        atlas_handle: rhi_pkg.TextureHandle,
     ) void {
         var main_pass_started = false;
         for (self.passes) |pass| {
@@ -61,7 +62,7 @@ pub const RenderGraph = struct {
                     }
                 },
             }
-            self.executePass(pass, rhi, world, camera, shadow_map, is_vulkan, aspect, sky_params, cloud_params, main_shader);
+            self.executePass(pass, rhi, world, camera, shadow_map, is_vulkan, aspect, sky_params, cloud_params, main_shader, atlas_handle);
         }
     }
 
@@ -77,13 +78,14 @@ pub const RenderGraph = struct {
         sky_params: rhi_pkg.SkyParams,
         cloud_params: rhi_pkg.CloudParams,
         main_shader: rhi_pkg.ShaderHandle,
+        atlas_handle: rhi_pkg.TextureHandle,
     ) void {
         _ = self;
         switch (pass) {
             .shadow_cascade_0 => if (is_vulkan) RenderGraph.executeShadowPass(0, rhi, world, camera, shadow_map, is_vulkan, aspect, sky_params.sun_dir),
             .shadow_cascade_1 => if (is_vulkan) RenderGraph.executeShadowPass(1, rhi, world, camera, shadow_map, is_vulkan, aspect, sky_params.sun_dir),
             .shadow_cascade_2 => if (is_vulkan) RenderGraph.executeShadowPass(2, rhi, world, camera, shadow_map, is_vulkan, aspect, sky_params.sun_dir),
-            .main_opaque => RenderGraph.executeMainPass(rhi, world, camera, is_vulkan, aspect, main_shader),
+            .main_opaque => RenderGraph.executeMainPass(rhi, world, camera, is_vulkan, aspect, main_shader, atlas_handle),
             .main_transparent => {},
             .sky => RenderGraph.executeSkyPass(rhi, camera, is_vulkan, aspect, sky_params),
             .clouds => RenderGraph.executeCloudsPass(rhi, camera, is_vulkan, aspect, cloud_params),
@@ -141,9 +143,13 @@ pub const RenderGraph = struct {
         rhi.endShadowPass();
     }
 
-    fn executeMainPass(rhi: RHI, world: *World, camera: *Camera, is_vulkan: bool, aspect: f32, shader: rhi_pkg.ShaderHandle) void {
-        // rhi.beginMainPass() is now called in execute() to prevent clearing sky
-        if (!is_vulkan and shader != 0) rhi.bindShader(shader);
+    fn executeMainPass(rhi: RHI, world: *World, camera: *Camera, is_vulkan: bool, aspect: f32, shader: rhi_pkg.ShaderHandle, atlas_handle: rhi_pkg.TextureHandle) void {
+        rhi.beginMainPass();
+        if (!is_vulkan and shader != 0) {
+            rhi.bindShader(shader);
+            // Re-bind atlas for OpenGL to ensure it's on unit 0
+            if (atlas_handle != 0) rhi.bindTexture(atlas_handle, 0);
+        }
         
         const view_proj = if (is_vulkan)
             Mat4.perspectiveReverseZ(camera.fov, aspect, camera.near, camera.far).multiply(camera.getViewMatrixOriginCentered())
@@ -151,6 +157,8 @@ pub const RenderGraph = struct {
             camera.getViewProjectionMatrixOriginCentered(aspect);
         world.render(view_proj, camera.position);
     }
+
+
 
     fn executeSkyPass(rhi: RHI, camera: *Camera, is_vulkan: bool, aspect: f32, params: rhi_pkg.SkyParams) void {
         _ = is_vulkan;

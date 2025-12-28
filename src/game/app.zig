@@ -587,7 +587,7 @@ pub const App = struct {
                         }
                     }
 
-                    self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect, sky_params, cloud_params, self.shader);
+                    self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect, sky_params, cloud_params, self.shader, self.atlas.texture.handle);
 
                     if (debug_build and self.debug_state.shadows and self.shadow_map != null) {
                         const cascade_idx = self.debug_state.cascade_idx;
@@ -875,7 +875,7 @@ pub const App = struct {
                         }
                     }
 
-                    self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect, sky_params, cloud_params, self.shader);
+                    self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect, sky_params, cloud_params, self.shader, self.atlas.texture.handle);
 
                     if (debug_build and self.debug_state.shadows and self.shadow_map != null) {
                         const cascade_idx = self.debug_state.cascade_idx;
