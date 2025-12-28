@@ -25,8 +25,8 @@ pub const RenderGraph = struct {
     pub fn init(allocator: std.mem.Allocator) RenderGraph {
         _ = allocator;
         const default_passes = &[_]RenderPass{
-            .main_opaque,
             .sky,
+            .main_opaque,
             .clouds,
         };
         return .{
