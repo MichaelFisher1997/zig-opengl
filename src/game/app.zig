@@ -567,6 +567,25 @@ pub const App = struct {
                         };
                     };
 
+                    if (self.shader != 0) {
+                        self.rhi.bindShader(self.shader);
+                        self.atlas.bind(0);
+                        if (self.shadow_map) |*sm| {
+                            var shadow_map_handles: [3]rhi_pkg.TextureHandle = undefined;
+                            for (0..3) |i| {
+                                shadow_map_handles[i] = sm.depth_maps[i].handle;
+                            }
+                            self.rhi.setTextureUniforms(self.settings.textures_enabled, shadow_map_handles);
+                            self.rhi.updateShadowUniforms(.{
+                                .light_space_matrices = sm.light_space_matrices,
+                                .cascade_splits = sm.cascade_splits,
+                                .shadow_texel_sizes = sm.texel_sizes,
+                            });
+                        } else {
+                            self.rhi.setTextureUniforms(self.settings.textures_enabled, [_]rhi_pkg.TextureHandle{ 0, 0, 0 });
+                        }
+                    }
+
                     self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
 
                     self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect, sky_params, cloud_params);
@@ -835,6 +854,25 @@ pub const App = struct {
                             .base_color = self.clouds.base_color,
                         };
                     };
+
+                    if (self.shader != 0) {
+                        self.rhi.bindShader(self.shader);
+                        self.atlas.bind(0);
+                        if (self.shadow_map) |*sm| {
+                            var shadow_map_handles: [3]rhi_pkg.TextureHandle = undefined;
+                            for (0..3) |i| {
+                                shadow_map_handles[i] = sm.depth_maps[i].handle;
+                            }
+                            self.rhi.setTextureUniforms(self.settings.textures_enabled, shadow_map_handles);
+                            self.rhi.updateShadowUniforms(.{
+                                .light_space_matrices = sm.light_space_matrices,
+                                .cascade_splits = sm.cascade_splits,
+                                .shadow_texel_sizes = sm.texel_sizes,
+                            });
+                        } else {
+                            self.rhi.setTextureUniforms(self.settings.textures_enabled, [_]rhi_pkg.TextureHandle{ 0, 0, 0 });
+                        }
+                    }
 
                     self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
 
