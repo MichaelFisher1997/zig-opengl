@@ -2,6 +2,7 @@ const std = @import("std");
 const Camera = @import("camera.zig").Camera;
 const World = @import("../../world/world.zig").World;
 const RHI = @import("rhi.zig").RHI;
+const rhi_pkg = @import("rhi.zig");
 const Mat4 = @import("../math/mat4.zig").Mat4;
 const Vec3 = @import("../math/vec3.zig").Vec3;
 const ShadowMap = @import("shadows.zig").ShadowMap;
@@ -24,24 +25,22 @@ pub const RenderGraph = struct {
     pub fn init(allocator: std.mem.Allocator) RenderGraph {
         _ = allocator;
         const default_passes = &[_]RenderPass{
-            .shadow_cascade_0,
-            .shadow_cascade_1,
-            .shadow_cascade_2,
             .main_opaque,
-            .ui,
+            .sky,
+            .clouds,
         };
         return .{
             .passes = default_passes,
         };
     }
 
-    pub fn execute(self: *const RenderGraph, rhi: RHI, world: *World, camera: *Camera, shadow_map: ?ShadowMap, is_vulkan: bool, aspect: f32) void {
+    pub fn execute(self: *const RenderGraph, rhi: RHI, world: *World, camera: *Camera, shadow_map: ?ShadowMap, is_vulkan: bool, aspect: f32, sky_params: rhi_pkg.SkyParams, cloud_params: rhi_pkg.CloudParams) void {
         for (self.passes) |pass| {
-            self.executePass(pass, rhi, world, camera, shadow_map, is_vulkan, aspect);
+            self.executePass(pass, rhi, world, camera, shadow_map, is_vulkan, aspect, sky_params, cloud_params);
         }
     }
 
-    fn executePass(self: *const RenderGraph, pass: RenderPass, rhi: RHI, world: *World, camera: *Camera, shadow_map: ?ShadowMap, is_vulkan: bool, aspect: f32) void {
+    fn executePass(self: *const RenderGraph, pass: RenderPass, rhi: RHI, world: *World, camera: *Camera, shadow_map: ?ShadowMap, is_vulkan: bool, aspect: f32, sky_params: rhi_pkg.SkyParams, cloud_params: rhi_pkg.CloudParams) void {
         _ = self;
         switch (pass) {
             .shadow_cascade_0 => RenderGraph.executeShadowPass(0, rhi, world, camera, shadow_map, is_vulkan, aspect),
@@ -49,8 +48,8 @@ pub const RenderGraph = struct {
             .shadow_cascade_2 => RenderGraph.executeShadowPass(2, rhi, world, camera, shadow_map, is_vulkan, aspect),
             .main_opaque => RenderGraph.executeMainPass(rhi, world, camera, is_vulkan, aspect),
             .main_transparent => {},
-            .sky => RenderGraph.executeSkyPass(rhi, camera, is_vulkan, aspect),
-            .clouds => RenderGraph.executeCloudsPass(rhi, camera, is_vulkan, aspect),
+            .sky => RenderGraph.executeSkyPass(rhi, camera, is_vulkan, aspect, sky_params),
+            .clouds => RenderGraph.executeCloudsPass(rhi, camera, is_vulkan, aspect, cloud_params),
             .ui => {},
             .post_process => {},
         }
@@ -97,43 +96,24 @@ pub const RenderGraph = struct {
         world.render(view_proj, camera.position);
     }
 
-    fn executeSkyPass(rhi: RHI, camera: *Camera, is_vulkan: bool, aspect: f32) void {
+    fn executeSkyPass(rhi: RHI, camera: *Camera, is_vulkan: bool, aspect: f32, params: rhi_pkg.SkyParams) void {
         _ = is_vulkan;
-        rhi.drawSky(.{
-            .cam_pos = camera.position,
-            .cam_forward = camera.forward,
-            .cam_right = camera.right,
-            .cam_up = camera.up,
-            .aspect = aspect,
-            .tan_half_fov = @tan(camera.fov / 2.0),
-            .sun_dir = Vec3.init(0, 1, 0),
-            .sky_color = Vec3.init(0.4, 0.65, 1.0),
-            .horizon_color = Vec3.init(0.7, 0.8, 0.95),
-            .sun_intensity = 1.0,
-            .moon_intensity = 0.0,
-            .time = 0.25,
-        });
+        _ = aspect;
+        _ = camera;
+        rhi.drawSky(params);
     }
 
-    fn executeCloudsPass(rhi: RHI, camera: *Camera, is_vulkan: bool, aspect: f32) void {
+    fn executeCloudsPass(rhi: RHI, camera: *Camera, is_vulkan: bool, aspect: f32, params: rhi_pkg.CloudParams) void {
         // Use reverse-Z projection for Vulkan to match the depth buffer setup
         const view_proj = if (is_vulkan)
             Mat4.perspectiveReverseZ(camera.fov, aspect, camera.near, camera.far).multiply(camera.getViewMatrixOriginCentered())
         else
             camera.getViewProjectionMatrixOriginCentered(aspect);
-        rhi.drawClouds(.{
-            .cam_pos = camera.position,
-            .view_proj = view_proj,
-            .sun_dir = Vec3.init(0, 1, 0),
-            .sun_intensity = 1.0,
-            .fog_color = Vec3.init(0.6, 0.75, 0.95),
-            .fog_density = 0.0015,
-            .wind_offset_x = 0.0,
-            .wind_offset_z = 0.0,
-            .cloud_scale = 1.0 / 64.0,
-            .cloud_coverage = 0.5,
-            .cloud_height = 160.0,
-            .base_color = Vec3.init(1.0, 1.0, 1.0),
-        });
+        
+        var final_params = params;
+        final_params.view_proj = view_proj;
+        final_params.cam_pos = camera.position;
+        
+        rhi.drawClouds(final_params);
     }
 };

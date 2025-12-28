@@ -3,7 +3,6 @@
 layout(location = 0) in vec2 aPos;
 
 layout(location = 0) out vec3 vWorldPos;
-layout(location = 1) out float vDistance;
 
 layout(push_constant) uniform CloudPC {
     mat4 view_proj;
@@ -11,7 +10,6 @@ layout(push_constant) uniform CloudPC {
     vec4 cloud_params;    // x = coverage, y = scale, z = wind_offset_x, w = wind_offset_z
     vec4 sun_params;      // xyz = sun_dir, w = sun_intensity
     vec4 fog_params;      // xyz = fog_color, w = fog_density
-    vec4 base_color;      // xyz = base_color, w = unused
 } pc;
 
 void main() {
@@ -22,7 +20,6 @@ void main() {
         aPos.y
     );
     vWorldPos = vec3(aPos.x + pc.camera_pos.x, cloudHeight, aPos.y + pc.camera_pos.z);
-    vDistance = length(relPos);
     gl_Position = pc.view_proj * vec4(relPos, 1.0);
     // Flip Y for Vulkan
     gl_Position.y = -gl_Position.y;

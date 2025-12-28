@@ -96,6 +96,10 @@ pub fn build(b: *std.Build) void {
     const validate_vulkan_ui_frag = b.addSystemCommand(&.{"glslangValidator", "-V", "assets/shaders/vulkan/ui.frag"});
     const validate_vulkan_ui_tex_vert = b.addSystemCommand(&.{"glslangValidator", "-V", "assets/shaders/vulkan/ui_tex.vert"});
     const validate_vulkan_ui_tex_frag = b.addSystemCommand(&.{"glslangValidator", "-V", "assets/shaders/vulkan/ui_tex.frag"});
+    const validate_vulkan_cloud_vert = b.addSystemCommand(&.{"glslangValidator", "-V", "assets/shaders/vulkan/cloud.vert"});
+    const validate_vulkan_cloud_frag = b.addSystemCommand(&.{"glslangValidator", "-V", "assets/shaders/vulkan/cloud.frag"});
+    const validate_vulkan_debug_shadow_vert = b.addSystemCommand(&.{"glslangValidator", "-V", "assets/shaders/vulkan/debug_shadow.vert"});
+    const validate_vulkan_debug_shadow_frag = b.addSystemCommand(&.{"glslangValidator", "-V", "assets/shaders/vulkan/debug_shadow.frag"});
 
     test_step.dependOn(&validate_vulkan_terrain_vert.step);
     test_step.dependOn(&validate_vulkan_terrain_frag.step);
@@ -107,5 +111,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&validate_vulkan_ui_frag.step);
     test_step.dependOn(&validate_vulkan_ui_tex_vert.step);
     test_step.dependOn(&validate_vulkan_ui_tex_frag.step);
+    test_step.dependOn(&validate_vulkan_cloud_vert.step);
+    test_step.dependOn(&validate_vulkan_cloud_frag.step);
+    test_step.dependOn(&validate_vulkan_debug_shadow_vert.step);
+    test_step.dependOn(&validate_vulkan_debug_shadow_frag.step);
 
 }

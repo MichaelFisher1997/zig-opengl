@@ -1,7 +1,6 @@
 #version 450
 
 layout(location = 0) in vec3 vWorldPos;
-layout(location = 1) in float vDistance;
 
 layout(location = 0) out vec4 FragColor;
 
@@ -11,7 +10,6 @@ layout(push_constant) uniform CloudPC {
     vec4 cloud_params;    // x = coverage, y = scale, z = wind_offset_x, w = wind_offset_z
     vec4 sun_params;      // xyz = sun_dir, w = sun_intensity
     vec4 fog_params;      // xyz = fog_color, w = fog_density
-    vec4 base_color;      // xyz = base_color, w = unused
 } pc;
 
 float hash(vec2 p) {
@@ -53,7 +51,7 @@ void main() {
     float uSunIntensity = pc.sun_params.w;
     vec3 uFogColor = pc.fog_params.xyz;
     float uFogDensity = pc.fog_params.w;
-    vec3 uBaseColor = pc.base_color.xyz;
+    vec3 uBaseColor = vec3(1.0, 1.0, 1.0); // Default to white
     float uCloudHeight = pc.camera_pos.w;
     vec3 uCameraPos = pc.camera_pos.xyz;
 
@@ -70,6 +68,7 @@ void main() {
     float lightFactor = clamp(uSunDir.y, 0.0, 1.0);
     cloudColor *= (0.7 + 0.3 * lightFactor);
 
+    float vDistance = length(vWorldPos - uCameraPos);
     float fogFactor = 1.0 - exp(-vDistance * uFogDensity * 0.4);
     cloudColor = mix(cloudColor, uFogColor, fogFactor);
 

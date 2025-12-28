@@ -1517,11 +1517,11 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
     cloud_vertex_input_info.vertexAttributeDescriptionCount = 1;
     cloud_vertex_input_info.pVertexAttributeDescriptions = &cloud_attribute_descriptions[0];
 
-    // Cloud push constants: mat4 + 5*vec4 = 64 + 80 = 144 bytes
+    // Cloud push constants: mat4 + 4*vec4 = 64 + 64 = 128 bytes
     var cloud_push_constant_range = std.mem.zeroes(c.VkPushConstantRange);
     cloud_push_constant_range.stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT;
     cloud_push_constant_range.offset = 0;
-    cloud_push_constant_range.size = 144;
+    cloud_push_constant_range.size = 128;
 
     var cloud_pipeline_layout_info = std.mem.zeroes(c.VkPipelineLayoutCreateInfo);
     cloud_pipeline_layout_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -2424,14 +2424,13 @@ fn drawClouds(ctx_ptr: *anyopaque, params: rhi.CloudParams) void {
     // Bind cloud pipeline
     c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.cloud_pipeline);
 
-    // CloudPushConstants: mat4 view_proj + 5 vec4s = 144 bytes
+    // CloudPushConstants: mat4 view_proj + 4 vec4s = 128 bytes
     const CloudPushConstants = extern struct {
         view_proj: [4][4]f32,
         camera_pos: [4]f32, // xyz = camera position, w = cloud_height
         cloud_params: [4]f32, // x = coverage, y = scale, z = wind_offset_x, w = wind_offset_z
         sun_params: [4]f32, // xyz = sun_dir, w = sun_intensity
         fog_params: [4]f32, // xyz = fog_color, w = fog_density
-        base_color: [4]f32, // xyz = base_color, w = unused
     };
 
     const pc = CloudPushConstants{
@@ -2440,7 +2439,6 @@ fn drawClouds(ctx_ptr: *anyopaque, params: rhi.CloudParams) void {
         .cloud_params = .{ params.cloud_coverage, params.cloud_scale, params.wind_offset_x, params.wind_offset_z },
         .sun_params = .{ params.sun_dir.x, params.sun_dir.y, params.sun_dir.z, params.sun_intensity },
         .fog_params = .{ params.fog_color.x, params.fog_color.y, params.fog_color.z, params.fog_density },
-        .base_color = .{ params.base_color.x, params.base_color.y, params.base_color.z, 0.0 },
     };
 
     c.vkCmdPushConstants(command_buffer, ctx.cloud_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(CloudPushConstants), &pc);
