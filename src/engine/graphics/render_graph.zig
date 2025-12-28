@@ -115,9 +115,11 @@ pub const RenderGraph = struct {
                 .shadow_texel_sizes = cascades.texel_sizes,
             });
             
-            // CRITICAL: Update Global Uniforms (binding 0) because terrain shader might need them,
-            // BUT MORE IMPORTANTLY: rhi_vulkan.zig uses this to set ctx.shadow_pass_matrix!
-            // We pass dummy values for everything else as only the matrix matters for shadow pass.
+            // Start the shadow pass BEFORE updating global uniforms for the shadow pass matrix.
+            // This ensures updateGlobalUniforms detects shadow_pass_active=true and sets the matrix
+            // without overwriting the global UBO (which holds the main camera view_proj).
+            rhi.beginShadowPass(@intCast(cascade_idx));
+            
             rhi.updateGlobalUniforms(
                 light_space_matrix, 
                 camera.position, 
@@ -126,11 +128,15 @@ pub const RenderGraph = struct {
             );
         } else if (shadow_map) |sm| {
             light_space_matrix = sm.light_space_matrices[cascade_idx];
+            // OpenGL shadow pass is handled in app.zig or via ShadowMap struct, 
+            // but if we are here, we might want to do something? 
+            // Currently beginShadowPass is a no-op for OpenGL RHI.
+            rhi.beginShadowPass(@intCast(cascade_idx));
         } else {
             return;
         }
 
-        rhi.beginShadowPass(@intCast(cascade_idx));
+        // renderShadowPass uses the bound pipeline/shader with the matrix we just set
         world.renderShadowPass(light_space_matrix, camera.position);
         rhi.endShadowPass();
     }
