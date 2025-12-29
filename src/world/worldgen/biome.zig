@@ -94,6 +94,13 @@ pub const BiomeDefinition = struct {
     continentalness: Range = Range.any(),
     ruggedness: Range = Range.any(),
 
+    // Structural constraints - terrain structure determines biome eligibility
+    min_height: i32 = 0, // Minimum absolute height (blocks from y=0)
+    max_height: i32 = 256, // Maximum absolute height
+    max_slope: i32 = 255, // Maximum allowed slope in blocks (0 = flat)
+    min_ridge_mask: f32 = 0.0, // Minimum ridge mask value
+    max_ridge_mask: f32 = 1.0, // Maximum ridge mask value
+
     // Selection tuning
     priority: i32 = 0, // Higher priority wins ties
     blend_weight: f32 = 1.0, // For future blending
@@ -104,25 +111,31 @@ pub const BiomeDefinition = struct {
     terrain: TerrainModifier = .{},
     colors: ColorTints = .{},
 
-    /// Score how well this biome matches the given parameters
-    /// Returns 0 if outside any range, otherwise returns inverse distance from ideal
-    pub fn score(self: BiomeDefinition, params: ClimateParams) f32 {
-        // Check if within all ranges
+    /// Check if biome meets structural constraints (height, slope, continentalness, ridge)
+    pub fn meetsStructuralConstraints(self: BiomeDefinition, height: i32, slope: i32, continentalness: f32, ridge_mask: f32) bool {
+        if (height < self.min_height) return false;
+        if (height > self.max_height) return false;
+        if (slope > self.max_slope) return false;
+        if (!self.continentalness.contains(continentalness)) return false;
+        if (ridge_mask < self.min_ridge_mask or ridge_mask > self.max_ridge_mask) return false;
+        return true;
+    }
+
+    /// Score how well this biome matches the given climate parameters
+    /// Only temperature, humidity, and elevation affect the score (structural already filtered)
+    pub fn scoreClimate(self: BiomeDefinition, params: ClimateParams) f32 {
+        // Check if within climate ranges
         if (!self.temperature.contains(params.temperature)) return 0;
         if (!self.humidity.contains(params.humidity)) return 0;
         if (!self.elevation.contains(params.elevation)) return 0;
-        if (!self.continentalness.contains(params.continentalness)) return 0;
-        if (!self.ruggedness.contains(params.ruggedness)) return 0;
 
         // Compute weighted distance from ideal center
         const t_dist = self.temperature.distanceFromCenter(params.temperature);
         const h_dist = self.humidity.distanceFromCenter(params.humidity);
         const e_dist = self.elevation.distanceFromCenter(params.elevation);
-        const c_dist = self.continentalness.distanceFromCenter(params.continentalness);
-        const r_dist = self.ruggedness.distanceFromCenter(params.ruggedness);
 
         // Average distance (lower is better)
-        const avg_dist = (t_dist + h_dist + e_dist + c_dist + r_dist) / 5.0;
+        const avg_dist = (t_dist + h_dist + e_dist) / 3.0;
 
         // Convert to score (higher is better), add priority bonus
         return (1.0 - avg_dist) + @as(f32, @floatFromInt(self.priority)) * 0.01;
@@ -319,6 +332,8 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .elevation = .{ .min = 0.35, .max = 0.60 },
         .continentalness = .{ .min = 0.70, .max = 1.0 }, // Deep inland only
         .ruggedness = .{ .min = 0.0, .max = 0.35 },
+        .max_height = 90, // Deserts don't appear at high elevations (no desert mountains!)
+        .max_slope = 4, // Deserts on flat terrain
         .priority = 4,
         .surface = .{ .top = .sand, .filler = .sand, .depth_range = 6 },
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0, .cactus_density = 0.015, .dead_bush_density = 0.02 },
@@ -333,6 +348,7 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .elevation = .{ .min = 0.28, .max = 0.40 },
         .continentalness = .{ .min = 0.52, .max = 0.75 }, // Coastal to mid-inland
         .ruggedness = .{ .min = 0.0, .max = 0.30 },
+        .max_slope = 3, // Swamps only on very flat terrain
         .priority = 5,
         .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 2 },
         .vegetation = .{ .tree_types = &.{.swamp_oak}, .tree_density = 0.08 },
@@ -350,6 +366,8 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .humidity = Range.any(),
         .elevation = .{ .min = 0.30, .max = 0.70 },
         .continentalness = .{ .min = 0.55, .max = 1.0 }, // Inland
+        .min_height = 70, // Tundra at moderate elevations
+        .max_slope = 255, // Any slope allowed
         .priority = 4,
         .surface = .{ .top = .snow_block, .filler = .dirt, .depth_range = 3 },
         .vegetation = .{ .tree_types = &.{.spruce}, .tree_density = 0.01 },
@@ -364,6 +382,8 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .humidity = Range.any(),
         .elevation = .{ .min = 0.58, .max = 1.0 }, // Higher min elevation
         .ruggedness = .{ .min = 0.60, .max = 1.0 }, // More rugged required
+        .min_height = 80, // Mountains start at moderate elevation
+        .min_ridge_mask = 0.1, // Mountains have some ridge influence
         .priority = 2, // Lower priority - let specific land biomes win if they match
         .surface = .{ .top = .stone, .filler = .stone, .depth_range = 1 },
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0 },
@@ -376,6 +396,8 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .humidity = Range.any(),
         .elevation = .{ .min = 0.58, .max = 1.0 },
         .ruggedness = .{ .min = 0.55, .max = 1.0 },
+        .min_height = 100, // Snow only above Y=100
+        .max_slope = 255, // Any slope allowed in mountains
         .priority = 2,
         .surface = .{ .top = .snow_block, .filler = .stone, .depth_range = 1 },
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0 },
@@ -439,7 +461,8 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .name = "Mushroom Fields",
         .temperature = .{ .min = 0.4, .max = 0.7 },
         .humidity = .{ .min = 0.7, .max = 1.0 },
-        .continentalness = .{ .min = 0.0, .max = 0.2 },
+        .continentalness = .{ .min = 0.0, .max = 0.2 }, // Deep ocean only
+        .max_height = 50, // Very low elevation (underwater or shallow)
         .priority = 20,
         .surface = .{ .top = .mycelium, .filler = .dirt, .depth_range = 3 },
         .vegetation = .{ .tree_types = &.{ .huge_red_mushroom, .huge_brown_mushroom }, .tree_density = 0.05, .red_mushroom_density = 0.1, .brown_mushroom_density = 0.1 },
@@ -671,4 +694,46 @@ pub fn selectBiomeWithRiverBlended(params: ClimateParams, river_mask: f32) Biome
         }
     }
     return selection;
+}
+
+/// Structural constraints for biome selection
+pub const StructuralParams = struct {
+    height: i32,
+    slope: i32,
+    continentalness: f32,
+    ridge_mask: f32,
+};
+
+/// Select biome based on structural constraints first, then climate
+/// This prevents biomes from appearing in inappropriate terrain (e.g., desert on mountains)
+pub fn selectBiomeWithConstraints(climate: ClimateParams, structural: StructuralParams) BiomeId {
+    var best_score: f32 = 0;
+    var best_biome: BiomeId = .plains;
+
+    for (BIOME_REGISTRY) |biome| {
+        // First check structural constraints
+        if (!biome.meetsStructuralConstraints(structural.height, structural.slope, structural.continentalness, structural.ridge_mask)) {
+            continue;
+        }
+
+        // Then score based on climate (temperature, humidity, elevation)
+        const s = biome.scoreClimate(climate);
+        if (s > best_score) {
+            best_score = s;
+            best_biome = biome.id;
+        }
+    }
+
+    return best_biome;
+}
+
+/// Select biome with structural constraints and river override
+pub fn selectBiomeWithConstraintsAndRiver(climate: ClimateParams, structural: StructuralParams, river_mask: f32) BiomeId {
+    const biome_id = selectBiomeWithConstraints(climate, structural);
+
+    // River biome takes priority when river mask is active
+    if (river_mask > 0.5 and climate.elevation < 0.35) {
+        return .river;
+    }
+    return biome_id;
 }

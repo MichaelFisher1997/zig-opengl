@@ -176,6 +176,7 @@ pub const TerrainGenerator = struct {
         const c_jittered = clamp01(c + coast_jitter);
         var terrain_height = self.computeHeight(c_jittered, e, pv, xw, zw);
         const river_mask = self.getRiverMask(xw, zw);
+        const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered);
         if (river_mask > 0 and terrain_height > sea - 5) {
             const river_depth = river_mask * p.river_depth_max;
             terrain_height = @min(terrain_height, terrain_height - river_depth);
@@ -193,10 +194,19 @@ pub const TerrainGenerator = struct {
         temperature = clamp01(temperature - (altitude_offset / 512.0) * p.temp_lapse);
         const humidity = self.getHumidity(xw, zw);
         const climate = biome_mod.computeClimateParams(temperature, humidity, terrain_height_i, c_jittered, e, p.sea_level, CHUNK_SIZE_Y);
-        const selection = biome_mod.selectBiomeWithRiverBlended(climate, river_mask);
+
+        const slope: i32 = 1;
+        const structural = biome_mod.StructuralParams{
+            .height = terrain_height_i,
+            .slope = slope,
+            .continentalness = c_jittered,
+            .ridge_mask = ridge_mask,
+        };
+
+        const biome_id = biome_mod.selectBiomeWithConstraintsAndRiver(climate, structural, river_mask);
         return .{
             .height = terrain_height_i,
-            .biome = selection.primary,
+            .biome = biome_id,
             .is_ocean = is_ocean,
             .temperature = temperature,
             .humidity = humidity,
@@ -220,6 +230,12 @@ pub const TerrainGenerator = struct {
         var debug_temperatures: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
         var debug_humidities: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
         var debug_continentalness: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
+        var continentalness_values: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
+        var erosion_values: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
+        var ridge_masks: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
+        var river_masks: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
+        var temperatures: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
+        var humidities: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
 
         var local_z: u32 = 0;
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
@@ -233,12 +249,14 @@ pub const TerrainGenerator = struct {
                 const xw = wx + warp.x;
                 const zw = wz + warp.z;
                 const c = self.getContinentalness(xw, zw);
-                const e = self.getErosion(xw, zw);
+                const e_val = self.getErosion(xw, zw);
                 const pv = self.getPeaksValleys(xw, zw);
                 const coast_jitter = self.coast_jitter_noise.fbm2D(xw, zw, 3, 2.0, 0.5, p.coast_jitter_scale) * 0.05;
                 const c_jittered = clamp01(c + coast_jitter);
-                var terrain_height = self.computeHeight(c_jittered, e, pv, xw, zw);
+                erosion_values[idx] = e_val;
+                var terrain_height = self.computeHeight(c_jittered, e_val, pv, xw, zw);
                 const river_mask = self.getRiverMask(xw, zw);
+                const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered);
                 if (river_mask > 0 and terrain_height > sea - 5) {
                     const river_depth = river_mask * p.river_depth_max;
                     terrain_height = @min(terrain_height, terrain_height - river_depth);
@@ -257,27 +275,20 @@ pub const TerrainGenerator = struct {
                 debug_temperatures[idx] = temperature;
                 debug_humidities[idx] = humidity;
                 debug_continentalness[idx] = c_jittered;
-                const climate = biome_mod.computeClimateParams(temperature, humidity, terrain_height_i, c_jittered, e, p.sea_level, CHUNK_SIZE_Y);
-                const selection = biome_mod.selectBiomeWithRiverBlended(climate, river_mask);
-                const primary_def = biome_mod.getBiomeDefinition(selection.primary);
-                const t = selection.blend_factor;
+                temperatures[idx] = temperature;
+                humidities[idx] = humidity;
+                continentalness_values[idx] = c_jittered;
+                ridge_masks[idx] = ridge_mask;
+                river_masks[idx] = river_mask;
                 terrain_height_i = @intFromFloat(terrain_height);
                 const is_ocean = terrain_height < sea;
                 surface_heights[idx] = terrain_height_i;
-                biome_ids[idx] = selection.primary;
-                secondary_biome_ids[idx] = selection.secondary;
-                biome_blends[idx] = t;
-                chunk.setBiome(local_x, local_z, selection.primary);
-                filler_depths[idx] = primary_def.surface.depth_range;
                 is_ocean_flags[idx] = is_ocean;
                 cave_region_values[idx] = self.cave_system.getCaveRegionValue(wx, wz);
             }
         }
 
-        var shore_distances: [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32 = undefined;
         var slopes: [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32 = undefined;
-        var exposure_values: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
-        const shore_search_radius: i32 = 12;
 
         local_z = 0;
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
@@ -292,6 +303,53 @@ pub const TerrainGenerator = struct {
                 if (local_z > 0) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_h - surface_heights[idx - CHUNK_SIZE_X]))));
                 if (local_z < CHUNK_SIZE_Z - 1) max_slope = @max(max_slope, @as(i32, @intCast(@abs(terrain_h - surface_heights[idx + CHUNK_SIZE_X]))));
                 slopes[idx] = max_slope;
+            }
+        }
+
+        local_z = 0;
+        while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
+            if (stop_flag) |sf| if (sf.*) return;
+            var local_x: u32 = 0;
+            while (local_x < CHUNK_SIZE_X) : (local_x += 1) {
+                const idx = local_x + local_z * CHUNK_SIZE_X;
+                const terrain_height_i = surface_heights[idx];
+                const temperature = temperatures[idx];
+                const humidity = humidities[idx];
+                const continentalness = continentalness_values[idx];
+                const erosion = erosion_values[idx];
+                const ridge_mask = ridge_masks[idx];
+                const slope = slopes[idx];
+                const river_mask = river_masks[idx];
+                const climate = biome_mod.computeClimateParams(temperature, humidity, terrain_height_i, continentalness, erosion, p.sea_level, CHUNK_SIZE_Y);
+
+                const structural = biome_mod.StructuralParams{
+                    .height = terrain_height_i,
+                    .slope = slope,
+                    .continentalness = continentalness,
+                    .ridge_mask = ridge_mask,
+                };
+
+                const biome_id = biome_mod.selectBiomeWithConstraintsAndRiver(climate, structural, river_mask);
+                biome_ids[idx] = biome_id;
+                secondary_biome_ids[idx] = biome_id;
+                biome_blends[idx] = 0.0;
+                chunk.setBiome(local_x, local_z, biome_id);
+
+                const biome_def = biome_mod.getBiomeDefinition(biome_id);
+                filler_depths[idx] = biome_def.surface.depth_range;
+            }
+        }
+
+        var shore_distances: [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32 = undefined;
+        var exposure_values: [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32 = undefined;
+        const shore_search_radius: i32 = 12;
+
+        local_z = 0;
+        while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
+            if (stop_flag) |sf| if (sf.*) return;
+            var local_x: u32 = 0;
+            while (local_x < CHUNK_SIZE_X) : (local_x += 1) {
+                const idx = local_x + local_z * CHUNK_SIZE_X;
                 const wx: f32 = @floatFromInt(world_x + @as(i32, @intCast(local_x)));
                 const wz: f32 = @floatFromInt(world_z + @as(i32, @intCast(local_z)));
                 exposure_values[idx] = self.beach_exposure_noise.fbm2DNormalized(wx, wz, 2, 2.0, 0.5, 1.0 / 200.0);

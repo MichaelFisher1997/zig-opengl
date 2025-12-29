@@ -988,3 +988,118 @@ test "GLSL shader brace matching" {
         try testing.expectEqual(open, close);
     }
 }
+
+test "Biome structural constraints - height filter" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+    const ClimateParams = biome_mod.ClimateParams;
+    const StructuralParams = biome_mod.StructuralParams;
+    const getBiomeDefinition = biome_mod.getBiomeDefinition;
+    const selectBiomeWithConstraints = biome_mod.selectBiomeWithConstraints;
+
+    const snowy_mountains = getBiomeDefinition(.snowy_mountains);
+    try testing.expect(snowy_mountains.min_height == 100);
+
+    const climate_low = ClimateParams{
+        .temperature = 0.3,
+        .humidity = 0.5,
+        .elevation = 0.5,
+        .continentalness = 0.7,
+        .ruggedness = 0.8,
+    };
+    const structural_low = StructuralParams{
+        .height = 50,
+        .slope = 5,
+        .continentalness = 0.7,
+        .ridge_mask = 0.3,
+    };
+    const biome_at_low_elev = selectBiomeWithConstraints(climate_low, structural_low);
+    try testing.expect(biome_at_low_elev != .snowy_mountains);
+
+    const climate_high = ClimateParams{
+        .temperature = 0.3,
+        .humidity = 0.5,
+        .elevation = 0.8,
+        .continentalness = 0.7,
+        .ruggedness = 0.8,
+    };
+    const structural_high = StructuralParams{
+        .height = 120,
+        .slope = 5,
+        .continentalness = 0.7,
+        .ridge_mask = 0.3,
+    };
+    const biome_at_high_elev = selectBiomeWithConstraints(climate_high, structural_high);
+    try testing.expect(biome_at_high_elev == .snowy_mountains);
+}
+
+test "Biome structural constraints - slope filter" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+    const ClimateParams = biome_mod.ClimateParams;
+    const StructuralParams = biome_mod.StructuralParams;
+    const getBiomeDefinition = biome_mod.getBiomeDefinition;
+    const selectBiomeWithConstraints = biome_mod.selectBiomeWithConstraints;
+
+    const swamp = getBiomeDefinition(.swamp);
+    try testing.expect(swamp.max_slope == 3);
+
+    const climate = ClimateParams{
+        .temperature = 0.7,
+        .humidity = 0.9,
+        .elevation = 0.35,
+        .continentalness = 0.6,
+        .ruggedness = 0.1,
+    };
+    const structural_steep = StructuralParams{
+        .height = 65,
+        .slope = 10,
+        .continentalness = 0.6,
+        .ridge_mask = 0.1,
+    };
+    const biome_steep = selectBiomeWithConstraints(climate, structural_steep);
+    try testing.expect(biome_steep != .swamp);
+
+    const structural_flat = StructuralParams{
+        .height = 65,
+        .slope = 2,
+        .continentalness = 0.6,
+        .ridge_mask = 0.1,
+    };
+    const biome_flat = selectBiomeWithConstraints(climate, structural_flat);
+    try testing.expect(biome_flat == .swamp);
+}
+
+test "Biome structural constraints - desert elevation limit" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+    const ClimateParams = biome_mod.ClimateParams;
+    const StructuralParams = biome_mod.StructuralParams;
+    const getBiomeDefinition = biome_mod.getBiomeDefinition;
+    const selectBiomeWithConstraints = biome_mod.selectBiomeWithConstraints;
+
+    const desert = getBiomeDefinition(.desert);
+    try testing.expect(desert.max_height == 90);
+
+    const climate = ClimateParams{
+        .temperature = 0.9,
+        .humidity = 0.1,
+        .elevation = 0.5,
+        .continentalness = 0.8,
+        .ruggedness = 0.2,
+    };
+    const structural_low = StructuralParams{
+        .height = 70,
+        .slope = 2,
+        .continentalness = 0.8,
+        .ridge_mask = 0.1,
+    };
+    const biome_low = selectBiomeWithConstraints(climate, structural_low);
+    try testing.expect(biome_low == .desert);
+
+    const structural_high = StructuralParams{
+        .height = 110,
+        .slope = 2,
+        .continentalness = 0.8,
+        .ridge_mask = 0.1,
+    };
+    const biome_high = selectBiomeWithConstraints(climate, structural_high);
+    try testing.expect(biome_high != .desert);
+}
