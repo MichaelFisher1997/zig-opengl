@@ -534,7 +534,8 @@ pub const TerrainGenerator = struct {
                     if (block != .air and block != .water and block != .bedrock) {
                         const wy: f32 = @floatFromInt(y);
                         const should_carve_worm = worm_carve_map.get(local_x, @intCast(y), local_z);
-                        const should_carve_cavity = self.cave_system.shouldCarveNoiseCavity(wx, wy, wz, terrain_height_i, cave_region);
+                        // Use updated multi-algorithm cave system (Issue #108)
+                        const should_carve_cavity = self.cave_system.shouldCarve(wx, wy, wz, terrain_height_i, cave_region);
                         if (should_carve_worm or should_carve_cavity) {
                             block = if (y < p.sea_level) .water else .air;
                         }
@@ -615,7 +616,7 @@ pub const TerrainGenerator = struct {
                     }
                     if (block != .air and block != .water and block != .bedrock) {
                         const wy: f32 = @floatFromInt(y);
-                        if (self.cave_system.shouldCarveNoiseCavity(wx, wy, wz, terrain_height_i, cave_region)) {
+                        if (self.cave_system.shouldCarve(wx, wy, wz, terrain_height_i, cave_region)) {
                             block = if (y < p.sea_level) .water else .air;
                         }
                     }
