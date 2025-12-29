@@ -536,65 +536,70 @@ pub const App = struct {
                     }
                 }
                 const sky_params = rhi_pkg.SkyParams{
+                    .cam_pos = self.camera.position,
+                    .cam_forward = self.camera.forward,
+                    .cam_right = self.camera.right,
+                    .cam_up = self.camera.up,
+                    .aspect = aspect,
+                    .tan_half_fov = @tan(self.camera.fov / 2.0),
+                    .sun_dir = self.atmosphere.sun_dir,
+                    .sky_color = self.atmosphere.sky_color,
+                    .horizon_color = self.atmosphere.horizon_color,
+                    .sun_intensity = self.atmosphere.sun_intensity,
+                    .moon_intensity = self.atmosphere.moon_intensity,
+                    .time = self.atmosphere.time_of_day,
+                };
+                const cloud_params: rhi_pkg.CloudParams = blk: {
+                    const p = self.clouds.getShadowParams();
+                    break :blk .{
                         .cam_pos = self.camera.position,
-                        .cam_forward = self.camera.forward,
-                        .cam_right = self.camera.right,
-                        .cam_up = self.camera.up,
-                        .aspect = aspect,
-                        .tan_half_fov = @tan(self.camera.fov / 2.0),
+                        .view_proj = view_proj_render,
                         .sun_dir = self.atmosphere.sun_dir,
-                        .sky_color = self.atmosphere.sky_color,
-                        .horizon_color = self.atmosphere.horizon_color,
                         .sun_intensity = self.atmosphere.sun_intensity,
-                        .moon_intensity = self.atmosphere.moon_intensity,
-                        .time = self.atmosphere.time_of_day,
+                        .fog_color = self.atmosphere.fog_color,
+                        .fog_density = self.atmosphere.fog_density,
+                        .wind_offset_x = p.wind_offset_x,
+                        .wind_offset_z = p.wind_offset_z,
+                        .cloud_scale = p.cloud_scale,
+                        .cloud_coverage = p.cloud_coverage,
+                        .cloud_height = p.cloud_height,
+                        .base_color = self.clouds.base_color,
                     };
-                    const cloud_params: rhi_pkg.CloudParams = blk: {
-                        const p = self.clouds.getShadowParams();
-                        break :blk .{
-                            .cam_pos = self.camera.position,
-                            .view_proj = view_proj_render,
-                            .sun_dir = self.atmosphere.sun_dir,
-                            .sun_intensity = self.atmosphere.sun_intensity,
-                            .fog_color = self.atmosphere.fog_color,
-                            .fog_density = self.atmosphere.fog_density,
-                            .wind_offset_x = p.wind_offset_x,
-                            .wind_offset_z = p.wind_offset_z,
-                            .cloud_scale = p.cloud_scale,
-                            .cloud_coverage = p.cloud_coverage,
-                            .cloud_height = p.cloud_height,
-                            .base_color = self.clouds.base_color,
-                        };
-                    };
+                };
 
-                    self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
+                // For OpenGL, bind the shader before setting uniforms so they are applied
+                if (self.shader != 0 and !self.is_vulkan) {
+                    self.rhi.bindShader(self.shader);
+                }
 
-                    if (self.shader != 0) {
-                        self.atlas.bind(0);
-                        if (self.shadow_map) |*sm| {
-                            var shadow_map_handles: [3]rhi_pkg.TextureHandle = undefined;
-                            for (0..3) |i| {
-                                shadow_map_handles[i] = sm.depth_maps[i].handle;
-                            }
-                            self.rhi.setTextureUniforms(self.settings.textures_enabled, shadow_map_handles);
-                            self.rhi.updateShadowUniforms(.{
-                                .light_space_matrices = sm.light_space_matrices,
-                                .cascade_splits = sm.cascade_splits,
-                                .shadow_texel_sizes = sm.texel_sizes,
-                            });
-                        } else {
-                            self.rhi.setTextureUniforms(self.settings.textures_enabled, [_]rhi_pkg.TextureHandle{ 0, 0, 0 });
+                self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
+
+                if (self.shader != 0) {
+                    self.atlas.bind(0);
+                    if (self.shadow_map) |*sm| {
+                        var shadow_map_handles: [3]rhi_pkg.TextureHandle = undefined;
+                        for (0..3) |i| {
+                            shadow_map_handles[i] = sm.depth_maps[i].handle;
                         }
+                        self.rhi.setTextureUniforms(self.settings.textures_enabled, shadow_map_handles);
+                        self.rhi.updateShadowUniforms(.{
+                            .light_space_matrices = sm.light_space_matrices,
+                            .cascade_splits = sm.cascade_splits,
+                            .shadow_texel_sizes = sm.texel_sizes,
+                        });
+                    } else {
+                        self.rhi.setTextureUniforms(self.settings.textures_enabled, [_]rhi_pkg.TextureHandle{ 0, 0, 0 });
                     }
+                }
 
-                    self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect, sky_params, cloud_params, self.shader, self.atlas.texture.handle);
+                self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect, sky_params, cloud_params, self.shader, self.atlas.texture.handle);
 
-                    if (debug_build and self.debug_state.shadows and self.shadow_map != null) {
-                        const cascade_idx = self.debug_state.cascade_idx;
-                        self.rhi.drawDebugShadowMap(cascade_idx, self.shadow_map.?.depth_maps[cascade_idx].handle);
-                    }
+                if (debug_build and self.debug_state.shadows and self.shadow_map != null) {
+                    const cascade_idx = self.debug_state.cascade_idx;
+                    self.rhi.drawDebugShadowMap(cascade_idx, self.shadow_map.?.depth_maps[cascade_idx].handle);
+                }
 
-                    if (self.ui) |*u| {
+                if (self.ui) |*u| {
                     u.begin();
                     if (self.world_map) |*m| {
                         try self.map_controller.draw(u, screen_w, screen_h, m, &active_world.generator, self.camera.position);
@@ -854,6 +859,11 @@ pub const App = struct {
                             .base_color = self.clouds.base_color,
                         };
                     };
+
+                    // For OpenGL, bind the shader before setting uniforms so they are applied
+                    if (self.shader != 0 and !self.is_vulkan) {
+                        self.rhi.bindShader(self.shader);
+                    }
 
                     self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
 
