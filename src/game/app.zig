@@ -525,7 +525,7 @@ pub const App = struct {
                 if (self.shadow_map) |*sm| {
                     var light_dir = self.atmosphere.sun_dir;
                     if (self.atmosphere.sun_intensity < 0.05 and self.atmosphere.moon_intensity > 0.05) light_dir = self.atmosphere.moon_dir;
-                    if (self.atmosphere.sun_intensity > 0.05 or self.atmosphere.moon_intensity > 0.05) {
+                    if (!self.is_vulkan and (self.atmosphere.sun_intensity > 0.05 or self.atmosphere.moon_intensity > 0.05)) {
                         sm.update(self.camera.fov, aspect, 0.1, self.settings.shadow_distance, light_dir, self.camera.position, self.camera.getViewMatrixOriginCentered());
                         for (0..3) |i| {
                             sm.begin(i);
@@ -535,9 +535,7 @@ pub const App = struct {
                         sm.end(self.input.window_width, self.input.window_height);
                     }
                 }
-                self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect);
-                self.rhi.beginMainPass();
-                self.rhi.drawSky(.{
+                const sky_params = rhi_pkg.SkyParams{
                     .cam_pos = self.camera.position,
                     .cam_forward = self.camera.forward,
                     .cam_right = self.camera.right,
@@ -550,9 +548,33 @@ pub const App = struct {
                     .sun_intensity = self.atmosphere.sun_intensity,
                     .moon_intensity = self.atmosphere.moon_intensity,
                     .time = self.atmosphere.time_of_day,
-                });
-                if (self.shader != 0) {
+                };
+                const cloud_params: rhi_pkg.CloudParams = blk: {
+                    const p = self.clouds.getShadowParams();
+                    break :blk .{
+                        .cam_pos = self.camera.position,
+                        .view_proj = view_proj_render,
+                        .sun_dir = self.atmosphere.sun_dir,
+                        .sun_intensity = self.atmosphere.sun_intensity,
+                        .fog_color = self.atmosphere.fog_color,
+                        .fog_density = self.atmosphere.fog_density,
+                        .wind_offset_x = p.wind_offset_x,
+                        .wind_offset_z = p.wind_offset_z,
+                        .cloud_scale = p.cloud_scale,
+                        .cloud_coverage = p.cloud_coverage,
+                        .cloud_height = p.cloud_height,
+                        .base_color = self.clouds.base_color,
+                    };
+                };
+
+                // For OpenGL, bind the shader before setting uniforms so they are applied
+                if (self.shader != 0 and !self.is_vulkan) {
                     self.rhi.bindShader(self.shader);
+                }
+
+                self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
+
+                if (self.shader != 0) {
                     self.atlas.bind(0);
                     if (self.shadow_map) |*sm| {
                         var shadow_map_handles: [3]rhi_pkg.TextureHandle = undefined;
@@ -568,116 +590,13 @@ pub const App = struct {
                     } else {
                         self.rhi.setTextureUniforms(self.settings.textures_enabled, [_]rhi_pkg.TextureHandle{ 0, 0, 0 });
                     }
-                    const cp: rhi_pkg.CloudParams = blk: {
-                        const p = self.clouds.getShadowParams();
-                        break :blk .{
-                            .cam_pos = self.camera.position,
-                            .view_proj = view_proj_cull,
-                            .sun_dir = self.atmosphere.sun_dir,
-                            .sun_intensity = self.atmosphere.sun_intensity,
-                            .fog_color = self.atmosphere.fog_color,
-                            .fog_density = self.atmosphere.fog_density,
-                            .wind_offset_x = p.wind_offset_x,
-                            .wind_offset_z = p.wind_offset_z,
-                            .cloud_scale = p.cloud_scale,
-                            .cloud_coverage = p.cloud_coverage,
-                            .cloud_height = p.cloud_height,
-                            .base_color = self.clouds.base_color,
-                        };
-                    };
-                    self.rhi.updateGlobalUniforms(view_proj_cull, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cp);
-                    active_world.render(view_proj_cull, self.camera.position);
-                } else if (self.is_vulkan) {
-                    const sun_dir = self.atmosphere.sun_dir;
-                    const time_val = self.atmosphere.time_of_day;
-                    const fog_color = self.atmosphere.fog_color;
-                    const fog_density = self.atmosphere.fog_density;
-                    const fog_enabled = self.atmosphere.fog_enabled;
-                    const sun_intensity_val = self.atmosphere.sun_intensity;
-                    const moon_intensity_val = self.atmosphere.moon_intensity;
-                    const ambient_val = self.atmosphere.ambient_intensity;
-                    const sky_color = self.atmosphere.sky_color;
-                    const horizon_color = self.atmosphere.horizon_color;
-
-                    var light_dir = sun_dir;
-                    var light_active = true;
-                    if (self.atmosphere.sun_intensity < 0.05 and self.atmosphere.moon_intensity > 0.05) {
-                        light_dir = self.atmosphere.moon_dir;
-                    }
-                    light_active = self.atmosphere.sun_intensity > 0.05 or self.atmosphere.moon_intensity > 0.05;
-
-                    if (light_active) {
-                        const cascades = ShadowMap.computeCascades(self.settings.shadow_resolution, self.camera.fov, aspect, 0.1, self.settings.shadow_distance, light_dir, self.camera.getViewMatrixOriginCentered(), true);
-                        self.rhi.updateShadowUniforms(.{
-                            .light_space_matrices = cascades.light_space_matrices,
-                            .cascade_splits = cascades.cascade_splits,
-                            .shadow_texel_sizes = cascades.texel_sizes,
-                        });
-                        for (0..ShadowMap.CASCADE_COUNT) |i| {
-                            self.rhi.beginShadowPass(@intCast(i));
-                            self.rhi.updateGlobalUniforms(cascades.light_space_matrices[i], self.camera.position, light_dir, time_val, fog_color, fog_density, false, 0.0, 0.0, false, .{});
-                            active_world.renderShadowPass(cascades.light_space_matrices[i], self.camera.position);
-                            self.rhi.endShadowPass();
-                        }
-                    }
-
-                    self.rhi.beginMainPass();
-                    self.rhi.drawSky(.{
-                        .cam_pos = self.camera.position,
-                        .cam_forward = self.camera.forward,
-                        .cam_right = self.camera.right,
-                        .cam_up = self.camera.up,
-                        .aspect = aspect,
-                        .tan_half_fov = @tan(self.camera.fov / 2.0),
-                        .sun_dir = sun_dir,
-                        .sky_color = sky_color,
-                        .horizon_color = horizon_color,
-                        .sun_intensity = sun_intensity_val,
-                        .moon_intensity = moon_intensity_val,
-                        .time = time_val,
-                    });
-
-                    self.atlas.bind(0);
-                    self.rhi.setTextureUniforms(self.settings.textures_enabled, [_]rhi_pkg.TextureHandle{ 0, 0, 0 });
-                    const cp: rhi_pkg.CloudParams = blk: {
-                        const p = self.clouds.getShadowParams();
-                        break :blk .{
-                            .cam_pos = self.camera.position,
-                            .view_proj = view_proj_render,
-                            .sun_dir = sun_dir,
-                            .sun_intensity = sun_intensity_val,
-                            .fog_color = fog_color,
-                            .fog_density = fog_density,
-                            .wind_offset_x = p.wind_offset_x,
-                            .wind_offset_z = p.wind_offset_z,
-                            .cloud_scale = p.cloud_scale,
-                            .cloud_coverage = p.cloud_coverage,
-                            .cloud_height = p.cloud_height,
-                            .base_color = self.clouds.base_color,
-                        };
-                    };
-                    self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, sun_dir, time_val, fog_color, fog_density, fog_enabled, sun_intensity_val, ambient_val, self.settings.textures_enabled, cp);
-                    active_world.render(view_proj_cull, self.camera.position);
                 }
 
-                const p = self.clouds.getShadowParams();
-                self.rhi.drawClouds(.{
-                    .cam_pos = self.camera.position,
-                    .view_proj = view_proj_cull,
-                    .sun_dir = self.atmosphere.sun_dir,
-                    .sun_intensity = self.atmosphere.sun_intensity,
-                    .fog_color = self.atmosphere.fog_color,
-                    .fog_density = self.atmosphere.fog_density,
-                    .wind_offset_x = p.wind_offset_x,
-                    .wind_offset_z = p.wind_offset_z,
-                    .cloud_scale = p.cloud_scale,
-                    .cloud_coverage = p.cloud_coverage,
-                    .cloud_height = p.cloud_height,
-                    .base_color = self.clouds.base_color,
-                });
+                self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect, sky_params, cloud_params, self.shader, self.atlas.texture.handle);
 
-                if (debug_build and !self.is_vulkan and self.debug_state.shadows and self.shadow_map != null) {
-                    self.rhi.drawDebugShadowMap(self.debug_state.cascade_idx, self.shadow_map.?.depth_maps[self.debug_state.cascade_idx].handle);
+                if (debug_build and self.debug_state.shadows and self.shadow_map != null) {
+                    const cascade_idx = self.debug_state.cascade_idx;
+                    self.rhi.drawDebugShadowMap(cascade_idx, self.shadow_map.?.depth_maps[cascade_idx].handle);
                 }
 
                 if (self.ui) |*u| {
@@ -894,23 +813,22 @@ pub const App = struct {
                         Mat4.perspectiveReverseZ(self.camera.fov, aspect, self.camera.near, self.camera.far).multiply(self.camera.getViewMatrixOriginCentered())
                     else
                         view_proj_cull;
+
                     if (self.shadow_map) |*sm| {
                         var light_dir = self.atmosphere.sun_dir;
                         if (self.atmosphere.sun_intensity < 0.05 and self.atmosphere.moon_intensity > 0.05) light_dir = self.atmosphere.moon_dir;
-                        if (self.atmosphere.sun_intensity > 0.05 or self.atmosphere.moon_intensity > 0.05) {
+                        if (!self.is_vulkan and (self.atmosphere.sun_intensity > 0.05 or self.atmosphere.moon_intensity > 0.05)) {
                             sm.update(self.camera.fov, aspect, 0.1, self.settings.shadow_distance, light_dir, self.camera.position, self.camera.getViewMatrixOriginCentered());
                             for (0..3) |i| {
                                 sm.begin(i);
-                                // SYNC RHI STATE
                                 self.rhi.updateGlobalUniforms(sm.light_space_matrices[i], self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, .{});
                                 active_world.renderShadowPass(sm.light_space_matrices[i], self.camera.position);
                             }
                             sm.end(self.input.window_width, self.input.window_height);
                         }
                     }
-                    self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect);
-                    self.rhi.beginMainPass();
-                    self.rhi.drawSky(.{
+
+                    const sky_params = rhi_pkg.SkyParams{
                         .cam_pos = self.camera.position,
                         .cam_forward = self.camera.forward,
                         .cam_right = self.camera.right,
@@ -923,9 +841,33 @@ pub const App = struct {
                         .sun_intensity = self.atmosphere.sun_intensity,
                         .moon_intensity = self.atmosphere.moon_intensity,
                         .time = self.atmosphere.time_of_day,
-                    });
-                    if (self.shader != 0) {
+                    };
+                    const cloud_params: rhi_pkg.CloudParams = blk: {
+                        const p = self.clouds.getShadowParams();
+                        break :blk .{
+                            .cam_pos = self.camera.position,
+                            .view_proj = view_proj_render,
+                            .sun_dir = self.atmosphere.sun_dir,
+                            .sun_intensity = self.atmosphere.sun_intensity,
+                            .fog_color = self.atmosphere.fog_color,
+                            .fog_density = self.atmosphere.fog_density,
+                            .wind_offset_x = p.wind_offset_x,
+                            .wind_offset_z = p.wind_offset_z,
+                            .cloud_scale = p.cloud_scale,
+                            .cloud_coverage = p.cloud_coverage,
+                            .cloud_height = p.cloud_height,
+                            .base_color = self.clouds.base_color,
+                        };
+                    };
+
+                    // For OpenGL, bind the shader before setting uniforms so they are applied
+                    if (self.shader != 0 and !self.is_vulkan) {
                         self.rhi.bindShader(self.shader);
+                    }
+
+                    self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
+
+                    if (self.shader != 0) {
                         self.atlas.bind(0);
                         if (self.shadow_map) |*sm| {
                             var shadow_map_handles: [3]rhi_pkg.TextureHandle = undefined;
@@ -941,116 +883,13 @@ pub const App = struct {
                         } else {
                             self.rhi.setTextureUniforms(self.settings.textures_enabled, [_]rhi_pkg.TextureHandle{ 0, 0, 0 });
                         }
-                        const cp: rhi_pkg.CloudParams = blk: {
-                            const p = self.clouds.getShadowParams();
-                            break :blk .{
-                                .cam_pos = self.camera.position,
-                                .view_proj = view_proj_cull,
-                                .sun_dir = self.atmosphere.sun_dir,
-                                .sun_intensity = self.atmosphere.sun_intensity,
-                                .fog_color = self.atmosphere.fog_color,
-                                .fog_density = self.atmosphere.fog_density,
-                                .wind_offset_x = p.wind_offset_x,
-                                .wind_offset_z = p.wind_offset_z,
-                                .cloud_scale = p.cloud_scale,
-                                .cloud_coverage = p.cloud_coverage,
-                                .cloud_height = p.cloud_height,
-                                .base_color = self.clouds.base_color,
-                            };
-                        };
-                        self.rhi.updateGlobalUniforms(view_proj_cull, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cp);
-                        active_world.render(view_proj_cull, self.camera.position);
-                    } else if (self.is_vulkan) {
-                        const sun_dir = self.atmosphere.sun_dir;
-                        const time_val = self.atmosphere.time_of_day;
-                        const fog_color = self.atmosphere.fog_color;
-                        const fog_density = self.atmosphere.fog_density;
-                        const fog_enabled = self.atmosphere.fog_enabled;
-                        const sun_intensity_val = self.atmosphere.sun_intensity;
-                        const moon_intensity_val = self.atmosphere.moon_intensity;
-                        const ambient_val = self.atmosphere.ambient_intensity;
-                        const sky_color = self.atmosphere.sky_color;
-                        const horizon_color = self.atmosphere.horizon_color;
-
-                        var light_dir = sun_dir;
-                        var light_active = true;
-                        if (self.atmosphere.sun_intensity < 0.05 and self.atmosphere.moon_intensity > 0.05) {
-                            light_dir = self.atmosphere.moon_dir;
-                        }
-                        light_active = self.atmosphere.sun_intensity > 0.05 or self.atmosphere.moon_intensity > 0.05;
-
-                        if (light_active) {
-                            const cascades = ShadowMap.computeCascades(self.settings.shadow_resolution, self.camera.fov, aspect, 0.1, self.settings.shadow_distance, light_dir, self.camera.getViewMatrixOriginCentered(), true);
-                            self.rhi.updateShadowUniforms(.{
-                                .light_space_matrices = cascades.light_space_matrices,
-                                .cascade_splits = cascades.cascade_splits,
-                                .shadow_texel_sizes = cascades.texel_sizes,
-                            });
-                            for (0..ShadowMap.CASCADE_COUNT) |i| {
-                                self.rhi.beginShadowPass(@intCast(i));
-                                self.rhi.updateGlobalUniforms(cascades.light_space_matrices[i], self.camera.position, light_dir, time_val, fog_color, fog_density, false, 0.0, 0.0, false, .{});
-                                active_world.renderShadowPass(cascades.light_space_matrices[i], self.camera.position);
-                                self.rhi.endShadowPass();
-                            }
-                        }
-
-                        self.rhi.beginMainPass();
-                        self.rhi.drawSky(.{
-                            .cam_pos = self.camera.position,
-                            .cam_forward = self.camera.forward,
-                            .cam_right = self.camera.right,
-                            .cam_up = self.camera.up,
-                            .aspect = aspect,
-                            .tan_half_fov = @tan(self.camera.fov / 2.0),
-                            .sun_dir = sun_dir,
-                            .sky_color = sky_color,
-                            .horizon_color = horizon_color,
-                            .sun_intensity = sun_intensity_val,
-                            .moon_intensity = moon_intensity_val,
-                            .time = time_val,
-                        });
-
-                        self.atlas.bind(0);
-                        self.rhi.setTextureUniforms(self.settings.textures_enabled, [_]rhi_pkg.TextureHandle{ 0, 0, 0 });
-                        const cp: rhi_pkg.CloudParams = blk: {
-                            const p = self.clouds.getShadowParams();
-                            break :blk .{
-                                .cam_pos = self.camera.position,
-                                .view_proj = view_proj_render,
-                                .sun_dir = sun_dir,
-                                .sun_intensity = sun_intensity_val,
-                                .fog_color = fog_color,
-                                .fog_density = fog_density,
-                                .wind_offset_x = p.wind_offset_x,
-                                .wind_offset_z = p.wind_offset_z,
-                                .cloud_scale = p.cloud_scale,
-                                .cloud_coverage = p.cloud_coverage,
-                                .cloud_height = p.cloud_height,
-                                .base_color = self.clouds.base_color,
-                            };
-                        };
-                        self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, sun_dir, time_val, fog_color, fog_density, fog_enabled, sun_intensity_val, ambient_val, self.settings.textures_enabled, cp);
-                        active_world.render(view_proj_cull, self.camera.position);
                     }
 
-                    const p = self.clouds.getShadowParams();
-                    self.rhi.drawClouds(.{
-                        .cam_pos = self.camera.position,
-                        .view_proj = view_proj_cull,
-                        .sun_dir = self.atmosphere.sun_dir,
-                        .sun_intensity = self.atmosphere.sun_intensity,
-                        .fog_color = self.atmosphere.fog_color,
-                        .fog_density = self.atmosphere.fog_density,
-                        .wind_offset_x = p.wind_offset_x,
-                        .wind_offset_z = p.wind_offset_z,
-                        .cloud_scale = p.cloud_scale,
-                        .cloud_coverage = p.cloud_coverage,
-                        .cloud_height = p.cloud_height,
-                        .base_color = self.clouds.base_color,
-                    });
+                    self.render_graph.execute(self.rhi, active_world, &self.camera, self.shadow_map, self.is_vulkan, aspect, sky_params, cloud_params, self.shader, self.atlas.texture.handle);
 
-                    if (debug_build and !self.is_vulkan and self.debug_state.shadows and self.shadow_map != null) {
-                        self.rhi.drawDebugShadowMap(self.debug_state.cascade_idx, self.shadow_map.?.depth_maps[self.debug_state.cascade_idx].handle);
+                    if (debug_build and self.debug_state.shadows and self.shadow_map != null) {
+                        const cascade_idx = self.debug_state.cascade_idx;
+                        self.rhi.drawDebugShadowMap(cascade_idx, self.shadow_map.?.depth_maps[cascade_idx].handle);
                     }
 
                     if (self.ui) |*u| {
