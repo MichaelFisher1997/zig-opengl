@@ -1235,7 +1235,7 @@ test "Biome structural constraints - height filter" {
 
     // High elevation test - should get snowy_mountains
     const climate_high = ClimateParams{
-        .temperature = 0.3,
+        .temperature = 0.1, // Cold (Heat=10) to match snowy_mountains
         .humidity = 0.5,
         .elevation = 0.8,
         .continentalness = 0.85, // Continental core (>0.75)
@@ -1477,4 +1477,142 @@ test "Transition rules table has expected entries" {
     try testing.expect(found_desert_forest);
     try testing.expect(found_snow_plains);
     try testing.expect(found_mountain_plains);
+}
+
+// ============================================================================
+// Voronoi Biome Selection Tests (Issue #106)
+// ============================================================================
+
+test "BiomePoint struct fields" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    const point = biome_mod.BiomePoint{
+        .id = .desert,
+        .heat = 90,
+        .humidity = 10,
+        .weight = 1.2,
+        .min_continental = 0.42,
+    };
+
+    try testing.expectEqual(point.id, .desert);
+    try testing.expectEqual(@as(f32, 90), point.heat);
+    try testing.expectEqual(@as(f32, 10), point.humidity);
+    try testing.expectEqual(@as(f32, 1.2), point.weight);
+    try testing.expectEqual(@as(f32, 0.42), point.min_continental);
+}
+
+test "BIOME_POINTS table has expected biomes" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Should have multiple biome points
+    try testing.expect(biome_mod.BIOME_POINTS.len >= 15);
+
+    // Find specific biomes
+    var found_desert = false;
+    var found_plains = false;
+    var found_forest = false;
+    var found_snow = false;
+
+    for (biome_mod.BIOME_POINTS) |point| {
+        if (point.id == .desert) found_desert = true;
+        if (point.id == .plains) found_plains = true;
+        if (point.id == .forest) found_forest = true;
+        if (point.id == .snow_tundra) found_snow = true;
+    }
+
+    try testing.expect(found_desert);
+    try testing.expect(found_plains);
+    try testing.expect(found_forest);
+    try testing.expect(found_snow);
+}
+
+test "selectBiomeVoronoi returns desert for hot/dry" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Hot (90) and dry (10) should select desert
+    // Height 70 (within desert y_max=90), continental 0.5 (inland), slope 0
+    const result = biome_mod.selectBiomeVoronoi(90, 10, 70, 0.5, 0);
+    try testing.expectEqual(result, .desert);
+}
+
+test "selectBiomeVoronoi returns snow_tundra for cold/dry" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Cold (5) and dry (30) should select snow_tundra
+    // Height 70, continental 0.5 (inland), slope 0
+    const result = biome_mod.selectBiomeVoronoi(5, 30, 70, 0.5, 0);
+    try testing.expectEqual(result, .snow_tundra);
+}
+
+test "selectBiomeVoronoi returns ocean for low continentalness" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Any heat/humidity, but low continentalness = ocean
+    const result = biome_mod.selectBiomeVoronoi(50, 50, 50, 0.25, 0);
+    try testing.expectEqual(result, .ocean);
+}
+
+test "selectBiomeVoronoi returns deep_ocean for very low continentalness" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Very low continentalness = deep ocean
+    const result = biome_mod.selectBiomeVoronoi(50, 50, 30, 0.10, 0);
+    try testing.expectEqual(result, .deep_ocean);
+}
+
+test "selectBiomeVoronoi respects height constraints" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // High elevation with cold temp should get mountains, not plains
+    // snowy_mountains requires y_min=100, so at height 110 with cold temp...
+    const high_result = biome_mod.selectBiomeVoronoi(10, 40, 110, 0.65, 0);
+    try testing.expectEqual(high_result, .snowy_mountains);
+
+    // At low height with same temp, should NOT get snowy_mountains
+    const low_result = biome_mod.selectBiomeVoronoi(10, 40, 70, 0.65, 0);
+    try testing.expect(low_result != .snowy_mountains);
+}
+
+test "selectBiomeVoronoi weight affects selection" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Plains has high weight (1.5), so it should win in temperate areas
+    // even if slightly closer to another biome's center
+    const result = biome_mod.selectBiomeVoronoi(50, 45, 70, 0.5, 0);
+    try testing.expectEqual(result, .plains);
+}
+
+test "selectBiomeVoronoiWithRiver returns river when mask active" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // High river mask should override to river biome
+    const result = biome_mod.selectBiomeVoronoiWithRiver(50, 50, 65, 0.5, 0, 0.8);
+    try testing.expectEqual(result, .river);
+
+    // Low river mask should return normal biome
+    const no_river = biome_mod.selectBiomeVoronoiWithRiver(50, 50, 65, 0.5, 0, 0.2);
+    try testing.expect(no_river != .river);
+}
+
+test "selectBiomeWithConstraints uses Voronoi selection" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Create climate params for hot/dry area
+    const climate = biome_mod.ClimateParams{
+        .temperature = 0.9, // Hot -> 90 in Voronoi scale
+        .humidity = 0.1, // Dry -> 10 in Voronoi scale
+        .elevation = 0.4,
+        .continentalness = 0.5,
+        .ruggedness = 0.2,
+    };
+
+    const structural = biome_mod.StructuralParams{
+        .height = 70,
+        .slope = 2,
+        .continentalness = 0.5,
+        .ridge_mask = 0.1,
+    };
+
+    const result = biome_mod.selectBiomeWithConstraints(climate, structural);
+    try testing.expectEqual(result, .desert);
 }

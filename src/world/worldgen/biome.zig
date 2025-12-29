@@ -261,6 +261,120 @@ pub fn getTransitionBiome(a: BiomeId, b: BiomeId) ?BiomeId {
 }
 
 // ============================================================================
+// Voronoi Biome Selection System (Issue #106)
+// Selects biomes using Voronoi diagram in heat/humidity space
+// ============================================================================
+
+/// Voronoi point defining a biome's position in climate space
+/// Biomes are selected by finding the closest point to the sampled heat/humidity
+pub const BiomePoint = struct {
+    id: BiomeId,
+    heat: f32, // 0-100 scale (cold to hot)
+    humidity: f32, // 0-100 scale (dry to wet)
+    weight: f32 = 1.0, // Cell size multiplier (larger = bigger biome regions)
+    y_min: i32 = 0, // Minimum Y level
+    y_max: i32 = 256, // Maximum Y level
+    /// Maximum allowed slope in blocks (0 = flat, 255 = vertical cliff)
+    max_slope: i32 = 255,
+    /// Minimum continentalness (0-1). Set > 0.35 for land-only biomes
+    min_continental: f32 = 0.0,
+    /// Maximum continentalness. Set < 0.35 for ocean-only biomes
+    max_continental: f32 = 1.0,
+};
+
+/// Voronoi biome points - defines where each biome sits in heat/humidity space
+/// Heat: 0=frozen, 50=temperate, 100=scorching
+/// Humidity: 0=arid, 50=normal, 100=saturated
+pub const BIOME_POINTS = [_]BiomePoint{
+    // === Ocean Biomes (continental < 0.35) ===
+    .{ .id = .deep_ocean, .heat = 50, .humidity = 50, .weight = 1.5, .max_continental = 0.20 },
+    .{ .id = .ocean, .heat = 50, .humidity = 50, .weight = 1.5, .min_continental = 0.20, .max_continental = 0.35 },
+
+    // === Coastal Biomes ===
+    .{ .id = .beach, .heat = 60, .humidity = 50, .weight = 0.6, .max_slope = 2, .min_continental = 0.35, .max_continental = 0.42, .y_max = 70 },
+
+    // === Cold Biomes ===
+    .{ .id = .snow_tundra, .heat = 5, .humidity = 30, .weight = 1.0, .min_continental = 0.42 },
+    .{ .id = .taiga, .heat = 20, .humidity = 60, .weight = 1.0, .min_continental = 0.42 },
+    .{ .id = .snowy_mountains, .heat = 10, .humidity = 40, .weight = 0.8, .min_continental = 0.60, .y_min = 100 },
+
+    // === Temperate Biomes ===
+    .{ .id = .plains, .heat = 50, .humidity = 45, .weight = 1.5, .min_continental = 0.42 }, // Large weight = common
+    .{ .id = .forest, .heat = 45, .humidity = 65, .weight = 1.2, .min_continental = 0.42 },
+    .{ .id = .mountains, .heat = 40, .humidity = 50, .weight = 0.8, .min_continental = 0.60, .y_min = 90 },
+
+    // === Warm/Wet Biomes ===
+    .{ .id = .swamp, .heat = 65, .humidity = 85, .weight = 0.8, .max_slope = 3, .min_continental = 0.42, .y_max = 72 },
+    .{ .id = .mangrove_swamp, .heat = 75, .humidity = 90, .weight = 0.6, .max_slope = 3, .min_continental = 0.35, .max_continental = 0.50, .y_max = 68 },
+    .{ .id = .jungle, .heat = 85, .humidity = 85, .weight = 0.9, .min_continental = 0.50 },
+
+    // === Hot/Dry Biomes ===
+    .{ .id = .desert, .heat = 90, .humidity = 10, .weight = 1.2, .min_continental = 0.42, .y_max = 90 },
+    .{ .id = .savanna, .heat = 80, .humidity = 30, .weight = 1.0, .min_continental = 0.42 },
+    .{ .id = .badlands, .heat = 85, .humidity = 15, .weight = 0.7, .min_continental = 0.55 },
+
+    // === Special Biomes ===
+    .{ .id = .mushroom_fields, .heat = 50, .humidity = 80, .weight = 0.3, .min_continental = 0.35, .max_continental = 0.45 },
+    .{ .id = .river, .heat = 50, .humidity = 70, .weight = 0.4, .min_continental = 0.42 }, // Selected by river mask, not Voronoi
+
+    // === Transition Biomes (created by edge detection, but need Voronoi fallback) ===
+    // These have extreme positions so they're rarely selected directly
+    .{ .id = .foothills, .heat = 45, .humidity = 45, .weight = 0.5, .min_continental = 0.55, .y_min = 75, .y_max = 100 },
+    .{ .id = .marsh, .heat = 55, .humidity = 78, .weight = 0.5, .min_continental = 0.42, .y_max = 68 },
+    .{ .id = .dry_plains, .heat = 70, .humidity = 25, .weight = 0.6, .min_continental = 0.42 },
+    .{ .id = .coastal_plains, .heat = 55, .humidity = 50, .weight = 0.5, .min_continental = 0.35, .max_continental = 0.48 },
+};
+
+/// Select biome using Voronoi diagram in heat/humidity space
+/// Returns the biome whose point is closest to the given heat/humidity values
+pub fn selectBiomeVoronoi(heat: f32, humidity: f32, height: i32, continentalness: f32, slope: i32) BiomeId {
+    var min_dist: f32 = std.math.inf(f32);
+    var closest: BiomeId = .plains;
+
+    for (BIOME_POINTS) |point| {
+        // Check height constraint
+        if (height < point.y_min or height > point.y_max) continue;
+
+        // Check slope constraint
+        if (slope > point.max_slope) continue;
+
+        // Check continentalness constraint
+        if (continentalness < point.min_continental or continentalness > point.max_continental) continue;
+
+        // Calculate weighted Euclidean distance in heat/humidity space
+        const d_heat = heat - point.heat;
+        const d_humidity = humidity - point.humidity;
+        var dist = @sqrt(d_heat * d_heat + d_humidity * d_humidity);
+
+        // Weight adjusts effective cell size (larger weight = closer distance = more likely)
+        dist /= point.weight;
+
+        if (dist < min_dist) {
+            min_dist = dist;
+            closest = point.id;
+        }
+    }
+
+    return closest;
+}
+
+/// Select biome using Voronoi with river override
+pub fn selectBiomeVoronoiWithRiver(
+    heat: f32,
+    humidity: f32,
+    height: i32,
+    continentalness: f32,
+    slope: i32,
+    river_mask: f32,
+) BiomeId {
+    // River biome takes priority when river mask is active
+    if (river_mask > 0.5 and height < 68) {
+        return .river;
+    }
+    return selectBiomeVoronoi(heat, humidity, height, continentalness, slope);
+}
+
+// ============================================================================
 // Biome Registry - All biome definitions
 // ============================================================================
 
@@ -721,36 +835,24 @@ pub const StructuralParams = struct {
     ridge_mask: f32,
 };
 
-/// Select biome based on structural constraints first, then climate
-/// This prevents biomes from appearing in inappropriate terrain (e.g., desert on mountains)
+/// Select biome using Voronoi diagram in heat/humidity space (Issue #106)
+/// Climate temperature/humidity are converted to heat/humidity scale (0-100)
+/// Structural constraints (height, continentalness) filter eligible biomes
 pub fn selectBiomeWithConstraints(climate: ClimateParams, structural: StructuralParams) BiomeId {
-    var best_score: f32 = 0;
-    var best_biome: BiomeId = .plains;
+    // Convert climate params to Voronoi heat/humidity scale (0-100)
+    // Temperature 0-1 -> Heat 0-100
+    // Humidity 0-1 -> Humidity 0-100
+    const heat = climate.temperature * 100.0;
+    const humidity = climate.humidity * 100.0;
 
-    for (BIOME_REGISTRY) |biome| {
-        // First check structural constraints
-        if (!biome.meetsStructuralConstraints(structural.height, structural.slope, structural.continentalness, structural.ridge_mask)) {
-            continue;
-        }
-
-        // Then score based on climate (temperature, humidity, elevation)
-        const s = biome.scoreClimate(climate);
-        if (s > best_score) {
-            best_score = s;
-            best_biome = biome.id;
-        }
-    }
-
-    return best_biome;
+    return selectBiomeVoronoi(heat, humidity, structural.height, structural.continentalness, structural.slope);
 }
 
 /// Select biome with structural constraints and river override
 pub fn selectBiomeWithConstraintsAndRiver(climate: ClimateParams, structural: StructuralParams, river_mask: f32) BiomeId {
-    const biome_id = selectBiomeWithConstraints(climate, structural);
+    // Convert climate params to Voronoi heat/humidity scale (0-100)
+    const heat = climate.temperature * 100.0;
+    const humidity = climate.humidity * 100.0;
 
-    // River biome takes priority when river mask is active
-    if (river_mask > 0.5 and climate.elevation < 0.35) {
-        return .river;
-    }
-    return biome_id;
+    return selectBiomeVoronoiWithRiver(heat, humidity, structural.height, structural.continentalness, structural.slope, river_mask);
 }
