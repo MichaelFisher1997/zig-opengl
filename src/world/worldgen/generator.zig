@@ -509,6 +509,11 @@ pub const TerrainGenerator = struct {
                 const use_secondary = dither < blend;
                 const active_biome_id = if (use_secondary) secondary_biome_id else primary_biome_id;
                 const active_biome: Biome = @enumFromInt(@intFromEnum(active_biome_id));
+
+                // Populate chunk heightmap and biomes (Issue #107)
+                chunk.setSurfaceHeight(local_x, local_z, @intCast(terrain_height_i));
+                chunk.biomes[idx] = active_biome_id;
+
                 while (y < CHUNK_SIZE_Y) : (y += 1) {
                     var block = self.getBlockAt(y, terrain_height_i, active_biome, filler_depth, is_ocean_water, is_underwater, sea);
                     const is_surface = (y == terrain_height_i);
@@ -586,6 +591,11 @@ pub const TerrainGenerator = struct {
                 const use_secondary = dither < blend;
                 const active_biome_id = if (use_secondary) secondary_biome_id else primary_biome_id;
                 const active_biome: Biome = @enumFromInt(@intFromEnum(active_biome_id));
+
+                // Populate chunk heightmap and biomes (Issue #107)
+                chunk.setSurfaceHeight(local_x, local_z, @intCast(terrain_height_i));
+                chunk.biomes[idx] = active_biome_id;
+
                 while (y < CHUNK_SIZE_Y) : (y += 1) {
                     var block = self.getBlockAt(y, terrain_height_i, active_biome, filler_depth, is_ocean_water, is_underwater, sea);
                     const is_surface = (y == terrain_height_i);

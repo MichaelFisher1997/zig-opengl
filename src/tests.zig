@@ -1075,6 +1075,37 @@ test "WorldGen golden output for known seed at origin" {
     try testing.expect(surface_block.isSolid());
 }
 
+test "WorldGen populates heightmap and biomes" {
+    const allocator = testing.allocator;
+    const gen = TerrainGenerator.init(42, allocator);
+    var chunk = Chunk.init(0, 0);
+
+    gen.generate(&chunk, null);
+
+    // Check heightmap
+    const h = chunk.getSurfaceHeight(8, 8);
+    try testing.expect(h > 0);
+    try testing.expect(h < CHUNK_SIZE_Y);
+
+    // Check that stored height corresponds to a solid or water block (terrain surface)
+    // Note: getBlock takes u32 y, h is i16
+    const block_at_surface = chunk.getBlock(8, @intCast(h), 8);
+    // It should be solid or water (if ocean)
+    // Actually, surface_height is the height of the terrain surface.
+    // If underwater, it's the sea floor?
+    // generator.zig: `surface_heights[idx] = terrain_height_i;`
+    // computeHeight returns the height of the solid terrain (seabed if ocean).
+    // So block at h should be solid (sand/gravel/dirt/stone).
+    // Block at h+1 might be water or air.
+    try testing.expect(block_at_surface != BlockType.air);
+    try testing.expect(block_at_surface != BlockType.water); // Should be seabed if underwater
+
+    // Check biomes
+    const b = chunk.biomes[8 + 8 * 16];
+    // Just ensure valid enum
+    try testing.expect(@intFromEnum(b) <= 20); // 20 is max ID currently
+}
+
 // ============================================================================
 // Chunk Meshing Tests
 // ============================================================================
