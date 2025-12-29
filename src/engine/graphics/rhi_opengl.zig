@@ -143,7 +143,6 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, device: ?*RenderDevic
     ctx.buffers = .empty;
     ctx.free_indices = .empty;
     ctx.mutex = .{};
-    ctx.shader_registry = std.AutoHashMap(rhi.ShaderHandle, *Shader).init(allocator);
 
     // Initialize UI shaders
     std.log.info("Creating OpenGL UI shaders...", .{});
@@ -308,6 +307,7 @@ fn deinit(ctx_ptr: *anyopaque) void {
     if (ctx.debug_shadow_vao != 0) c.glDeleteVertexArrays().?(1, &ctx.debug_shadow_vao);
     if (ctx.debug_shadow_vbo != 0) c.glDeleteBuffers().?(1, &ctx.debug_shadow_vbo);
 
+    ctx.shader_registry.deinit();
     ctx.allocator.destroy(ctx);
 }
 
