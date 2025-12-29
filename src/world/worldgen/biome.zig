@@ -266,15 +266,13 @@ pub fn getTransitionBiome(a: BiomeId, b: BiomeId) ?BiomeId {
 
 pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
     // === Ocean Biomes ===
-    // STRUCTURE-FIRST: Ocean is FORCED when continentalness < 0.38
-    // These biome definitions are for surface block selection, not height
     .{
         .id = .deep_ocean,
         .name = "Deep Ocean",
         .temperature = Range.any(),
         .humidity = Range.any(),
         .elevation = .{ .min = 0.0, .max = 0.25 },
-        .continentalness = .{ .min = 0.0, .max = 0.25 }, // Deep ocean zone
+        .continentalness = .{ .min = 0.0, .max = 0.20 },
         .priority = 2,
         .surface = .{ .top = .gravel, .filler = .gravel, .depth_range = 4 },
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0 },
@@ -286,7 +284,7 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .temperature = Range.any(),
         .humidity = Range.any(),
         .elevation = .{ .min = 0.0, .max = 0.30 },
-        .continentalness = .{ .min = 0.0, .max = 0.38 }, // Ocean zone (matches threshold)
+        .continentalness = .{ .min = 0.0, .max = 0.35 },
         .priority = 1,
         .surface = .{ .top = .sand, .filler = .sand, .depth_range = 3 },
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0 },
@@ -297,24 +295,23 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .temperature = .{ .min = 0.2, .max = 1.0 },
         .humidity = Range.any(),
         .elevation = .{ .min = 0.28, .max = 0.38 },
-        // Coastal shelf zone (0.38 - 0.55)
-        .continentalness = .{ .min = 0.38, .max = 0.55 },
+        .continentalness = .{ .min = 0.35, .max = 0.42 }, // NARROW beach band
         .max_slope = 2,
         .priority = 10,
         .surface = .{ .top = .sand, .filler = .sand, .depth_range = 2 },
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0 },
     },
 
-    // === Land Biomes (continentalness > 0.55) ===
+    // === Land Biomes (continentalness > 0.45) ===
     .{
         .id = .plains,
         .name = "Plains",
-        .temperature = Range.any(), // Catch-all temp
-        .humidity = Range.any(), // Catch-all humidity
+        .temperature = Range.any(),
+        .humidity = Range.any(),
         .elevation = .{ .min = 0.25, .max = 0.70 },
-        .continentalness = .{ .min = 0.55, .max = 1.0 }, // Land zone
-        .ruggedness = Range.any(), // Catch-all ruggedness
-        .priority = 0, // Absolute fallback land biome
+        .continentalness = .{ .min = 0.45, .max = 1.0 },
+        .ruggedness = Range.any(),
+        .priority = 0, // Fallback
         .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 3 },
         .vegetation = .{ .tree_types = &.{.oak}, .tree_density = 0.02, .grass_density = 0.3 },
         .terrain = .{ .height_amplitude = 0.7, .smoothing = 0.2 },
@@ -325,7 +322,7 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .temperature = .{ .min = 0.35, .max = 0.75 },
         .humidity = .{ .min = 0.40, .max = 1.0 },
         .elevation = .{ .min = 0.25, .max = 0.70 },
-        .continentalness = .{ .min = 0.55, .max = 1.0 },
+        .continentalness = .{ .min = 0.45, .max = 1.0 },
         .ruggedness = .{ .min = 0.0, .max = 0.60 },
         .priority = 5,
         .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 3 },
@@ -338,7 +335,7 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
         .temperature = .{ .min = 0.15, .max = 0.45 },
         .humidity = .{ .min = 0.30, .max = 0.90 },
         .elevation = .{ .min = 0.25, .max = 0.75 },
-        .continentalness = .{ .min = 0.55, .max = 1.0 },
+        .continentalness = .{ .min = 0.45, .max = 1.0 },
         .priority = 6,
         .surface = .{ .top = .grass, .filler = .dirt, .depth_range = 3 },
         .vegetation = .{ .tree_types = &.{.spruce}, .tree_density = 0.10, .grass_density = 0.2 },
@@ -347,14 +344,14 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
     .{
         .id = .desert,
         .name = "Desert",
-        .temperature = .{ .min = 0.82, .max = 1.0 }, // Only VERY hot
-        .humidity = .{ .min = 0.0, .max = 0.18 }, // Only VERY dry
+        .temperature = .{ .min = 0.80, .max = 1.0 }, // Very hot
+        .humidity = .{ .min = 0.0, .max = 0.20 }, // Very dry
         .elevation = .{ .min = 0.35, .max = 0.60 },
-        .continentalness = .{ .min = 0.72, .max = 1.0 }, // Deep inland only
+        .continentalness = .{ .min = 0.60, .max = 1.0 }, // Inland
         .ruggedness = .{ .min = 0.0, .max = 0.35 },
         .max_height = 90,
         .max_slope = 4,
-        .priority = 6, // Higher priority when conditions match
+        .priority = 6,
         .surface = .{ .top = .sand, .filler = .sand, .depth_range = 6 },
         .vegetation = .{ .tree_types = &.{}, .tree_density = 0, .cactus_density = 0.015, .dead_bush_density = 0.02 },
         .terrain = .{ .height_amplitude = 0.5, .smoothing = 0.4 },
