@@ -52,45 +52,45 @@ pub const ContinentalZone = enum {
 
 /// Terrain generation parameters
 const Params = struct {
-    warp_scale: f32 = 1.0 / 400.0,
-    warp_amplitude: f32 = 60.0,
-    continental_scale: f32 = 1.0 / 2000.0, // Reasonable scale - ~2km features
+    warp_scale: f32 = 1.0 / 200.0,
+    warp_amplitude: f32 = 30.0,
+    continental_scale: f32 = 1.0 / 1500.0,
 
-    // Continental Zones (structure-first):
-    ocean_threshold: f32 = 0.35, // Below = ocean
+    // Continental Zones:
+    ocean_threshold: f32 = 0.35,
     continental_deep_ocean_max: f32 = 0.20,
     continental_ocean_max: f32 = 0.35,
-    continental_coast_max: f32 = 0.45, // NARROW coast zone
-    continental_inland_low_max: f32 = 0.65,
-    continental_inland_high_max: f32 = 0.80,
+    continental_coast_max: f32 = 0.42,
+    continental_inland_low_max: f32 = 0.60,
+    continental_inland_high_max: f32 = 0.75,
 
-    erosion_scale: f32 = 1.0 / 800.0,
-    peaks_scale: f32 = 1.0 / 600.0,
-    temperature_macro_scale: f32 = 1.0 / 4000.0,
-    temperature_local_scale: f32 = 1.0 / 400.0,
-    humidity_macro_scale: f32 = 1.0 / 4000.0,
-    humidity_local_scale: f32 = 1.0 / 400.0,
-    climate_macro_weight: f32 = 0.80,
+    erosion_scale: f32 = 1.0 / 400.0,
+    peaks_scale: f32 = 1.0 / 300.0,
+    temperature_macro_scale: f32 = 1.0 / 2000.0,
+    temperature_local_scale: f32 = 1.0 / 200.0,
+    humidity_macro_scale: f32 = 1.0 / 2000.0,
+    humidity_local_scale: f32 = 1.0 / 200.0,
+    climate_macro_weight: f32 = 0.75,
     temp_lapse: f32 = 0.25,
     sea_level: i32 = 64,
 
-    // Mountains: AGGRESSIVELY GATED - only in continental cores
-    mount_amp: f32 = 100.0,
-    mount_cap: f32 = 180.0,
-    detail_scale: f32 = 1.0 / 80.0,
-    detail_amp: f32 = 8.0,
-    highland_range: f32 = 100.0,
-    coast_jitter_scale: f32 = 1.0 / 300.0,
-    seabed_scale: f32 = 1.0 / 200.0,
-    seabed_amp: f32 = 3.0,
-    river_scale: f32 = 1.0 / 1500.0,
+    // Mountains
+    mount_amp: f32 = 60.0,
+    mount_cap: f32 = 120.0,
+    detail_scale: f32 = 1.0 / 32.0, // SMALL - every ~32 blocks
+    detail_amp: f32 = 6.0,
+    highland_range: f32 = 80.0,
+    coast_jitter_scale: f32 = 1.0 / 150.0,
+    seabed_scale: f32 = 1.0 / 100.0,
+    seabed_amp: f32 = 2.0,
+    river_scale: f32 = 1.0 / 800.0,
     river_min: f32 = 0.90,
     river_max: f32 = 0.95,
-    river_depth_max: f32 = 8.0,
+    river_depth_max: f32 = 6.0,
 
-    // Beach is VERY narrow - only 0.03 continentalness band
+    // Beach - very narrow
     coast_continentalness_min: f32 = 0.35,
-    coast_continentalness_max: f32 = 0.42,
+    coast_continentalness_max: f32 = 0.40,
     beach_max_height_above_sea: i32 = 3,
     beach_max_slope: i32 = 2,
     cliff_min_slope: i32 = 5,
@@ -98,24 +98,24 @@ const Params = struct {
     coastal_no_tree_min: i32 = 8,
     coastal_no_tree_max: i32 = 18,
 
-    // Mountains need to be inland
-    mount_inland_min: f32 = 0.65,
-    mount_inland_max: f32 = 0.85,
-    mount_peak_min: f32 = 0.60,
-    mount_peak_max: f32 = 0.90,
-    mount_rugged_min: f32 = 0.40,
-    mount_rugged_max: f32 = 0.80,
+    // Mountains
+    mount_inland_min: f32 = 0.60,
+    mount_inland_max: f32 = 0.80,
+    mount_peak_min: f32 = 0.55,
+    mount_peak_max: f32 = 0.85,
+    mount_rugged_min: f32 = 0.35,
+    mount_rugged_max: f32 = 0.75,
 
-    mid_freq_hill_scale: f32 = 1.0 / 150.0,
-    mid_freq_hill_amp: f32 = 18.0,
-    peak_compression_offset: f32 = 90.0,
-    peak_compression_range: f32 = 100.0,
+    mid_freq_hill_scale: f32 = 1.0 / 64.0, // SMALL - hills every ~64 blocks
+    mid_freq_hill_amp: f32 = 12.0,
+    peak_compression_offset: f32 = 80.0,
+    peak_compression_range: f32 = 80.0,
     terrace_step: f32 = 4.0,
-    ridge_scale: f32 = 1.0 / 800.0,
-    ridge_amp: f32 = 40.0,
-    ridge_inland_min: f32 = 0.55,
-    ridge_inland_max: f32 = 0.75,
-    ridge_sparsity: f32 = 0.55,
+    ridge_scale: f32 = 1.0 / 400.0,
+    ridge_amp: f32 = 25.0,
+    ridge_inland_min: f32 = 0.50,
+    ridge_inland_max: f32 = 0.70,
+    ridge_sparsity: f32 = 0.50,
 };
 
 pub const TerrainGenerator = struct {
@@ -715,32 +715,30 @@ pub const TerrainGenerator = struct {
         const p = self.params;
         const sea: f32 = @floatFromInt(p.sea_level);
 
-        // Coastal zone: ocean_threshold (0.35) to coast_max (0.45)
-        // Terrain rises QUICKLY from sea level
+        // Coastal zone: 0.35 to 0.42 - rises from sea level
         if (c < p.continental_coast_max) {
             const range = p.continental_coast_max - p.ocean_threshold;
             const t = (c - p.ocean_threshold) / range;
-            // Rise from sea level to +15 blocks
-            return sea + t * 15.0;
+            return sea + t * 8.0; // 0 to +8 blocks
         }
 
-        // Inland Low: coast_max (0.45) to inland_low_max (0.65)
+        // Inland Low: 0.42 to 0.60 - plains/forests
         if (c < p.continental_inland_low_max) {
             const range = p.continental_inland_low_max - p.continental_coast_max;
             const t = (c - p.continental_coast_max) / range;
-            return sea + 15.0 + t * 25.0; // +15 to +40
+            return sea + 8.0 + t * 12.0; // +8 to +20
         }
 
-        // Inland High: inland_low_max (0.65) to inland_high_max (0.80)
+        // Inland High: 0.60 to 0.75 - hills
         if (c < p.continental_inland_high_max) {
             const range = p.continental_inland_high_max - p.continental_inland_low_max;
             const t = (c - p.continental_inland_low_max) / range;
-            return sea + 40.0 + t * 30.0; // +40 to +70
+            return sea + 20.0 + t * 15.0; // +20 to +35
         }
 
-        // Mountain Core: > 0.80
+        // Mountain Core: > 0.75
         const t = smoothstep(p.continental_inland_high_max, 1.0, c);
-        return sea + 70.0 + t * 30.0; // +70 to +100
+        return sea + 35.0 + t * 25.0; // +35 to +60
     }
 
     /// STRUCTURE-FIRST height computation.
