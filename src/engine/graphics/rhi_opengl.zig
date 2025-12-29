@@ -20,6 +20,26 @@ const Mat4 = @import("../math/mat4.zig").Mat4;
 const Vec3 = @import("../math/vec3.zig").Vec3;
 const Shader = @import("shader.zig").Shader;
 
+/// Compile-time constants for shadow cascade uniform names.
+/// Eliminates per-frame string formatting overhead in updateShadowUniforms.
+const shadow_uniform_names = struct {
+    const light_space_matrices = [_][:0]const u8{
+        "uLightSpaceMatrices[0]",
+        "uLightSpaceMatrices[1]",
+        "uLightSpaceMatrices[2]",
+    };
+    const cascade_splits = [_][:0]const u8{
+        "uCascadeSplits[0]",
+        "uCascadeSplits[1]",
+        "uCascadeSplits[2]",
+    };
+    const shadow_texel_sizes = [_][:0]const u8{
+        "uShadowTexelSizes[0]",
+        "uShadowTexelSizes[1]",
+        "uShadowTexelSizes[2]",
+    };
+};
+
 const BufferResource = struct {
     vao: c.GLuint,
     vbo: c.GLuint,
@@ -497,15 +517,9 @@ fn updateShadowUniforms(ctx_ptr: *anyopaque, params: rhi.ShadowParams) void {
     shader.use();
 
     for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
-        var buf: [64]u8 = undefined;
-        const name_mat = std.fmt.bufPrintZ(&buf, "uLightSpaceMatrices[{}]", .{i}) catch continue;
-        shader.setMat4(name_mat.ptr, &params.light_space_matrices[i].data);
-
-        const name_split = std.fmt.bufPrintZ(&buf, "uCascadeSplits[{}]", .{i}) catch continue;
-        shader.setFloat(name_split.ptr, params.cascade_splits[i]);
-
-        const name_size = std.fmt.bufPrintZ(&buf, "uShadowTexelSizes[{}]", .{i}) catch continue;
-        shader.setFloat(name_size.ptr, params.shadow_texel_sizes[i]);
+        shader.setMat4(shadow_uniform_names.light_space_matrices[i], &params.light_space_matrices[i].data);
+        shader.setFloat(shadow_uniform_names.cascade_splits[i], params.cascade_splits[i]);
+        shader.setFloat(shadow_uniform_names.shadow_texel_sizes[i], params.shadow_texel_sizes[i]);
     }
 }
 
