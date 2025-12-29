@@ -10,6 +10,9 @@ const noise_mod = @import("noise.zig");
 const Noise = noise_mod.Noise;
 const smoothstep = noise_mod.smoothstep;
 const clamp01 = noise_mod.clamp01;
+const ConfiguredNoise = noise_mod.ConfiguredNoise;
+const NoiseParams = noise_mod.NoiseParams;
+const Vec3f = noise_mod.Vec3f;
 const CaveSystem = @import("caves.zig").CaveSystem;
 const biome_mod = @import("biome.zig");
 const BiomeId = biome_mod.BiomeId;
@@ -27,6 +30,25 @@ const CHUNK_SIZE_Z = @import("../chunk.zig").CHUNK_SIZE_Z;
 const MAX_LIGHT = @import("../chunk.zig").MAX_LIGHT;
 const BlockType = @import("../block.zig").BlockType;
 const Biome = @import("../block.zig").Biome;
+
+// ============================================================================
+// Luanti V7-Style Noise Parameters (Issue #105)
+// These define the multi-layer terrain generation system
+// ============================================================================
+
+/// Create NoiseParams with a seed offset from base seed
+fn makeNoiseParams(base_seed: u64, offset: u64, spread: f32, scale: f32, off: f32, octaves: u16, persist: f32) NoiseParams {
+    return .{
+        .seed = base_seed +% offset,
+        .spread = Vec3f.uniform(spread),
+        .scale = scale,
+        .offset = off,
+        .octaves = octaves,
+        .persist = persist,
+        .lacunarity = 2.0,
+        .flags = .{},
+    };
+}
 
 /// Explicit continentalness zones for terrain structure
 pub const ContinentalZone = enum {
@@ -140,6 +162,12 @@ pub const TerrainGenerator = struct {
     params: Params,
     allocator: std.mem.Allocator,
 
+    // V7-style multi-layer terrain noises (Issue #105)
+    terrain_base: ConfiguredNoise,
+    terrain_alt: ConfiguredNoise,
+    height_select: ConfiguredNoise,
+    terrain_persist: ConfiguredNoise,
+
     pub fn init(seed: u64, allocator: std.mem.Allocator) TerrainGenerator {
         var prng = std.Random.DefaultPrng.init(seed);
         const random = prng.random();
@@ -164,6 +192,23 @@ pub const TerrainGenerator = struct {
             .ridge_noise = Noise.init(random.int(u64)),
             .params = .{},
             .allocator = allocator,
+
+            // V7-style terrain layers - spread values based on Luanti defaults
+            // terrain_base: Base terrain shape, rolling hills character
+            // spread=300 for features every ~300 blocks (was 600 in Luanti, smaller for Minecraft feel)
+            .terrain_base = ConfiguredNoise.init(makeNoiseParams(seed, 1001, 300, 35, 4, 5, 0.6)),
+
+            // terrain_alt: Alternate terrain shape, flatter character
+            // Blended with terrain_base using height_select
+            .terrain_alt = ConfiguredNoise.init(makeNoiseParams(seed, 1002, 300, 20, 4, 5, 0.6)),
+
+            // height_select: Blend factor between base and alt terrain
+            // Controls where terrain has base vs alt character
+            .height_select = ConfiguredNoise.init(makeNoiseParams(seed, 1003, 250, 16, -8, 6, 0.6)),
+
+            // terrain_persist: Detail variation multiplier
+            // Modulates how much fine detail appears in different areas
+            .terrain_persist = ConfiguredNoise.init(makeNoiseParams(seed, 1004, 1000, 0.15, 0.6, 3, 0.6)),
         };
     }
 
@@ -741,9 +786,9 @@ pub const TerrainGenerator = struct {
         return sea + 35.0 + t * 25.0; // +35 to +60
     }
 
-    /// STRUCTURE-FIRST height computation.
+    /// STRUCTURE-FIRST height computation with V7-style multi-layer terrain.
     /// The KEY change: Ocean is decided by continentalness ALONE.
-    /// Land logic (mountains, hills, detail) NEVER runs in ocean zones.
+    /// Land uses blended terrain layers for varied terrain character.
     fn computeHeight(self: *const TerrainGenerator, c: f32, e: f32, pv: f32, x: f32, z: f32, river_mask: f32) f32 {
         const p = self.params;
         const sea: f32 = @floatFromInt(p.sea_level);
@@ -768,13 +813,34 @@ pub const TerrainGenerator = struct {
         }
 
         // ============================================================
-        // STEP 2: LAND - Base Height from Continentalness
-        // Only reaches here if c >= ocean_threshold
+        // STEP 2: V7-STYLE MULTI-LAYER TERRAIN (Issue #105)
+        // Blend terrain_base and terrain_alt using height_select
+        // This creates varied terrain where different areas have
+        // noticeably different character (rolling vs flat vs hilly)
         // ============================================================
-        var height = self.getBaseHeight(c);
+        const base_height = self.terrain_base.get2D(x, z);
+        const alt_height = self.terrain_alt.get2D(x, z);
+        const select = self.height_select.get2D(x, z);
+        const persist = self.terrain_persist.get2D(x, z);
+
+        // Apply persistence variation to both heights
+        const base_modulated = base_height * persist;
+        const alt_modulated = alt_height * persist;
+
+        // Blend between base and alt using height_select
+        // select near 0 = more base terrain (rolling hills)
+        // select near 1 = more alt terrain (flatter)
+        const blend = clamp01((select + 8.0) / 16.0);
+        const v7_terrain = std.math.lerp(base_modulated, alt_modulated, blend);
 
         // ============================================================
-        // STEP 3: Mountains & Ridges - AGGRESSIVELY GATED
+        // STEP 3: LAND - Combine V7 terrain with continental base
+        // Only reaches here if c >= ocean_threshold
+        // ============================================================
+        var height = self.getBaseHeight(c) + v7_terrain;
+
+        // ============================================================
+        // STEP 4: Mountains & Ridges - AGGRESSIVELY GATED
         // Only apply in inland zones (c > coast_max)
         // Mountains require: deep inland + high peak noise
         // ============================================================
@@ -793,21 +859,20 @@ pub const TerrainGenerator = struct {
         }
 
         // ============================================================
-        // STEP 4: Hills & Detail - only on land, attenuated by erosion
+        // STEP 5: Fine Detail - Small-scale variation
+        // Attenuated by erosion and in high elevations
         // ============================================================
         const erosion_smooth = smoothstep(0.5, 0.75, e);
         const hills_atten = (1.0 - erosion_smooth) * land_factor;
 
-        const mid_noise = self.detail_noise.fbm2D(x + 5000.0, z + 5000.0, 2, 2.0, 0.5, p.mid_freq_hill_scale);
-        height += mid_noise * p.mid_freq_hill_amp * hills_atten;
-
+        // Small-scale detail (every ~32 blocks)
         const elev01 = clamp01((height - sea) / p.highland_range);
         const detail_atten = 1.0 - smoothstep(0.3, 0.85, elev01);
         const detail = self.detail_noise.fbm2D(x, z, 3, 2.0, 0.5, p.detail_scale) * p.detail_amp;
         height += detail * detail_atten * hills_atten;
 
         // ============================================================
-        // STEP 5: Post-Processing
+        // STEP 6: Post-Processing - Peak compression
         // ============================================================
         const peak_start = sea + p.peak_compression_offset;
         if (height > peak_start) {
@@ -817,7 +882,7 @@ pub const TerrainGenerator = struct {
         }
 
         // ============================================================
-        // STEP 6: River Carving - only on land
+        // STEP 7: River Carving - only on land
         // ============================================================
         if (river_mask > 0.001 and c > p.continental_coast_max) {
             const river_bed = sea - 4.0;
