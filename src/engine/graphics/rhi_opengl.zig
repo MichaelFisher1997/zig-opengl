@@ -40,6 +40,28 @@ const shadow_uniform_names = struct {
     };
 };
 
+/// Direct GL uniform setters for fallback path (when no Shader pointer available).
+/// These are uncached and should only be used when active_shader is null.
+fn setUniformFloatDirect(program: rhi.ShaderHandle, name: [:0]const u8, value: f32) void {
+    const loc = c.glGetUniformLocation().?(program, name.ptr);
+    c.glUniform1f().?(loc, value);
+}
+
+fn setUniformIntDirect(program: rhi.ShaderHandle, name: [:0]const u8, value: i32) void {
+    const loc = c.glGetUniformLocation().?(program, name.ptr);
+    c.glUniform1i().?(loc, value);
+}
+
+fn setUniformVec3Direct(program: rhi.ShaderHandle, name: [:0]const u8, x: f32, y: f32, z: f32) void {
+    const loc = c.glGetUniformLocation().?(program, name.ptr);
+    c.glUniform3f().?(loc, x, y, z);
+}
+
+fn setUniformMat4Direct(program: rhi.ShaderHandle, name: [:0]const u8, matrix: *const [4][4]f32) void {
+    const loc = c.glGetUniformLocation().?(program, name.ptr);
+    c.glUniformMatrix4fv().?(loc, 1, c.GL_FALSE, @ptrCast(matrix));
+}
+
 const BufferResource = struct {
     vao: c.GLuint,
     vbo: c.GLuint,
@@ -447,31 +469,42 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
     const ctx: *OpenGLContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.current_view_proj = view_proj;
 
-    const program = if (ctx.active_shader) |s| s.handle else ctx.active_program;
-    if (program == 0) return;
+    // Use active shader with caching if available
+    if (ctx.active_shader) |shader| {
+        shader.use();
 
-    const shader = Shader{
-        .handle = program,
-        .uniform_cache = undefined,
-        .allocator = undefined,
-        .uses_opengl = true,
-    };
-    shader.use();
+        shader.setVec3Cached("uSunDir", sun_dir.x, sun_dir.y, sun_dir.z);
+        shader.setFloatCached("uSunIntensity", sun_intensity);
+        shader.setFloatCached("uAmbient", ambient);
+        shader.setVec3Cached("uFogColor", fog_color.x, fog_color.y, fog_color.z);
+        shader.setFloatCached("uFogDensity", fog_density);
+        shader.setIntCached("uFogEnabled", if (fog_enabled) 1 else 0);
+        shader.setIntCached("uUseTexture", if (use_texture) 1 else 0);
 
-    shader.setVec3("uSunDir", sun_dir.x, sun_dir.y, sun_dir.z);
-    shader.setFloat("uSunIntensity", sun_intensity);
-    shader.setFloat("uAmbient", ambient);
-    shader.setVec3("uFogColor", fog_color.x, fog_color.y, fog_color.z);
-    shader.setFloat("uFogDensity", fog_density);
-    shader.setBool("uFogEnabled", fog_enabled);
-    shader.setBool("uUseTexture", use_texture);
+        shader.setFloatCached("uCloudWindOffsetX", cloud_params.wind_offset_x);
+        shader.setFloatCached("uCloudWindOffsetZ", cloud_params.wind_offset_z);
+        shader.setFloatCached("uCloudScale", cloud_params.cloud_scale);
+        shader.setFloatCached("uCloudCoverage", cloud_params.cloud_coverage);
+        shader.setFloatCached("uCloudShadowStrength", 0.15);
+        shader.setFloatCached("uCloudHeight", cloud_params.cloud_height);
+    } else if (ctx.active_program != 0) {
+        // Fallback: no shader pointer, use direct GL calls
+        c.glUseProgram().?(ctx.active_program);
+        setUniformVec3Direct(ctx.active_program, "uSunDir", sun_dir.x, sun_dir.y, sun_dir.z);
+        setUniformFloatDirect(ctx.active_program, "uSunIntensity", sun_intensity);
+        setUniformFloatDirect(ctx.active_program, "uAmbient", ambient);
+        setUniformVec3Direct(ctx.active_program, "uFogColor", fog_color.x, fog_color.y, fog_color.z);
+        setUniformFloatDirect(ctx.active_program, "uFogDensity", fog_density);
+        setUniformIntDirect(ctx.active_program, "uFogEnabled", if (fog_enabled) 1 else 0);
+        setUniformIntDirect(ctx.active_program, "uUseTexture", if (use_texture) 1 else 0);
 
-    shader.setFloat("uCloudWindOffsetX", cloud_params.wind_offset_x);
-    shader.setFloat("uCloudWindOffsetZ", cloud_params.wind_offset_z);
-    shader.setFloat("uCloudScale", cloud_params.cloud_scale);
-    shader.setFloat("uCloudCoverage", cloud_params.cloud_coverage);
-    shader.setFloat("uCloudShadowStrength", 0.15);
-    shader.setFloat("uCloudHeight", cloud_params.cloud_height);
+        setUniformFloatDirect(ctx.active_program, "uCloudWindOffsetX", cloud_params.wind_offset_x);
+        setUniformFloatDirect(ctx.active_program, "uCloudWindOffsetZ", cloud_params.wind_offset_z);
+        setUniformFloatDirect(ctx.active_program, "uCloudScale", cloud_params.cloud_scale);
+        setUniformFloatDirect(ctx.active_program, "uCloudCoverage", cloud_params.cloud_coverage);
+        setUniformFloatDirect(ctx.active_program, "uCloudShadowStrength", 0.15);
+        setUniformFloatDirect(ctx.active_program, "uCloudHeight", cloud_params.cloud_height);
+    }
 
     _ = cam_pos;
     _ = time;
@@ -479,66 +512,72 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
 
 fn setTextureUniforms(ctx_ptr: *anyopaque, texture_enabled: bool, shadow_map_handles: [3]rhi.TextureHandle) void {
     const ctx: *OpenGLContext = @ptrCast(@alignCast(ctx_ptr));
-    const program = if (ctx.active_shader) |s| s.handle else ctx.active_program;
-    if (program == 0) return;
-
-    const shader = Shader{
-        .handle = program,
-        .uniform_cache = undefined,
-        .allocator = undefined,
-        .uses_opengl = true,
-    };
-    shader.use();
-
-    shader.setInt("uTexture", 0);
-    shader.setBool("uUseTexture", texture_enabled);
 
     const shadow_map_names = [_][:0]const u8{ "uShadowMap0", "uShadowMap1", "uShadowMap2" };
-    for (0..3) |i| {
-        const slot = @as(c.GLint, 1 + @as(c_int, @intCast(i)));
-        c.glActiveTexture().?(@as(c.GLenum, @intCast(@as(u32, @intCast(c.GL_TEXTURE0)) + @as(u32, @intCast(slot)))));
-        c.glBindTexture(c.GL_TEXTURE_2D, @intCast(shadow_map_handles[i]));
-        shader.setInt(shadow_map_names[i], slot);
+
+    if (ctx.active_shader) |shader| {
+        shader.use();
+
+        shader.setIntCached("uTexture", 0);
+        shader.setIntCached("uUseTexture", if (texture_enabled) 1 else 0);
+
+        for (0..3) |i| {
+            const slot: i32 = 1 + @as(i32, @intCast(i));
+            c.glActiveTexture().?(@as(c.GLenum, @intCast(@as(u32, @intCast(c.GL_TEXTURE0)) + @as(u32, @intCast(slot)))));
+            c.glBindTexture(c.GL_TEXTURE_2D, @intCast(shadow_map_handles[i]));
+            shader.setIntCached(shadow_map_names[i], slot);
+        }
+    } else if (ctx.active_program != 0) {
+        c.glUseProgram().?(ctx.active_program);
+
+        setUniformIntDirect(ctx.active_program, "uTexture", 0);
+        setUniformIntDirect(ctx.active_program, "uUseTexture", if (texture_enabled) 1 else 0);
+
+        for (0..3) |i| {
+            const slot: i32 = 1 + @as(i32, @intCast(i));
+            c.glActiveTexture().?(@as(c.GLenum, @intCast(@as(u32, @intCast(c.GL_TEXTURE0)) + @as(u32, @intCast(slot)))));
+            c.glBindTexture(c.GL_TEXTURE_2D, @intCast(shadow_map_handles[i]));
+            setUniformIntDirect(ctx.active_program, shadow_map_names[i], slot);
+        }
     }
     c.glActiveTexture().?(c.GL_TEXTURE0);
 }
 
 fn updateShadowUniforms(ctx_ptr: *anyopaque, params: rhi.ShadowParams) void {
     const ctx: *OpenGLContext = @ptrCast(@alignCast(ctx_ptr));
-    const program = if (ctx.active_shader) |s| s.handle else ctx.active_program;
-    if (program == 0) return;
 
-    const shader = Shader{
-        .handle = program,
-        .uniform_cache = undefined,
-        .allocator = undefined,
-        .uses_opengl = true,
-    };
-    shader.use();
+    if (ctx.active_shader) |shader| {
+        shader.use();
 
-    for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
-        shader.setMat4(shadow_uniform_names.light_space_matrices[i], &params.light_space_matrices[i].data);
-        shader.setFloat(shadow_uniform_names.cascade_splits[i], params.cascade_splits[i]);
-        shader.setFloat(shadow_uniform_names.shadow_texel_sizes[i], params.shadow_texel_sizes[i]);
+        for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
+            shader.setMat4Cached(shadow_uniform_names.light_space_matrices[i], &params.light_space_matrices[i].data);
+            shader.setFloatCached(shadow_uniform_names.cascade_splits[i], params.cascade_splits[i]);
+            shader.setFloatCached(shadow_uniform_names.shadow_texel_sizes[i], params.shadow_texel_sizes[i]);
+        }
+    } else if (ctx.active_program != 0) {
+        c.glUseProgram().?(ctx.active_program);
+
+        for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
+            setUniformMat4Direct(ctx.active_program, shadow_uniform_names.light_space_matrices[i], &params.light_space_matrices[i].data);
+            setUniformFloatDirect(ctx.active_program, shadow_uniform_names.cascade_splits[i], params.cascade_splits[i]);
+            setUniformFloatDirect(ctx.active_program, shadow_uniform_names.shadow_texel_sizes[i], params.shadow_texel_sizes[i]);
+        }
     }
 }
 
 fn setModelMatrix(ctx_ptr: *anyopaque, model: Mat4) void {
     const ctx: *OpenGLContext = @ptrCast(@alignCast(ctx_ptr));
-    const program = if (ctx.active_shader) |s| s.handle else ctx.active_program;
-    if (program == 0) return;
-
-    const shader = Shader{
-        .handle = program,
-        .uniform_cache = undefined,
-        .allocator = undefined,
-        .uses_opengl = true,
-    };
-    shader.use();
-
     const mvp = ctx.current_view_proj.multiply(model);
-    shader.setMat4("transform", &mvp.data);
-    shader.setMat4("uModel", &model.data);
+
+    if (ctx.active_shader) |shader| {
+        shader.use();
+        shader.setMat4Cached("transform", &mvp.data);
+        shader.setMat4Cached("uModel", &model.data);
+    } else if (ctx.active_program != 0) {
+        c.glUseProgram().?(ctx.active_program);
+        setUniformMat4Direct(ctx.active_program, "transform", &mvp.data);
+        setUniformMat4Direct(ctx.active_program, "uModel", &model.data);
+    }
 }
 
 fn compileShaderGL(shader_type: c.GLenum, source: [*c]const u8) Shader.Error!c.GLuint {
