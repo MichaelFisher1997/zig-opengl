@@ -550,7 +550,7 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
     depth_attachment.format = depth_format;
     depth_attachment.samples = c.VK_SAMPLE_COUNT_1_BIT;
     depth_attachment.loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depth_attachment.storeOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth_attachment.storeOp = c.VK_ATTACHMENT_STORE_OP_STORE;
     depth_attachment.stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depth_attachment.stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depth_attachment.initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
