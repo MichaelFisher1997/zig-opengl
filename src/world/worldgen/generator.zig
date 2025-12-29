@@ -320,6 +320,8 @@ pub const TerrainGenerator = struct {
             }
         }
 
+        // === Phase B: Base Biome Selection ===
+        // First pass: compute base biomes for all columns
         local_z = 0;
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
             if (stop_flag) |sf| if (sf.*) return;
@@ -347,6 +349,71 @@ pub const TerrainGenerator = struct {
                 biome_ids[idx] = biome_id;
                 secondary_biome_ids[idx] = biome_id;
                 biome_blends[idx] = 0.0;
+            }
+        }
+
+        // === Phase B2: Edge Detection and Transition Biome Injection (Issue #102) ===
+        // Use coarse grid sampling to detect biome boundaries and inject transition biomes
+        const EDGE_GRID_SIZE = CHUNK_SIZE_X / biome_mod.EDGE_STEP; // 4 cells for 16-block chunk
+
+        // For each coarse grid cell, detect if we're near a biome edge
+        var gz: u32 = 0;
+        while (gz < EDGE_GRID_SIZE) : (gz += 1) {
+            if (stop_flag) |sf| if (sf.*) return;
+            var gx: u32 = 0;
+            while (gx < EDGE_GRID_SIZE) : (gx += 1) {
+                // Sample at the center of each grid cell
+                const sample_x = gx * biome_mod.EDGE_STEP + biome_mod.EDGE_STEP / 2;
+                const sample_z = gz * biome_mod.EDGE_STEP + biome_mod.EDGE_STEP / 2;
+                const sample_idx = sample_x + sample_z * CHUNK_SIZE_X;
+                const base_biome = biome_ids[sample_idx];
+
+                // Detect edge using world coordinates (allows sampling outside chunk)
+                const sample_wx = world_x + @as(i32, @intCast(sample_x));
+                const sample_wz = world_z + @as(i32, @intCast(sample_z));
+                const edge_info = self.detectBiomeEdge(sample_wx, sample_wz, base_biome);
+
+                // If edge detected, apply transition biome to this grid cell
+                if (edge_info.edge_band != .none) {
+                    if (edge_info.neighbor_biome) |neighbor| {
+                        if (biome_mod.getTransitionBiome(base_biome, neighbor)) |transition_biome| {
+                            // Apply transition biome to all blocks in this grid cell
+                            var cell_z: u32 = 0;
+                            while (cell_z < biome_mod.EDGE_STEP) : (cell_z += 1) {
+                                var cell_x: u32 = 0;
+                                while (cell_x < biome_mod.EDGE_STEP) : (cell_x += 1) {
+                                    const lx = gx * biome_mod.EDGE_STEP + cell_x;
+                                    const lz = gz * biome_mod.EDGE_STEP + cell_z;
+                                    if (lx < CHUNK_SIZE_X and lz < CHUNK_SIZE_Z) {
+                                        const cell_idx = lx + lz * CHUNK_SIZE_X;
+                                        // Store transition as primary, original as secondary for blending
+                                        secondary_biome_ids[cell_idx] = biome_ids[cell_idx];
+                                        biome_ids[cell_idx] = transition_biome;
+                                        // Set blend factor based on edge band (inner = more blend)
+                                        biome_blends[cell_idx] = switch (edge_info.edge_band) {
+                                            .inner => 0.3, // Closer to boundary: more original showing through
+                                            .middle => 0.2,
+                                            .outer => 0.1,
+                                            .none => 0.0,
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // === Phase B3: Finalize biome data ===
+        // Set biomes on chunk and compute filler depths
+        local_z = 0;
+        while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
+            if (stop_flag) |sf| if (sf.*) return;
+            var local_x: u32 = 0;
+            while (local_x < CHUNK_SIZE_X) : (local_x += 1) {
+                const idx = local_x + local_z * CHUNK_SIZE_X;
+                const biome_id = biome_ids[idx];
                 chunk.setBiome(local_x, local_z, biome_id);
 
                 const biome_def = biome_mod.getBiomeDefinition(biome_id);
@@ -1270,5 +1337,108 @@ pub const TerrainGenerator = struct {
                 }
             }
         }
+    }
+
+    // =========================================================================
+    // Biome Edge Detection (Issue #102)
+    // =========================================================================
+
+    /// Sample biome at arbitrary world coordinates (deterministic, no chunk dependency)
+    /// This is a lightweight version of getColumnInfo for edge detection sampling
+    pub fn sampleBiomeAtWorld(self: *const TerrainGenerator, wx: i32, wz: i32) BiomeId {
+        const p = self.params;
+        const wxf: f32 = @floatFromInt(wx);
+        const wzf: f32 = @floatFromInt(wz);
+
+        // Compute warped coordinates
+        const warp = self.computeWarp(wxf, wzf);
+        const xw = wxf + warp.x;
+        const zw = wzf + warp.z;
+
+        // Get structural parameters
+        const c = self.getContinentalness(xw, zw);
+        const e = self.getErosion(xw, zw);
+        const pv = self.getPeaksValleys(xw, zw);
+        const coast_jitter = self.coast_jitter_noise.fbm2D(xw, zw, 2, 2.0, 0.5, p.coast_jitter_scale) * 0.03;
+        const c_jittered = clamp01(c + coast_jitter);
+        const river_mask = self.getRiverMask(xw, zw);
+
+        // Compute height for climate calculation
+        const terrain_height = self.computeHeight(c_jittered, e, pv, xw, zw, river_mask);
+        const terrain_height_i: i32 = @intFromFloat(terrain_height);
+        const sea: f32 = @floatFromInt(p.sea_level);
+
+        // Get climate parameters
+        const altitude_offset: f32 = @max(0, terrain_height - sea);
+        var temperature = self.getTemperature(xw, zw);
+        temperature = clamp01(temperature - (altitude_offset / 512.0) * p.temp_lapse);
+        const humidity = self.getHumidity(xw, zw);
+
+        // Build climate params
+        const climate = biome_mod.computeClimateParams(
+            temperature,
+            humidity,
+            terrain_height_i,
+            c_jittered,
+            e,
+            p.sea_level,
+            CHUNK_SIZE_Y,
+        );
+
+        // Structural params (simplified - no slope calculation for sampling)
+        const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered);
+        const structural = biome_mod.StructuralParams{
+            .height = terrain_height_i,
+            .slope = 1, // Assume low slope for sampling
+            .continentalness = c_jittered,
+            .ridge_mask = ridge_mask,
+        };
+
+        return biome_mod.selectBiomeWithConstraintsAndRiver(climate, structural, river_mask);
+    }
+
+    /// Detect if a position is near a biome boundary that needs a transition zone
+    /// Returns edge info including the neighboring biome and proximity band
+    pub fn detectBiomeEdge(
+        self: *const TerrainGenerator,
+        wx: i32,
+        wz: i32,
+        center_biome: BiomeId,
+    ) biome_mod.BiomeEdgeInfo {
+        var detected_neighbor: ?BiomeId = null;
+        var closest_band: biome_mod.EdgeBand = .none;
+
+        // Check at each radius (4, 8, 12 blocks) - from closest to farthest
+        for (biome_mod.EDGE_CHECK_RADII, 0..) |radius, band_idx| {
+            const r: i32 = @intCast(radius);
+            const offsets = [_][2]i32{
+                .{ r, 0 }, // East
+                .{ -r, 0 }, // West
+                .{ 0, r }, // South
+                .{ 0, -r }, // North
+            };
+
+            for (offsets) |off| {
+                const neighbor_biome = self.sampleBiomeAtWorld(wx + off[0], wz + off[1]);
+
+                // Check if this neighbor differs and needs a transition
+                if (neighbor_biome != center_biome and biome_mod.needsTransition(center_biome, neighbor_biome)) {
+                    detected_neighbor = neighbor_biome;
+                    // Band index: 0=4 blocks (inner), 1=8 blocks (middle), 2=12 blocks (outer)
+                    // EdgeBand: inner=3, middle=2, outer=1
+                    closest_band = @enumFromInt(3 - @as(u2, @intCast(band_idx)));
+                    break;
+                }
+            }
+
+            // If we found an edge at this radius, stop checking farther radii
+            if (detected_neighbor != null) break;
+        }
+
+        return .{
+            .base_biome = center_biome,
+            .neighbor_biome = detected_neighbor,
+            .edge_band = closest_band,
+        };
     }
 };

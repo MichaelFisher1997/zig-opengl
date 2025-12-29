@@ -1135,3 +1135,159 @@ test "Biome structural constraints - desert elevation limit" {
     const biome_high = selectBiomeWithConstraints(climate, structural_high);
     try testing.expect(biome_high != .desert);
 }
+
+// ============================================================================
+// Biome Edge Detection Tests (Issue #102)
+// ============================================================================
+
+test "needsTransition returns true for desert-forest pair" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Desert <-> Forest should need a transition
+    try testing.expect(biome_mod.needsTransition(.desert, .forest) == true);
+    try testing.expect(biome_mod.needsTransition(.forest, .desert) == true);
+
+    // Desert <-> Plains should need a transition
+    try testing.expect(biome_mod.needsTransition(.desert, .plains) == true);
+
+    // Snow tundra <-> Plains should need a transition
+    try testing.expect(biome_mod.needsTransition(.snow_tundra, .plains) == true);
+    try testing.expect(biome_mod.needsTransition(.snow_tundra, .forest) == true);
+
+    // Mountains <-> Plains should need a transition
+    try testing.expect(biome_mod.needsTransition(.mountains, .plains) == true);
+}
+
+test "needsTransition returns false for compatible biomes" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Plains <-> Forest are compatible, no transition needed
+    try testing.expect(biome_mod.needsTransition(.plains, .forest) == false);
+
+    // Ocean <-> Beach are compatible
+    try testing.expect(biome_mod.needsTransition(.ocean, .beach) == false);
+
+    // Same biome never needs transition
+    try testing.expect(biome_mod.needsTransition(.desert, .desert) == false);
+    try testing.expect(biome_mod.needsTransition(.forest, .forest) == false);
+}
+
+test "getTransitionBiome returns correct biome for pairs" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Desert <-> Forest should get dry_plains
+    try testing.expectEqual(biome_mod.getTransitionBiome(.desert, .forest), .dry_plains);
+    try testing.expectEqual(biome_mod.getTransitionBiome(.forest, .desert), .dry_plains);
+
+    // Desert <-> Plains should get dry_plains
+    try testing.expectEqual(biome_mod.getTransitionBiome(.desert, .plains), .dry_plains);
+
+    // Snow tundra <-> Plains should get taiga
+    try testing.expectEqual(biome_mod.getTransitionBiome(.snow_tundra, .plains), .taiga);
+    try testing.expectEqual(biome_mod.getTransitionBiome(.snow_tundra, .forest), .taiga);
+
+    // Mountains <-> Plains should get foothills
+    try testing.expectEqual(biome_mod.getTransitionBiome(.mountains, .plains), .foothills);
+
+    // Swamp <-> Forest should get marsh
+    try testing.expectEqual(biome_mod.getTransitionBiome(.swamp, .forest), .marsh);
+}
+
+test "getTransitionBiome returns null for compatible pairs" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Plains <-> Forest has no transition defined
+    try testing.expectEqual(biome_mod.getTransitionBiome(.plains, .forest), null);
+
+    // Ocean <-> Beach has no transition defined
+    try testing.expectEqual(biome_mod.getTransitionBiome(.ocean, .beach), null);
+
+    // Same biome returns null
+    try testing.expectEqual(biome_mod.getTransitionBiome(.desert, .desert), null);
+}
+
+test "EdgeBand enum values are correct" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    try testing.expectEqual(@intFromEnum(biome_mod.EdgeBand.none), 0);
+    try testing.expectEqual(@intFromEnum(biome_mod.EdgeBand.outer), 1);
+    try testing.expectEqual(@intFromEnum(biome_mod.EdgeBand.middle), 2);
+    try testing.expectEqual(@intFromEnum(biome_mod.EdgeBand.inner), 3);
+}
+
+test "Edge detection constants are properly defined" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // EDGE_STEP should be 4 for coarse grid sampling
+    try testing.expectEqual(biome_mod.EDGE_STEP, 4);
+
+    // EDGE_WIDTH should be 8 for transition band width
+    try testing.expectEqual(biome_mod.EDGE_WIDTH, 8);
+
+    // EDGE_CHECK_RADII should have 3 values: 4, 8, 12
+    try testing.expectEqual(biome_mod.EDGE_CHECK_RADII.len, 3);
+    try testing.expectEqual(biome_mod.EDGE_CHECK_RADII[0], 4);
+    try testing.expectEqual(biome_mod.EDGE_CHECK_RADII[1], 8);
+    try testing.expectEqual(biome_mod.EDGE_CHECK_RADII[2], 12);
+}
+
+test "BiomeEdgeInfo struct fields" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    const edge_info = biome_mod.BiomeEdgeInfo{
+        .base_biome = .desert,
+        .neighbor_biome = .forest,
+        .edge_band = .middle,
+    };
+
+    try testing.expectEqual(edge_info.base_biome, .desert);
+    try testing.expectEqual(edge_info.neighbor_biome.?, .forest);
+    try testing.expectEqual(edge_info.edge_band, .middle);
+
+    // Test with no neighbor
+    const no_edge = biome_mod.BiomeEdgeInfo{
+        .base_biome = .plains,
+        .neighbor_biome = null,
+        .edge_band = .none,
+    };
+
+    try testing.expectEqual(no_edge.neighbor_biome, null);
+    try testing.expectEqual(no_edge.edge_band, .none);
+}
+
+test "Transition rules table has expected entries" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+
+    // Should have at least 10 transition rules
+    try testing.expect(biome_mod.TRANSITION_RULES.len >= 10);
+
+    // Verify a few specific rules exist
+    var found_desert_forest = false;
+    var found_snow_plains = false;
+    var found_mountain_plains = false;
+
+    for (biome_mod.TRANSITION_RULES) |rule| {
+        if ((rule.biome_a == .desert and rule.biome_b == .forest) or
+            (rule.biome_a == .forest and rule.biome_b == .desert))
+        {
+            found_desert_forest = true;
+            try testing.expectEqual(rule.transition, .dry_plains);
+        }
+        if ((rule.biome_a == .snow_tundra and rule.biome_b == .plains) or
+            (rule.biome_a == .plains and rule.biome_b == .snow_tundra))
+        {
+            found_snow_plains = true;
+            try testing.expectEqual(rule.transition, .taiga);
+        }
+        if ((rule.biome_a == .mountains and rule.biome_b == .plains) or
+            (rule.biome_a == .plains and rule.biome_b == .mountains))
+        {
+            found_mountain_plains = true;
+            try testing.expectEqual(rule.transition, .foothills);
+        }
+    }
+
+    try testing.expect(found_desert_forest);
+    try testing.expect(found_snow_plains);
+    try testing.expect(found_mountain_plains);
+}
