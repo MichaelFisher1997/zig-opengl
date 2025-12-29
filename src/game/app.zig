@@ -18,7 +18,7 @@ const ShadowMap = @import("../engine/graphics/shadows.zig").ShadowMap;
 const World = @import("../world/world.zig").World;
 const worldToChunk = @import("../world/chunk.zig").worldToChunk;
 const WorldMap = @import("../world/worldgen/world_map.zig").WorldMap;
-const RegionMood = @import("../world/worldgen/mood.zig").RegionMood;
+const region_pkg = @import("../world/worldgen/region.zig");
 
 const rhi_pkg = @import("../engine/graphics/rhi.zig");
 const RHI = rhi_pkg.RHI;
@@ -640,15 +640,15 @@ pub const App = struct {
                         Font.drawText(u, "SUN:", 15, hy + 145, 1.5, Color.white);
                         Font.drawNumber(u, @intFromFloat(si * 100.0), 100, hy + 145, Color.white);
 
-                        // Region Mood Debug (Issue #110)
+                        // Region Role Debug (Issue #110)
                         if (self.world) |world| {
                             const px: i32 = @intFromFloat(self.camera.position.x);
                             const pz: i32 = @intFromFloat(self.camera.position.z);
-                            const mood = world.generator.getMood(px, pz);
-                            const c3 = mood.getColor();
-                            Font.drawText(u, "MOOD:", 15, hy + 165, 1.5, Color.rgba(c3[0], c3[1], c3[2], 1.0));
+                            const region = world.generator.getRegionInfo(px, pz);
+                            const c3 = world.worldgen.region.getRoleColor(region.role);
+                            Font.drawText(u, "ROLE:", 15, hy + 165, 1.5, Color.rgba(c3[0], c3[1], c3[2], 1.0));
                             var buf: [32]u8 = undefined;
-                            const label = std.fmt.bufPrint(&buf, "{s}", .{@tagName(mood)}) catch "???";
+                            const label = std.fmt.bufPrint(&buf, "{s}", .{@tagName(region.role)}) catch "???";
                             Font.drawText(u, label, 100, hy + 165, 1.5, Color.white);
                         }
                     }
@@ -945,15 +945,15 @@ pub const App = struct {
                             Font.drawText(u, "SUN:", 15, hy + 145, 1.5, Color.white);
                             Font.drawNumber(u, @intFromFloat(si * 100.0), 100, hy + 145, Color.white);
 
-                            // Region Mood Debug (Issue #110)
+                            // Region Role Debug (Issue #110)
                             if (self.world) |world| {
                                 const px: i32 = @intFromFloat(self.camera.position.x);
                                 const pz: i32 = @intFromFloat(self.camera.position.z);
-                                const mood = world.generator.getMood(px, pz);
-                                const c3 = mood.getColor();
-                                Font.drawText(u, "MOOD:", 15, hy + 165, 1.5, Color.rgba(c3[0], c3[1], c3[2], 1.0));
+                                const region = world.generator.getRegionInfo(px, pz);
+                                const c3 = region_pkg.getRoleColor(region.role);
+                                Font.drawText(u, "ROLE:", 15, hy + 165, 1.5, Color.rgba(c3[0], c3[1], c3[2], 1.0));
                                 var buf: [32]u8 = undefined;
-                                const label = std.fmt.bufPrint(&buf, "{s}", .{@tagName(mood)}) catch "???";
+                                const label = std.fmt.bufPrint(&buf, "{s}", .{@tagName(region.role)}) catch "???";
                                 Font.drawText(u, label, 100, hy + 165, 1.5, Color.white);
                             }
                         }

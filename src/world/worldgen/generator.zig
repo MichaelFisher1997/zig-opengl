@@ -17,7 +17,10 @@ const CaveSystem = @import("caves.zig").CaveSystem;
 const deco_mod = @import("decorations.zig");
 const biome_mod = @import("biome.zig");
 const BiomeId = biome_mod.BiomeId;
-const RegionMood = @import("mood.zig").RegionMood;
+const region_pkg = @import("region.zig");
+const RegionSystem = region_pkg.RegionSystem;
+const RegionInfo = region_pkg.RegionInfo;
+const RegionMood = region_pkg.RegionMood;
 const BiomeDefinition = biome_mod.BiomeDefinition;
 const ClimateParams = biome_mod.ClimateParams;
 const gen_region = @import("gen_region.zig");
@@ -73,6 +76,12 @@ pub const ContinentalZone = enum {
         };
     }
 };
+
+// ============================================================================
+// Path System Constants (from region spec)
+// ============================================================================
+const VALLEY_DEPTH: f32 = 10.0;
+const RIVER_DEPTH: f32 = 15.0;
 
 /// Terrain generation parameters
 const Params = struct {
@@ -220,9 +229,15 @@ pub const TerrainGenerator = struct {
         };
     }
 
+    /// Get region info for a specific world position
+    pub fn getRegionInfo(self: *const TerrainGenerator, world_x: i32, world_z: i32) RegionInfo {
+        return region_pkg.getRegion(self.continentalness_noise.seed, world_x, world_z);
+    }
+
     /// Get region mood for a specific world position (Issue #110)
     pub fn getMood(self: *const TerrainGenerator, world_x: i32, world_z: i32) RegionMood {
-        return RegionMood.get(self.continentalness_noise.seed, world_x, world_z);
+        const region = region_pkg.getRegion(self.continentalness_noise.seed, world_x, world_z);
+        return region.mood;
     }
 
     pub const ColumnInfo = struct {
@@ -247,8 +262,8 @@ pub const TerrainGenerator = struct {
         const c_jittered = clamp01(c + coast_jitter);
         const river_mask = self.getRiverMask(xw, zw);
         // computeHeight now handles ocean vs land decision internally
-        const mood = RegionMood.get(self.continentalness_noise.seed, @as(i32, @intFromFloat(wx)), @as(i32, @intFromFloat(wz)));
-        const terrain_height = self.computeHeight(c_jittered, e, pv, xw, zw, river_mask, mood);
+        const region = region_pkg.getRegion(self.continentalness_noise.seed, @as(i32, @intFromFloat(wx)), @as(i32, @intFromFloat(wz)));
+        const terrain_height = self.computeHeight(c_jittered, e, pv, xw, zw, river_mask, region);
         const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered);
         const terrain_height_i: i32 = @intFromFloat(terrain_height);
         const is_ocean = terrain_height < sea;
@@ -319,11 +334,11 @@ pub const TerrainGenerator = struct {
                 const c_jittered = clamp01(c + coast_jitter);
                 erosion_values[idx] = e_val;
                 const river_mask = self.getRiverMask(xw, zw);
-                // Issue #110: Get Region Mood
-                const mood = RegionMood.get(self.continentalness_noise.seed, @as(i32, @intFromFloat(wx)), @as(i32, @intFromFloat(wz)));
+                // Get Region Info (Mood + Role)
+                const region = region_pkg.getRegion(self.continentalness_noise.seed, @as(i32, @intFromFloat(wx)), @as(i32, @intFromFloat(wz)));
 
                 // computeHeight now handles ocean vs land decision internally
-                const terrain_height = self.computeHeight(c_jittered, e_val, pv, xw, zw, river_mask, mood);
+                const terrain_height = self.computeHeight(c_jittered, e_val, pv, xw, zw, river_mask, region);
                 const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered);
                 const terrain_height_i: i32 = @intFromFloat(terrain_height);
                 const altitude_offset: f32 = @max(0, terrain_height - sea);
@@ -817,7 +832,8 @@ pub const TerrainGenerator = struct {
     /// STRUCTURE-FIRST height computation with V7-style multi-layer terrain.
     /// The KEY change: Ocean is decided by continentalness ALONE.
     /// Land uses blended terrain layers for varied terrain character.
-    fn computeHeight(self: *const TerrainGenerator, c: f32, e: f32, pv: f32, x: f32, z: f32, river_mask: f32, mood: RegionMood) f32 {
+    /// Region constraints suppress/exaggerate features per role.
+    fn computeHeight(self: *const TerrainGenerator, c: f32, e: f32, pv: f32, x: f32, z: f32, river_mask: f32, region: RegionInfo) f32 {
         const p = self.params;
         const sea: f32 = @floatFromInt(p.sea_level);
 
@@ -841,7 +857,34 @@ pub const TerrainGenerator = struct {
         }
 
         // ============================================================
-        // STEP 2: V7-STYLE MULTI-LAYER TERRAIN (Issue #105)
+        // STEP 2: PATH SYSTEM (Priority Override)
+        // Movement paths override region suppression locally
+        // ============================================================
+        const path_info = region_pkg.getPathInfo(self.continentalness_noise.seed, @as(i32, @intFromFloat(x)), @as(i32, @intFromFloat(z)), region);
+        var path_depth: f32 = 0.0;
+        var slope_suppress: f32 = 0.0;
+
+        switch (path_info.path_type) {
+            .valley => {
+                // Valleys: lower terrain and reduce slope
+                path_depth = path_info.influence * VALLEY_DEPTH;
+                slope_suppress = path_info.influence * 0.6;
+            },
+            .river => {
+                // Rivers: deeper channel
+                path_depth = path_info.influence * 15.0;
+                slope_suppress = path_info.influence * 0.8;
+            },
+            .plains_corridor => {
+                // Plains corridors: very gentle
+                path_depth = path_info.influence * 2.0;
+                slope_suppress = path_info.influence * 0.9;
+            },
+            .none => {},
+        }
+
+        // ============================================================
+        // STEP 3: V7-STYLE MULTI-LAYER TERRAIN (Issue #105)
         // Blend terrain_base and terrain_alt using height_select
         // This creates varied terrain where different areas have
         // noticeably different character (rolling vs flat vs hilly)
@@ -860,42 +903,37 @@ pub const TerrainGenerator = struct {
         // select near 1 = more alt terrain (flatter)
         const blend = clamp01((select + 8.0) / 16.0);
 
-        // Apply mood height multiplier (Issue #110)
-        // Calm/Sparse regions are flatter
-        const mood_mult = mood.getHeightMultiplier();
+        // Apply region height multiplier
+        const mood_mult = region_pkg.getHeightMultiplier(region);
         const v7_terrain = std.math.lerp(base_modulated, alt_modulated, blend) * mood_mult;
 
         // ============================================================
-        // STEP 3: LAND - Combine V7 terrain with continental base
+        // STEP 4: LAND - Combine V7 terrain with continental base
         // Only reaches here if c >= ocean_threshold
         // ============================================================
-        var height = self.getBaseHeight(c) + v7_terrain;
+        var height = self.getBaseHeight(c) + v7_terrain - path_depth;
 
         // ============================================================
-        // STEP 4: Mountains & Ridges - AGGRESSIVELY GATED
-        // Only apply in inland zones (c > coast_max)
-        // Mountains require: deep inland + high peak noise
+        // STEP 5: Mountains & Ridges - REGION-CONSTRAINED
+        // Only apply if allowHeightDrama is true
         // ============================================================
-        const land_factor = smoothstep(p.continental_coast_max, p.continental_inland_low_max, c);
-
-        // Mountains only in continental cores
-        if (c > p.continental_inland_low_max) {
+        if (region_pkg.allowHeightDrama(region) and c > p.continental_inland_low_max) {
             const m_mask = self.getMountainMask(pv, e, c);
             const lift_scale: f32 = 1.0 / 1000.0;
             const lift_noise = (self.mountain_lift_noise.fbm2D(x, z, 3, 2.0, 0.5, lift_scale) + 1.0) * 0.5;
             const mount_lift = (m_mask * lift_noise * p.mount_amp) / (1.0 + (m_mask * lift_noise * p.mount_amp) / p.mount_cap);
-            height += mount_lift * mood_mult; // Mood affects mountains too
+            height += mount_lift * mood_mult;
 
             const ridge_val = self.getRidgeFactor(x, z, c);
             height += ridge_val * p.ridge_amp * mood_mult;
         }
 
         // ============================================================
-        // STEP 5: Fine Detail - Small-scale variation
-        // Attenuated by erosion and in high elevations
+        // STEP 6: Fine Detail - Attenuated by slope suppression
         // ============================================================
         const erosion_smooth = smoothstep(0.5, 0.75, e);
-        const hills_atten = (1.0 - erosion_smooth) * land_factor;
+        const land_factor = smoothstep(p.continental_coast_max, p.continental_inland_low_max, c);
+        const hills_atten = (1.0 - erosion_smooth) * land_factor * (1.0 - slope_suppress);
 
         // Small-scale detail (every ~32 blocks)
         const elev01 = clamp01((height - sea) / p.highland_range);
@@ -904,7 +942,7 @@ pub const TerrainGenerator = struct {
         height += detail * detail_atten * hills_atten * mood_mult;
 
         // ============================================================
-        // STEP 6: Post-Processing - Peak compression
+        // STEP 7: Post-Processing - Peak compression
         // ============================================================
         const peak_start = sea + p.peak_compression_offset;
         if (height > peak_start) {
@@ -914,10 +952,10 @@ pub const TerrainGenerator = struct {
         }
 
         // ============================================================
-        // STEP 7: River Carving - only on land
+        // STEP 8: River Carving - REGION-CONSTRAINED
+        // Only if allowRiver is true
         // ============================================================
-        // Mood-based river suppression
-        if (mood.allowRivers() and river_mask > 0.001 and c > p.continental_coast_max) {
+        if (region_pkg.allowRiver(region) and river_mask > 0.001 and c > p.continental_coast_max) {
             const river_bed = sea - 4.0;
             const carve_alpha = smoothstep(0.0, 1.0, river_mask);
             if (height > river_bed) {
@@ -1118,11 +1156,16 @@ pub const TerrainGenerator = struct {
         var prng = std.Random.DefaultPrng.init(self.continentalness_noise.seed ^ @as(u64, @bitCast(@as(i64, chunk.chunk_x))) ^ (@as(u64, @bitCast(@as(i64, chunk.chunk_z))) << 32));
         const random = prng.random();
 
-        // Calculate mood for the whole chunk (approx) to scale vegetation
+        // Calculate region info for whole chunk (approx)
         const wx_center = chunk.getWorldX() + 8;
         const wz_center = chunk.getWorldZ() + 8;
-        const mood = RegionMood.get(self.continentalness_noise.seed, wx_center, wz_center);
-        const veg_mult = mood.getVegetationMultiplier();
+        const region = region_pkg.getRegion(self.continentalness_noise.seed, wx_center, wz_center);
+
+        // Region-based vegetation multiplier (Transit=25%, Boundary=15%, Destination=themed)
+        const veg_mult = region_pkg.getVegetationMultiplier(region);
+
+        // Region-based feature suppression
+        const allow_subbiomes = region_pkg.allowSubBiomes(region);
 
         var local_z: u32 = 0;
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
@@ -1134,7 +1177,7 @@ pub const TerrainGenerator = struct {
                 // Use the biome stored in the chunk
                 const biome = chunk.biomes[local_x + local_z * CHUNK_SIZE_X];
 
-                // Sample variant noise for sub-biomes (Issue #110)
+                // Sample variant noise for sub-biomes
                 const wx: f32 = @floatFromInt(chunk.getWorldX() + @as(i32, @intCast(local_x)));
                 const wz: f32 = @floatFromInt(chunk.getWorldZ() + @as(i32, @intCast(local_z)));
                 const variant_val = self.variant_noise.get2D(wx, wz);
@@ -1147,10 +1190,20 @@ pub const TerrainGenerator = struct {
                     switch (deco) {
                         .simple => |s| {
                             if (!self.isBiomeAllowed(s.biomes, biome)) continue;
-                            if (variant_val < s.variant_min or variant_val > s.variant_max) continue;
+
+                            // Sub-biome suppression: if region doesn't allow sub-biomes,
+                            // only spawn decorations in the middle variant range
+                            if (!allow_subbiomes) {
+                                if (s.variant_min != -1.0 or s.variant_max != 1.0) {
+                                    continue; // Skip variant-specific decorations
+                                }
+                            } else {
+                                if (variant_val < s.variant_min or variant_val > s.variant_max) continue;
+                            }
+
                             if (!self.isBlockAllowed(s.place_on, surface_block)) continue;
 
-                            // Apply mood multiplier to probability
+                            // Apply region vegetation multiplier
                             const prob = s.probability * veg_mult;
                             if (random.float(f32) >= prob) continue;
 
@@ -1160,10 +1213,19 @@ pub const TerrainGenerator = struct {
                         },
                         .schematic => |s| {
                             if (!self.isBiomeAllowed(s.biomes, biome)) continue;
-                            if (variant_val < s.variant_min or variant_val > s.variant_max) continue;
+
+                            // Sub-biome suppression
+                            if (!allow_subbiomes) {
+                                if (s.variant_min != -1.0 or s.variant_max != 1.0) {
+                                    continue;
+                                }
+                            } else {
+                                if (variant_val < s.variant_min or variant_val > s.variant_max) continue;
+                            }
+
                             if (!self.isBlockAllowed(s.place_on, surface_block)) continue;
 
-                            // Apply mood multiplier to probability
+                            // Apply region vegetation multiplier
                             const prob = s.probability * veg_mult;
                             if (random.float(f32) >= prob) continue;
 
@@ -1314,11 +1376,11 @@ pub const TerrainGenerator = struct {
         const c_jittered = clamp01(c + coast_jitter);
         const river_mask = self.getRiverMask(xw, zw);
 
-        // Get mood for height calculation (Issue #110)
-        const mood = RegionMood.get(self.continentalness_noise.seed, wx, wz);
+        // Get region for height calculation
+        const region = region_pkg.getRegion(self.continentalness_noise.seed, wx, wz);
 
         // Compute height for climate calculation
-        const terrain_height = self.computeHeight(c_jittered, e, pv, xw, zw, river_mask, mood);
+        const terrain_height = self.computeHeight(c_jittered, e, pv, xw, zw, river_mask, region);
         const terrain_height_i: i32 = @intFromFloat(terrain_height);
         const sea: f32 = @floatFromInt(p.sea_level);
 
