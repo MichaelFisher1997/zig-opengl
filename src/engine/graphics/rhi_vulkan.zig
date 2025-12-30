@@ -251,6 +251,10 @@ const VulkanContext = struct {
     wireframe_pipeline: c.VkPipeline,
     vsync_enabled: bool,
     present_mode: c.VkPresentModeKHR,
+    anisotropic_filtering: u8,
+    max_anisotropy: f32,
+    msaa_samples: u8,
+    max_msaa_samples: u8,
 
     // Shadow resources
     shadow_images: [shadows.ShadowMap.CASCADE_COUNT]c.VkImage,
@@ -433,9 +437,36 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
     var supported_features: c.VkPhysicalDeviceFeatures = undefined;
     c.vkGetPhysicalDeviceFeatures(ctx.physical_device, &supported_features);
 
+    // Query device limits for anisotropy and MSAA
+    var device_properties: c.VkPhysicalDeviceProperties = undefined;
+    c.vkGetPhysicalDeviceProperties(ctx.physical_device, &device_properties);
+    ctx.max_anisotropy = device_properties.limits.maxSamplerAnisotropy;
+    ctx.anisotropic_filtering = @intFromFloat(@min(ctx.max_anisotropy, 16.0));
+
+    // Query max MSAA samples (from color sample counts)
+    const color_samples = device_properties.limits.framebufferColorSampleCounts;
+    const depth_samples = device_properties.limits.framebufferDepthSampleCounts;
+    const sample_counts = color_samples & depth_samples;
+    if ((sample_counts & c.VK_SAMPLE_COUNT_8_BIT) != 0) {
+        ctx.max_msaa_samples = 8;
+    } else if ((sample_counts & c.VK_SAMPLE_COUNT_4_BIT) != 0) {
+        ctx.max_msaa_samples = 4;
+    } else if ((sample_counts & c.VK_SAMPLE_COUNT_2_BIT) != 0) {
+        ctx.max_msaa_samples = 2;
+    } else {
+        ctx.max_msaa_samples = 1;
+    }
+    ctx.msaa_samples = 1; // Start with no MSAA, can be enabled via settings
+
+    std.log.info("Vulkan device: max anisotropy={d:.1}, max MSAA={}x", .{ ctx.max_anisotropy, ctx.max_msaa_samples });
+
     var device_features = std.mem.zeroes(c.VkPhysicalDeviceFeatures);
     if (supported_features.fillModeNonSolid == c.VK_TRUE) {
         device_features.fillModeNonSolid = c.VK_TRUE;
+    }
+    // Enable anisotropic filtering if supported
+    if (supported_features.samplerAnisotropy == c.VK_TRUE) {
+        device_features.samplerAnisotropy = c.VK_TRUE;
     }
 
     var queue_family_count: u32 = 0;
@@ -495,9 +526,14 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
 
     ctx.swapchain_extent = cap.currentExtent;
     if (ctx.swapchain_extent.width == 0xFFFFFFFF) {
-        ctx.swapchain_extent.width = 1280;
-        ctx.swapchain_extent.height = 720;
+        // Wayland returns 0xFFFFFFFF, query actual pixel dimensions from SDL
+        var w: c_int = 0;
+        var h: c_int = 0;
+        _ = c.SDL_GetWindowSizeInPixels(ctx.window, &w, &h);
+        ctx.swapchain_extent.width = if (w > 0) @intCast(w) else 1280;
+        ctx.swapchain_extent.height = if (h > 0) @intCast(h) else 720;
     }
+    std.log.info("Vulkan swapchain extent: {}x{}", .{ ctx.swapchain_extent.width, ctx.swapchain_extent.height });
     ctx.swapchain_format = surface_format.format;
 
     var swapchain_info = std.mem.zeroes(c.VkSwapchainCreateInfoKHR);
@@ -2000,10 +2036,10 @@ fn recreateSwapchain(ctx: *VulkanContext) void {
     // Wait for device idle before destroying resources
     _ = c.vkDeviceWaitIdle(ctx.vk_device);
 
-    // Get new window size
+    // Get new window size in pixels (critical for HiDPI/Wayland)
     var w: c_int = 0;
     var h: c_int = 0;
-    _ = c.SDL_GetWindowSize(ctx.window, &w, &h);
+    _ = c.SDL_GetWindowSizeInPixels(ctx.window, &w, &h);
 
     // Handle minimized window
     if (w == 0 or h == 0) return;
@@ -2065,6 +2101,7 @@ fn recreateSwapchain(ctx: *VulkanContext) void {
         std.log.err("Failed to create swapchain: {}", .{create_result});
         return;
     }
+    std.log.info("Vulkan swapchain recreated: {}x{}", .{ ctx.swapchain_extent.width, ctx.swapchain_extent.height });
 
     // Get swapchain images
     var image_count: u32 = 0;
@@ -3053,6 +3090,12 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
     sampler_info.addressModeW = vk_wrap_s;
     sampler_info.mipmapMode = vk_mipmap_mode;
 
+    // Apply anisotropic filtering if enabled and mipmaps are used
+    if (ctx.anisotropic_filtering > 1 and config.generate_mipmaps) {
+        sampler_info.anisotropyEnable = c.VK_TRUE;
+        sampler_info.maxAnisotropy = @min(@as(f32, @floatFromInt(ctx.anisotropic_filtering)), ctx.max_anisotropy);
+    }
+
     // Set border color for clamp_to_border mode (white for shadow maps, etc.)
     if (config.wrap_s == .clamp_to_border or config.wrap_t == .clamp_to_border) {
         sampler_info.borderColor = c.VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
@@ -3298,6 +3341,41 @@ fn setVSync(ctx_ptr: *anyopaque, enabled: bool) void {
         else => "UNKNOWN",
     };
     std.log.info("Vulkan present mode: {s}", .{mode_name});
+}
+
+fn setAnisotropicFiltering(ctx_ptr: *anyopaque, level: u8) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    const clamped = @min(level, @as(u8, @intFromFloat(ctx.max_anisotropy)));
+    if (ctx.anisotropic_filtering == clamped) return;
+
+    ctx.anisotropic_filtering = clamped;
+    std.log.info("Vulkan anisotropic filtering set to {}x (max: {d:.0})", .{ clamped, ctx.max_anisotropy });
+    // Note: This only affects newly created textures. Existing textures keep their samplers.
+    // Full implementation would require recreating all texture samplers.
+}
+
+fn setMSAA(ctx_ptr: *anyopaque, samples: u8) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    const clamped = @min(samples, ctx.max_msaa_samples);
+    if (ctx.msaa_samples == clamped) return;
+
+    ctx.msaa_samples = clamped;
+    std.log.info("Vulkan MSAA set to {}x (max: {}x)", .{ clamped, ctx.max_msaa_samples });
+    // Note: Full MSAA implementation requires:
+    // 1. Recreating render pass with MSAA attachments
+    // 2. Creating MSAA color/depth images
+    // 3. Recreating all pipelines with new sample count
+    // This is a placeholder that logs the setting; full implementation is a larger refactor.
+}
+
+fn getMaxAnisotropy(ctx_ptr: *anyopaque) u8 {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    return @intFromFloat(@min(ctx.max_anisotropy, 16.0));
+}
+
+fn getMaxMSAASamples(ctx_ptr: *anyopaque) u8 {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.max_msaa_samples;
 }
 
 fn draw(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.DrawMode) void {
@@ -3775,6 +3853,10 @@ const vtable = rhi.RHI.VTable{
     .endShadowPass = endShadowPass,
     .updateShadowUniforms = updateShadowUniforms,
     .drawSky = drawSky,
+    .setAnisotropicFiltering = setAnisotropicFiltering,
+    .setMSAA = setMSAA,
+    .getMaxAnisotropy = getMaxAnisotropy,
+    .getMaxMSAASamples = getMaxMSAASamples,
 };
 
 pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_device: ?*RenderDevice) !rhi.RHI {

@@ -1076,6 +1076,36 @@ fn drawDebugShadowMap(ctx_ptr: *anyopaque, cascade_index: usize, depth_map_handl
     c.glBindVertexArray().?(0);
 }
 
+fn setAnisotropicFiltering(ctx_ptr: *anyopaque, level: u8) void {
+    _ = ctx_ptr;
+    // OpenGL anisotropic filtering is set per-texture at creation time
+    // This would require recreating textures, so we log a warning
+    if (level > 1) {
+        std.log.info("OpenGL: Anisotropic filtering level {} requested (applied on texture creation)", .{level});
+    }
+}
+
+fn setMSAA(ctx_ptr: *anyopaque, samples: u8) void {
+    _ = ctx_ptr;
+    // OpenGL MSAA requires window recreation which is not supported at runtime
+    std.log.warn("OpenGL: MSAA change not supported at runtime (requires window recreation)", .{});
+    _ = samples;
+}
+
+fn getMaxAnisotropy(ctx_ptr: *anyopaque) u8 {
+    _ = ctx_ptr;
+    var max_aniso: c.GLfloat = 1.0;
+    c.glGetFloatv(c.GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max_aniso);
+    return @intFromFloat(@min(max_aniso, 16.0));
+}
+
+fn getMaxMSAASamples(ctx_ptr: *anyopaque) u8 {
+    _ = ctx_ptr;
+    var max_samples: c.GLint = 1;
+    c.glGetIntegerv(c.GL_MAX_SAMPLES, &max_samples);
+    return @intCast(@min(max_samples, 16));
+}
+
 const vtable = rhi.RHI.VTable{
     .init = init,
     .deinit = deinit,
@@ -1119,6 +1149,10 @@ const vtable = rhi.RHI.VTable{
     .drawUITexturedQuad = drawUITexturedQuad,
     .drawClouds = drawClouds,
     .drawDebugShadowMap = drawDebugShadowMap,
+    .setAnisotropicFiltering = setAnisotropicFiltering,
+    .setMSAA = setMSAA,
+    .getMaxAnisotropy = getMaxAnisotropy,
+    .getMaxMSAASamples = getMaxMSAASamples,
 };
 
 pub fn createRHI(allocator: std.mem.Allocator, device: ?*RenderDevice) !rhi.RHI {

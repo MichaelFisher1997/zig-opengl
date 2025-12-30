@@ -271,13 +271,14 @@ pub const App = struct {
             }
         }
 
-        const wm = try WindowManager.init(allocator, use_vulkan);
-
+        // Load settings first to get window resolution
         log.log.info("Initializing engine systems...", .{});
-        const settings = Settings{};
+        const settings = Settings.load(allocator);
+
+        const wm = try WindowManager.init(allocator, use_vulkan, settings.window_width, settings.window_height);
+
         var input = Input.init(allocator);
-        input.window_width = 1280;
-        input.window_height = 720;
+        input.initWindowSize(wm.window);
         const time = Time.init();
 
         const RhiResult = struct {
@@ -350,7 +351,7 @@ pub const App = struct {
             .move_speed = 50.0,
         });
 
-        const ui = try UISystem.init(rhi, 1280, 720);
+        const ui = try UISystem.init(rhi, input.window_width, input.window_height);
 
         const app = try allocator.create(App);
         app.* = .{
@@ -403,7 +404,7 @@ pub const App = struct {
     }
 
     pub fn runSingleFrame(self: *App) !void {
-        self.rhi.setViewport(1280, 720);
+        self.rhi.setViewport(self.input.window_width, self.input.window_height);
 
         if (self.pending_world_cleanup or self.pending_new_world_seed != null) {
             self.rhi.waitIdle();
@@ -686,6 +687,7 @@ pub const App = struct {
                 .screen_h = screen_h,
                 .time = &self.time,
                 .allocator = self.allocator,
+                .window_manager = &self.window_manager,
             };
             switch (self.app_state) {
                 .home => {
@@ -704,7 +706,7 @@ pub const App = struct {
     }
 
     pub fn run(self: *App) !void {
-        self.rhi.setViewport(1280, 720);
+        self.rhi.setViewport(self.input.window_width, self.input.window_height);
         log.log.info("=== ZigCraft ===", .{});
 
         while (!self.input.should_quit) {
@@ -991,6 +993,7 @@ pub const App = struct {
                     .screen_h = screen_h,
                     .time = &self.time,
                     .allocator = self.allocator,
+                    .window_manager = &self.window_manager,
                 };
                 switch (self.app_state) {
                     .home => {

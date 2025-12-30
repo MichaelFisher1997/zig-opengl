@@ -240,6 +240,12 @@ pub const RHI = struct {
 
         // Debug rendering
         drawDebugShadowMap: *const fn (ctx: *anyopaque, cascade_index: usize, depth_map_handle: TextureHandle) void,
+
+        // Quality settings
+        setAnisotropicFiltering: *const fn (ctx: *anyopaque, level: u8) void,
+        setMSAA: *const fn (ctx: *anyopaque, samples: u8) void,
+        getMaxAnisotropy: *const fn (ctx: *anyopaque) u8,
+        getMaxMSAASamples: *const fn (ctx: *anyopaque) u8,
     };
 
     pub fn init(self: RHI, allocator: Allocator, device: ?*RenderDevice) !void {
@@ -426,5 +432,21 @@ pub const RHI = struct {
 
     pub fn drawDebugShadowMap(self: RHI, cascade_index: usize, depth_map_handle: TextureHandle) void {
         self.vtable.drawDebugShadowMap(self.ptr, cascade_index, depth_map_handle);
+    }
+
+    pub fn setAnisotropicFiltering(self: RHI, level: u8) void {
+        self.vtable.setAnisotropicFiltering(self.ptr, level);
+    }
+
+    pub fn setMSAA(self: RHI, samples: u8) void {
+        self.vtable.setMSAA(self.ptr, samples);
+    }
+
+    pub fn getMaxAnisotropy(self: RHI) u8 {
+        return self.vtable.getMaxAnisotropy(self.ptr);
+    }
+
+    pub fn getMaxMSAASamples(self: RHI) u8 {
+        return self.vtable.getMaxMSAASamples(self.ptr);
     }
 };
