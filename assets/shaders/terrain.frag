@@ -127,7 +127,13 @@ void main() {
     if (depth < uCascadeSplits[0]) layer = 0;
     else if (depth < uCascadeSplits[1]) layer = 1;
     
-    float shadow = calculateShadow(vFragPosWorld, nDotL, layer);
+    // Fade out shadows at high altitude to avoid CSM artifacts
+    // When vViewDepth is very large (camera high up looking down), shadows become unreliable
+    float shadowFadeStart = 400.0;
+    float shadowFadeEnd = 600.0;
+    float shadowFade = 1.0 - clamp((depth - shadowFadeStart) / (shadowFadeEnd - shadowFadeStart), 0.0, 1.0);
+    
+    float shadow = calculateShadow(vFragPosWorld, nDotL, layer) * shadowFade;
 
     // Cascade Blending
     float blendThreshold = 0.9; // Start blending at 90% of cascade range
