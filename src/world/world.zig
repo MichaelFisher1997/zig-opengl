@@ -23,6 +23,7 @@ const JobQueue = JobSystem.JobQueue;
 const WorkerPool = JobSystem.WorkerPool;
 const Job = JobSystem.Job;
 const JobType = JobSystem.JobType;
+const RingBuffer = @import("../engine/core/ring_buffer.zig").RingBuffer;
 
 /// Buffer distance beyond render_distance for chunk unloading.
 /// Prevents thrashing when player moves near chunk boundaries.
@@ -62,6 +63,65 @@ pub const ChunkData = struct {
 
 pub const ChunkPos = struct { x: i32, z: i32 };
 
+/// Player movement tracking for predictive chunk loading
+pub const PlayerMovement = struct {
+    /// Normalized movement direction (0,0 if stationary)
+    dir_x: f32 = 0,
+    dir_z: f32 = 0,
+    /// Speed in blocks/second
+    speed: f32 = 0,
+    /// Last position for velocity calculation
+    last_pos: Vec3 = Vec3.init(0, 0, 0),
+    /// Whether we have valid velocity data
+    has_velocity: bool = false,
+
+    /// Update with new position, returns true if direction changed significantly
+    pub fn update(self: *PlayerMovement, pos: Vec3, dt: f32) bool {
+        if (dt <= 0.001) return false;
+
+        const dx = pos.x - self.last_pos.x;
+        const dz = pos.z - self.last_pos.z;
+        self.last_pos = pos;
+
+        const dist = @sqrt(dx * dx + dz * dz);
+        self.speed = dist / dt;
+
+        // Only track direction if moving fast enough (> 2 blocks/sec)
+        if (self.speed < 2.0) {
+            self.has_velocity = false;
+            return false;
+        }
+
+        const old_dx = self.dir_x;
+        const old_dz = self.dir_z;
+
+        self.dir_x = dx / dist;
+        self.dir_z = dz / dist;
+        self.has_velocity = true;
+
+        // Check if direction changed significantly (> 45 degrees)
+        const dot = old_dx * self.dir_x + old_dz * self.dir_z;
+        return dot < 0.707; // cos(45°)
+    }
+
+    /// Calculate priority weight for a chunk based on movement direction.
+    /// Returns a multiplier: < 1.0 for chunks ahead, > 1.0 for chunks behind.
+    pub fn priorityWeight(self: *const PlayerMovement, chunk_dx: i32, chunk_dz: i32) f32 {
+        if (!self.has_velocity) return 1.0;
+
+        const cdx: f32 = @floatFromInt(chunk_dx);
+        const cdz: f32 = @floatFromInt(chunk_dz);
+        const dist = @sqrt(cdx * cdx + cdz * cdz);
+        if (dist < 0.001) return 0.5; // Player's chunk gets high priority
+
+        // Dot product with movement direction: 1.0 = ahead, -1.0 = behind
+        const dot = (cdx * self.dir_x + cdz * self.dir_z) / dist;
+
+        // Map [-1, 1] to [0.5, 1.5] - chunks ahead get 0.5x distance weight
+        return 1.0 - dot * 0.5;
+    }
+};
+
 pub const RenderStats = struct {
     chunks_total: u32 = 0,
     chunks_rendered: u32 = 0,
@@ -80,10 +140,11 @@ pub const World = struct {
     mesh_queue: *JobQueue,
     gen_pool: *WorkerPool,
     mesh_pool: *WorkerPool,
-    upload_queue: std.ArrayListUnmanaged(*ChunkData),
+    upload_queue: RingBuffer(*ChunkData),
     visible_chunks: std.ArrayListUnmanaged(*ChunkData),
     next_job_token: u32,
     last_pc: ChunkPos,
+    player_movement: PlayerMovement,
     rhi: RHI,
     paused: bool = false,
 
@@ -107,10 +168,11 @@ pub const World = struct {
             .mesh_queue = mesh_queue,
             .gen_pool = undefined,
             .mesh_pool = undefined,
-            .upload_queue = .empty,
+            .upload_queue = try RingBuffer(*ChunkData).init(allocator, 64),
             .visible_chunks = .empty,
             .next_job_token = 1,
             .last_pc = .{ .x = 9999, .z = 9999 },
+            .player_movement = .{},
             .rhi = rhi,
             .paused = false,
         };
@@ -134,7 +196,7 @@ pub const World = struct {
         self.allocator.destroy(self.gen_queue);
         self.allocator.destroy(self.mesh_queue);
 
-        self.upload_queue.deinit(self.allocator);
+        self.upload_queue.deinit();
         self.visible_chunks.deinit(self.allocator);
 
         var iter = self.chunks.iterator();
@@ -331,8 +393,11 @@ pub const World = struct {
         return self.chunks.get(ChunkKey{ .x = cx, .z = cz });
     }
 
-    pub fn update(self: *World, player_pos: Vec3) !void {
+    pub fn update(self: *World, player_pos: Vec3, dt: f32) !void {
         if (self.paused) return;
+
+        // Update velocity tracking for predictive loading
+        _ = self.player_movement.update(player_pos, dt);
 
         const pc = worldToChunk(@intFromFloat(player_pos.x), @intFromFloat(player_pos.z));
         const moved = pc.chunk_x != self.last_pc.x or pc.chunk_z != self.last_pc.z;
@@ -357,12 +422,16 @@ pub const World = struct {
 
                     switch (data.chunk.state) {
                         .missing => {
+                            // Apply velocity-based priority weighting
+                            const weight = self.player_movement.priorityWeight(dx, dz);
+                            const weighted_dist: i32 = @intFromFloat(@as(f32, @floatFromInt(dist_sq)) * weight);
+
                             try self.gen_queue.push(.{
                                 .type = .generation,
                                 .chunk_x = cx,
                                 .chunk_z = cz,
                                 .job_token = data.chunk.job_token,
-                                .dist_sq = dist_sq,
+                                .dist_sq = weighted_dist,
                             });
                             data.chunk.state = .generating;
                         },
@@ -380,18 +449,22 @@ pub const World = struct {
                 const dx = data.chunk.chunk_x - pc.chunk_x;
                 const dz = data.chunk.chunk_z - pc.chunk_z;
                 if (dx * dx + dz * dz <= self.render_distance * self.render_distance) {
+                    // Apply velocity-based priority weighting
+                    const weight = self.player_movement.priorityWeight(dx, dz);
+                    const weighted_dist: i32 = @intFromFloat(@as(f32, @floatFromInt(dx * dx + dz * dz)) * weight);
+
                     try self.mesh_queue.push(.{
                         .type = .meshing,
                         .chunk_x = data.chunk.chunk_x,
                         .chunk_z = data.chunk.chunk_z,
                         .job_token = data.chunk.job_token,
-                        .dist_sq = dx * dx + dz * dz,
+                        .dist_sq = weighted_dist,
                     });
                     data.chunk.state = .meshing;
                 }
             } else if (data.chunk.state == .mesh_ready) {
                 data.chunk.state = .uploading;
-                try self.upload_queue.append(self.allocator, data);
+                try self.upload_queue.push(data);
             } else if (data.chunk.state == .renderable and data.chunk.dirty) {
                 data.chunk.dirty = false;
                 data.chunk.state = .generated;
@@ -401,8 +474,8 @@ pub const World = struct {
 
         const max_uploads: usize = 4;
         var uploads: usize = 0;
-        while (self.upload_queue.items.len > 0 and uploads < max_uploads) {
-            const data = self.upload_queue.orderedRemove(0);
+        while (!self.upload_queue.isEmpty() and uploads < max_uploads) {
+            const data = self.upload_queue.pop() orelse break;
             data.mesh.upload(self.rhi);
             if (data.chunk.state == .uploading) {
                 data.chunk.state = .renderable;
@@ -553,7 +626,7 @@ pub const World = struct {
             .total_vertices = total_verts,
             .gen_queue = gen_count,
             .mesh_queue = mesh_count,
-            .upload_queue = self.upload_queue.items.len,
+            .upload_queue = self.upload_queue.count(),
         };
     }
 };

@@ -507,7 +507,7 @@ pub const App = struct {
                         active_world.render_distance = self.settings.render_distance;
                     }
 
-                    try active_world.update(self.camera.position);
+                    try active_world.update(self.camera.position, self.time.delta_time);
                 } else self.app_state = .home;
             }
         } else if (self.input.mouse_captured) self.input.setMouseCapture(self.window_manager.window, false);
@@ -811,7 +811,7 @@ pub const App = struct {
                             active_world.render_distance = self.settings.render_distance;
                         }
 
-                        try active_world.update(self.camera.position);
+                        try active_world.update(self.camera.position, self.time.delta_time);
                     } else self.app_state = .home;
                 }
             } else if (self.input.mouse_captured) self.input.setMouseCapture(self.window_manager.window, false);
