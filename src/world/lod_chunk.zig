@@ -75,6 +75,7 @@ pub const LODSimplifiedData = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, lod_level: LODLevel) !LODSimplifiedData {
+        _ = lod_level; // Reserved for future LOD-specific grid sizing
         // Grid size depends on LOD level
         // LOD1: 32x32 (2 blocks per cell)
         // LOD2: 32x32 (4 blocks per cell) 

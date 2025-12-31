@@ -269,3 +269,112 @@ pub const GenRegionCache = struct {
         return .{ .x = rx, .z = rz };
     }
 };
+
+// ============================================================================
+// Climate Cache for LOD Generation (Issue #114)
+// ============================================================================
+
+/// Coarse-resolution climate data for fast LOD terrain generation.
+/// Caches temperature, humidity, and continentalness at 64-block resolution.
+pub const ClimateCache = struct {
+    /// Cell size in blocks (coarse sampling)
+    pub const CELL_SIZE: u32 = 64;
+
+    /// Cache grid dimensions
+    pub const GRID_SIZE: u32 = 32; // 32x32 grid = 2048x2048 blocks coverage
+
+    /// Cached climate values
+    const CacheCell = struct {
+        temperature: f32,
+        humidity: f32,
+        continentalness: f32,
+        valid: bool,
+    };
+
+    cells: [GRID_SIZE * GRID_SIZE]CacheCell,
+    origin_x: i32, // World X of grid origin
+    origin_z: i32, // World Z of grid origin
+    
+    pub fn init() ClimateCache {
+        return .{
+            .cells = [_]CacheCell{.{
+                .temperature = 0,
+                .humidity = 0,
+                .continentalness = 0,
+                .valid = false,
+            }} ** (GRID_SIZE * GRID_SIZE),
+            .origin_x = 0,
+            .origin_z = 0,
+        };
+    }
+
+    /// Recenter the cache grid around a new origin.
+    /// Invalidates all cells.
+    pub fn recenter(self: *ClimateCache, center_x: i32, center_z: i32) void {
+        const half_size: i32 = @intCast((GRID_SIZE * CELL_SIZE) / 2);
+        self.origin_x = center_x - half_size;
+        self.origin_z = center_z - half_size;
+
+        // Invalidate all cells
+        for (&self.cells) |*cell| {
+            cell.valid = false;
+        }
+    }
+
+    /// Check if a world position is within the cache grid
+    pub fn contains(self: *const ClimateCache, world_x: i32, world_z: i32) bool {
+        const grid_extent: i32 = @intCast(GRID_SIZE * CELL_SIZE);
+        return world_x >= self.origin_x and
+            world_x < self.origin_x + grid_extent and
+            world_z >= self.origin_z and
+            world_z < self.origin_z + grid_extent;
+    }
+
+    /// Get grid cell index for world position, or null if out of bounds
+    fn getCellIndex(self: *const ClimateCache, world_x: i32, world_z: i32) ?usize {
+        if (!self.contains(world_x, world_z)) return null;
+
+        const local_x: u32 = @intCast(world_x - self.origin_x);
+        const local_z: u32 = @intCast(world_z - self.origin_z);
+        const cell_x = local_x / CELL_SIZE;
+        const cell_z = local_z / CELL_SIZE;
+
+        return cell_x + cell_z * GRID_SIZE;
+    }
+
+    /// Try to get cached climate values at a world position
+    pub fn get(self: *const ClimateCache, world_x: i32, world_z: i32) ?struct { temp: f32, humid: f32, cont: f32 } {
+        const idx = self.getCellIndex(world_x, world_z) orelse return null;
+        const cell = &self.cells[idx];
+        if (!cell.valid) return null;
+        return .{ .temp = cell.temperature, .humid = cell.humidity, .cont = cell.continentalness };
+    }
+
+    /// Store climate values at a world position
+    pub fn put(self: *ClimateCache, world_x: i32, world_z: i32, temperature: f32, humidity: f32, continentalness: f32) void {
+        const idx = self.getCellIndex(world_x, world_z) orelse return;
+        self.cells[idx] = .{
+            .temperature = temperature,
+            .humidity = humidity,
+            .continentalness = continentalness,
+            .valid = true,
+        };
+    }
+
+    /// Get or compute climate values using provided noise functions
+    pub fn getOrCompute(
+        self: *ClimateCache,
+        world_x: i32,
+        world_z: i32,
+        computeFn: *const fn (x: f32, z: f32) struct { temp: f32, humid: f32, cont: f32 },
+    ) struct { temp: f32, humid: f32, cont: f32 } {
+        if (self.get(world_x, world_z)) |cached| {
+            return cached;
+        }
+
+        // Compute and cache
+        const result = computeFn(@floatFromInt(world_x), @floatFromInt(world_z));
+        self.put(world_x, world_z, result.temp, result.humid, result.cont);
+        return result;
+    }
+};

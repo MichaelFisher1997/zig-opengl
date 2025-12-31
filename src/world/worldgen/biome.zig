@@ -857,3 +857,60 @@ pub fn selectBiomeWithConstraintsAndRiver(climate: ClimateParams, structural: St
 
     return selectBiomeVoronoiWithRiver(heat, humidity, structural.height, structural.continentalness, structural.slope, river_mask);
 }
+
+// ============================================================================
+// LOD-optimized Biome Functions (Issue #114)
+// ============================================================================
+
+/// Simplified biome selection for LOD2+ (no structural constraints)
+pub fn selectBiomeSimple(climate: ClimateParams) BiomeId {
+    const heat = climate.temperature * 100.0;
+    const humidity = climate.humidity * 100.0;
+    const continental = climate.continentalness;
+
+    // Ocean check
+    if (continental < 0.35) {
+        if (continental < 0.20) return .deep_ocean;
+        return .ocean;
+    }
+
+    // Simple land biome selection based on heat/humidity
+    if (heat < 20) {
+        return if (humidity > 50) .taiga else .snow_tundra;
+    } else if (heat < 40) {
+        return if (humidity > 60) .taiga else .plains;
+    } else if (heat < 60) {
+        return if (humidity > 70) .forest else .plains;
+    } else if (heat < 80) {
+        return if (humidity > 60) .jungle else if (humidity > 30) .savanna else .desert;
+    } else {
+        return if (humidity > 40) .badlands else .desert;
+    }
+}
+
+/// Get biome color for LOD rendering (packed RGB)
+pub fn getBiomeColor(biome_id: BiomeId) u32 {
+    return switch (biome_id) {
+        .deep_ocean => 0x000044,
+        .ocean => 0x0066AA,
+        .beach => 0xDDCC88,
+        .plains => 0x88BB44,
+        .forest => 0x228822,
+        .taiga => 0x336644,
+        .desert => 0xDDBB66,
+        .snow_tundra => 0xDDEEFF,
+        .mountains => 0x666666,
+        .snowy_mountains => 0xCCDDEE,
+        .river => 0x4488CC,
+        .swamp => 0x446644,
+        .mangrove_swamp => 0x335533,
+        .jungle => 0x116611,
+        .savanna => 0xBBAA55,
+        .badlands => 0xAA6633,
+        .mushroom_fields => 0x995577,
+        .foothills => 0x779966,
+        .marsh => 0x557755,
+        .dry_plains => 0xAAAA66,
+        .coastal_plains => 0x99AA77,
+    };
+}
