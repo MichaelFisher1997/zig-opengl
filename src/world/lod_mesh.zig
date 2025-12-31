@@ -86,9 +86,9 @@ pub const LODMesh = struct {
                 const g: f32 = @as(f32, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
                 const b: f32 = @as(f32, @floatFromInt(color & 0xFF)) / 255.0;
 
-                // World position of this cell
-                const wx: f32 = @floatFromInt(world_x + @as(i32, @intCast(gx * cell_size)));
-                const wz: f32 = @floatFromInt(world_z + @as(i32, @intCast(gz * cell_size)));
+                // Local position of this cell (relative to chunk origin)
+                const wx: f32 = @floatFromInt(gx * cell_size);
+                const wz: f32 = @floatFromInt(gz * cell_size);
                 const wy: f32 = @floatFromInt(height);
                 const size: f32 = @floatFromInt(cell_size);
 
@@ -168,8 +168,8 @@ pub const LODMesh = struct {
                 const g: f32 = @as(f32, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
                 const b: f32 = @as(f32, @floatFromInt(color & 0xFF)) / 255.0;
 
-                const wx: f32 = @floatFromInt(world_x + @as(i32, @intCast(gx * cell_size)));
-                const wz: f32 = @floatFromInt(world_z + @as(i32, @intCast(gz * cell_size)));
+                const wx: f32 = @floatFromInt(gx * cell_size);
+                const wz: f32 = @floatFromInt(gz * cell_size);
                 const wy: f32 = @floatFromInt(height);
                 const size: f32 = @floatFromInt(cell_size);
 
@@ -436,8 +436,8 @@ pub const LODMeshBuilder = struct {
                     const g: f32 = @as(f32, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
                     const b: f32 = @as(f32, @floatFromInt(color & 0xFF)) / 255.0;
 
-                    const wx: f32 = @floatFromInt(region_world_x + offset[0] + @as(i32, @intCast(gx * cell_size)));
-                    const wz: f32 = @floatFromInt(region_world_z + offset[1] + @as(i32, @intCast(gz * cell_size)));
+                    const wx: f32 = @floatFromInt(offset[0] + @as(i32, @intCast(gx * cell_size)));
+                    const wz: f32 = @floatFromInt(offset[1] + @as(i32, @intCast(gz * cell_size)));
                     const wy: f32 = @floatFromInt(height);
                     const size: f32 = @floatFromInt(cell_size);
 
@@ -512,8 +512,8 @@ pub const LODMeshBuilder = struct {
                     const g: f32 = @as(f32, @floatFromInt((color >> 8) & 0xFF)) / 255.0;
                     const b: f32 = @as(f32, @floatFromInt(color & 0xFF)) / 255.0;
 
-                    const wx: f32 = @floatFromInt(region_world_x + offset_x + @as(i32, @intCast(gx * cell_size)));
-                    const wz: f32 = @floatFromInt(region_world_z + offset_z + @as(i32, @intCast(gz * cell_size)));
+                    const wx: f32 = @floatFromInt(offset_x + @as(i32, @intCast(gx * cell_size)));
+                    const wz: f32 = @floatFromInt(offset_z + @as(i32, @intCast(gz * cell_size)));
                     const wy: f32 = @floatFromInt(height);
                     const size: f32 = @floatFromInt(cell_size);
 
