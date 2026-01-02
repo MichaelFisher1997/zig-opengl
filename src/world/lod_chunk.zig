@@ -1,10 +1,10 @@
 //! LOD Chunk data structures for Distant Horizons-style rendering.
 //!
 //! LOD levels:
-//! - LOD0: Full 16x256x16 chunk (current system)
-//! - LOD1: 2x scale, 32x256x32 region (4 chunks merged)
-//! - LOD2: 4x scale, 64x256x64 region (16 chunks merged)
-//! - LOD3: 8x scale, 128x256x128 region (64 chunks merged, heightmap-only)
+//! - LOD0: Full detail, 2x2 chunks merged
+//! - LOD1: 2x block resolution, 4x4 chunks merged
+//! - LOD2: 4x block resolution, 8x8 chunks merged
+//! - LOD3: 8x block resolution, 16x16 chunks merged, heightmap-only
 
 const std = @import("std");
 const Chunk = @import("chunk.zig").Chunk;
@@ -16,10 +16,10 @@ const BiomeId = @import("worldgen/biome.zig").BiomeId;
 
 /// LOD level enum - higher values = more simplified
 pub const LODLevel = enum(u3) {
-    lod0 = 0, // Full detail (16x16 chunks)
-    lod1 = 1, // 2x simplified (32x32 regions, 4 chunks)
-    lod2 = 2, // 4x simplified (64x64 regions, 16 chunks)
-    lod3 = 3, // 8x simplified (128x128 regions, 64 chunks, heightmap only)
+    lod0 = 0, // Full detail (2x2 chunks = 4 chunks)
+    lod1 = 1, // 2x simplified (4x4 chunks = 16 chunks)
+    lod2 = 2, // 4x simplified (8x8 chunks = 64 chunks)
+    lod3 = 3, // 8x simplified (16x16 chunks = 256 chunks, heightmap only)
 
     pub fn scale(self: LODLevel) u32 {
         return @as(u32, 1) << @intFromEnum(self);

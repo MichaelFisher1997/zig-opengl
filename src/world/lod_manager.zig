@@ -1,10 +1,10 @@
 //! LOD Manager - orchestrates multi-level chunk loading for extreme render distances.
 //!
 //! Implements a Distant Horizons-style system where:
-//! - LOD0 (0-16 chunks): Full detail, current chunk system
-//! - LOD1 (16-32 chunks): 2x simplified, 4 chunks merged
-//! - LOD2 (32-64 chunks): 4x simplified, 16 chunks merged
-//! - LOD3 (64-100 chunks): 8x simplified, 64 chunks merged, heightmap only
+//! - LOD0 (0-16 chunks): Full detail, 2x2 chunks merged
+//! - LOD1 (16-32 chunks): 2x simplified, 4x4 chunks merged
+//! - LOD2 (32-64 chunks): 4x simplified, 8x8 chunks merged
+//! - LOD3 (64-100 chunks): 8x simplified, 16x16 chunks merged, heightmap only
 //!
 //! Key principles:
 //! - LOD3 generates first (fast heightmap), fills horizon quickly

@@ -32,6 +32,7 @@ const ClimateParams = biome_mod.ClimateParams;
 const gen_region = @import("gen_region.zig");
 const GenRegion = gen_region.GenRegion;
 const GenRegionCache = gen_region.GenRegionCache;
+const WorldClassMap = gen_region.WorldClassMap;
 const REGION_SIZE_X = gen_region.REGION_SIZE_X;
 const REGION_SIZE_Z = gen_region.REGION_SIZE_Z;
 const Chunk = @import("../chunk.zig").Chunk;
@@ -258,6 +259,7 @@ pub const TerrainGenerator = struct {
     ridge_noise: Noise,
     params: Params,
     allocator: std.mem.Allocator,
+    classification_map: ?*WorldClassMap,
 
     // V7-style multi-layer terrain noises (Issue #105)
     terrain_base: ConfiguredNoise,

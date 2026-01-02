@@ -1,9 +1,9 @@
 //! LOD Mesh generation for distant terrain rendering.
 //!
 //! LOD meshes are simplified versions of chunk meshes:
-//! - LOD1: 2x2 chunks merged, 2-block resolution
-//! - LOD2: 4x4 chunks merged, 4-block resolution
-//! - LOD3: 8x8 chunks merged, 8-block resolution (heightmap only)
+//! - LOD1: 4x4 chunks merged, 2-block resolution
+//! - LOD2: 8x8 chunks merged, 4-block resolution
+//! - LOD3: 16x16 chunks merged, 8-block resolution (heightmap only)
 //!
 //! Key simplifications:
 //! - No greedy meshing (simple quads per grid cell)

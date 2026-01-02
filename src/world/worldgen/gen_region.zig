@@ -294,7 +294,7 @@ pub const ClimateCache = struct {
     cells: [GRID_SIZE * GRID_SIZE]CacheCell,
     origin_x: i32, // World X of grid origin
     origin_z: i32, // World Z of grid origin
-    
+
     pub fn init() ClimateCache {
         return .{
             .cells = [_]CacheCell{.{
