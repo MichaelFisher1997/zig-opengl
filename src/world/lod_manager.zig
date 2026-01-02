@@ -331,15 +331,9 @@ pub const LODManager = struct {
         while (rz <= player_rz + region_radius) : (rz += 1) {
             var rx = player_rx - region_radius;
             while (rx <= player_rx + region_radius) : (rx += 1) {
-                const dx = rx - player_rx;
-                const dz = rz - player_rz;
-                const dist_sq = dx * dx + dz * dz;
-
-                if (dist_sq > region_radius * region_radius) continue;
-
                 const key = LODRegionKey{ .rx = rx, .rz = rz, .lod = lod };
 
-                // Check if region exists
+                // Only queue if region doesn't already exist
                 if (storage.get(key) == null) {
                     queued_count += 1;
                     // Create new LOD chunk
@@ -351,7 +345,11 @@ pub const LODManager = struct {
                     try storage.put(key, chunk);
 
                     // Calculate velocity-weighted priority
+                    const dx = rx - player_rx;
+                    const dz = rz - player_rz;
+                    const dist_sq = dx * dx + dz * dz;
                     var priority = dist_sq;
+                    queued_count += 1;
                     if (has_velocity) {
                         const fdx: f32 = @floatFromInt(dx);
                         const fdz: f32 = @floatFromInt(dz);
