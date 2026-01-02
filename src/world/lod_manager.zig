@@ -690,6 +690,7 @@ pub const LODManager = struct {
         const frustum = Frustum.fromViewProj(view_proj);
         const player_cx = @as(f32, @floatFromInt(self.player_cx));
         const player_cz = @as(f32, @floatFromInt(self.player_cz));
+        const world_scale: f32 = @floatFromInt(CHUNK_SIZE_X);
 
         // Render LOD3 first (furthest, most distant)
         var iter3 = self.lod3_meshes.iterator();
@@ -703,25 +704,24 @@ pub const LODManager = struct {
             if (self.lod3_regions.get(key)) |chunk| {
                 if (chunk.state != .renderable) continue;
 
-                const bounds = chunk.worldBounds();
-                const region_x: f32 = @floatFromInt(bounds.min_x);
-                const region_z: f32 = @floatFromInt(bounds.min_z);
-                const size_x: f32 = @floatFromInt(bounds.max_x - bounds.min_x);
-                const size_z: f32 = @floatFromInt(bounds.max_z - bounds.min_z);
+                const region_bounds = chunk.worldBounds();
+                const region_x: f32 = @floatFromInt(region_bounds.min_x);
+                const region_z: f32 = @floatFromInt(region_bounds.min_z);
+                const size_x: f32 = @floatFromInt(region_bounds.max_x - region_bounds.min_x);
+                const size_z: f32 = @floatFromInt(region_bounds.max_z - region_bounds.min_z);
 
                 // Frustum Culling
                 const aabb = AABB.init(Vec3.init(region_x - camera_pos.x, -camera_pos.y, region_z - camera_pos.z), Vec3.init(region_x - camera_pos.x + size_x, -camera_pos.y + 256.0, region_z - camera_pos.z + size_z));
                 if (!frustum.intersectsAABB(aabb)) continue;
 
-                // Masking: skip ONLY if the ENTIRE region is within the inner detail level (Issue #119)
-                const scale: f32 = @floatFromInt(LODLevel.lod3.chunksPerSide());
-                const region_cx = @as(f32, @floatFromInt(key.rx)) * scale + scale * 0.5;
-                const region_cz = @as(f32, @floatFromInt(key.rz)) * scale + scale * 0.5;
-                const dx = @abs(region_cx - player_cx);
-                const dz = @abs(region_cz - player_cz);
-                const dist_to_furthest_edge = @max(dx, dz) + scale * 0.5;
-                const lod2_rad = @as(f32, @floatFromInt(self.config.lod2_radius));
-                if (dist_to_furthest_edge <= lod2_rad) continue;
+                // Masking: skip ONLY if the ENTIRE region is within the inner detail circle (Issue #119)
+                const c1x = @as(f32, @floatFromInt(region_bounds.min_x)) / world_scale - player_cx;
+                const c1z = @as(f32, @floatFromInt(region_bounds.min_z)) / world_scale - player_cz;
+                const c2x = @as(f32, @floatFromInt(region_bounds.max_x)) / world_scale - player_cx;
+                const c2z = @as(f32, @floatFromInt(region_bounds.max_z)) / world_scale - player_cz;
+
+                const r2 = @as(f32, @floatFromInt(self.config.lod2_radius * self.config.lod2_radius));
+                if (c1x * c1x + c1z * c1z <= r2 and c2x * c2x + c1z * c1z <= r2 and c1x * c1x + c2z * c2z <= r2 and c2x * c2x + c2z * c2z <= r2) continue;
 
                 const rel_x = region_x - camera_pos.x;
                 const rel_z = region_z - camera_pos.z;
@@ -744,25 +744,24 @@ pub const LODManager = struct {
             if (self.lod2_regions.get(key)) |chunk| {
                 if (chunk.state != .renderable) continue;
 
-                const bounds = chunk.worldBounds();
-                const region_x: f32 = @floatFromInt(bounds.min_x);
-                const region_z: f32 = @floatFromInt(bounds.min_z);
-                const size_x: f32 = @floatFromInt(bounds.max_x - bounds.min_x);
-                const size_z: f32 = @floatFromInt(bounds.max_z - bounds.min_z);
+                const region_bounds = chunk.worldBounds();
+                const region_x: f32 = @floatFromInt(region_bounds.min_x);
+                const region_z: f32 = @floatFromInt(region_bounds.min_z);
+                const size_x: f32 = @floatFromInt(region_bounds.max_x - region_bounds.min_x);
+                const size_z: f32 = @floatFromInt(region_bounds.max_z - region_bounds.min_z);
 
                 // Frustum Culling
                 const aabb = AABB.init(Vec3.init(region_x - camera_pos.x, -camera_pos.y, region_z - camera_pos.z), Vec3.init(region_x - camera_pos.x + size_x, -camera_pos.y + 256.0, region_z - camera_pos.z + size_z));
                 if (!frustum.intersectsAABB(aabb)) continue;
 
-                // Masking: skip if the ENTIRE region is within the inner detail level
-                const scale: f32 = @floatFromInt(LODLevel.lod2.chunksPerSide());
-                const region_cx = @as(f32, @floatFromInt(key.rx)) * scale + scale * 0.5;
-                const region_cz = @as(f32, @floatFromInt(key.rz)) * scale + scale * 0.5;
-                const dx = @abs(region_cx - player_cx);
-                const dz = @abs(region_cz - player_cz);
-                const dist_to_furthest_edge = @max(dx, dz) + scale * 0.5;
-                const lod1_rad = @as(f32, @floatFromInt(self.config.lod1_radius));
-                if (dist_to_furthest_edge <= lod1_rad) continue;
+                // Masking: skip if the ENTIRE region is within the inner detail circle
+                const c1x = @as(f32, @floatFromInt(region_bounds.min_x)) / world_scale - player_cx;
+                const c1z = @as(f32, @floatFromInt(region_bounds.min_z)) / world_scale - player_cz;
+                const c2x = @as(f32, @floatFromInt(region_bounds.max_x)) / world_scale - player_cx;
+                const c2z = @as(f32, @floatFromInt(region_bounds.max_z)) / world_scale - player_cz;
+
+                const r2 = @as(f32, @floatFromInt(self.config.lod1_radius * self.config.lod1_radius));
+                if (c1x * c1x + c1z * c1z <= r2 and c2x * c2x + c1z * c1z <= r2 and c1x * c1x + c2z * c2z <= r2 and c2x * c2x + c2z * c2z <= r2) continue;
 
                 const rel_x = region_x - camera_pos.x;
                 const rel_z = region_z - camera_pos.z;
@@ -785,25 +784,24 @@ pub const LODManager = struct {
             if (self.lod1_regions.get(key)) |chunk| {
                 if (chunk.state != .renderable) continue;
 
-                const bounds = chunk.worldBounds();
-                const region_x: f32 = @floatFromInt(bounds.min_x);
-                const region_z: f32 = @floatFromInt(bounds.min_z);
-                const size_x: f32 = @floatFromInt(bounds.max_x - bounds.min_x);
-                const size_z: f32 = @floatFromInt(bounds.max_z - bounds.min_z);
+                const region_bounds = chunk.worldBounds();
+                const region_x: f32 = @floatFromInt(region_bounds.min_x);
+                const region_z: f32 = @floatFromInt(region_bounds.min_z);
+                const size_x: f32 = @floatFromInt(region_bounds.max_x - region_bounds.min_x);
+                const size_z: f32 = @floatFromInt(region_bounds.max_z - region_bounds.min_z);
 
                 // Frustum Culling
                 const aabb = AABB.init(Vec3.init(region_x - camera_pos.x, -camera_pos.y, region_z - camera_pos.z), Vec3.init(region_x - camera_pos.x + size_x, -camera_pos.y + 256.0, region_z - camera_pos.z + size_z));
                 if (!frustum.intersectsAABB(aabb)) continue;
 
-                // Masking: skip if the ENTIRE region is within the inner detail level
-                const scale: f32 = @floatFromInt(LODLevel.lod1.chunksPerSide());
-                const region_cx = @as(f32, @floatFromInt(key.rx)) * scale + scale * 0.5;
-                const region_cz = @as(f32, @floatFromInt(key.rz)) * scale + scale * 0.5;
-                const dx = @abs(region_cx - player_cx);
-                const dz = @abs(region_cz - player_cz);
-                const dist_to_furthest_edge = @max(dx, dz) + scale * 0.5;
-                const lod0_rad = @as(f32, @floatFromInt(self.config.lod0_radius));
-                if (dist_to_furthest_edge <= lod0_rad) continue;
+                // Masking: skip if the ENTIRE region is within the inner detail circle (LOD0)
+                const c1x = @as(f32, @floatFromInt(region_bounds.min_x)) / world_scale - player_cx;
+                const c1z = @as(f32, @floatFromInt(region_bounds.min_z)) / world_scale - player_cz;
+                const c2x = @as(f32, @floatFromInt(region_bounds.max_x)) / world_scale - player_cx;
+                const c2z = @as(f32, @floatFromInt(region_bounds.max_z)) / world_scale - player_cz;
+
+                const r2 = @as(f32, @floatFromInt(self.config.lod0_radius * self.config.lod0_radius));
+                if (c1x * c1x + c1z * c1z <= r2 and c2x * c2x + c1z * c1z <= r2 and c1x * c1x + c2z * c2z <= r2 and c2x * c2x + c2z * c2z <= r2) continue;
 
                 const rel_x = region_x - camera_pos.x;
                 const rel_z = region_z - camera_pos.z;
