@@ -272,10 +272,11 @@ pub const LODChunk = struct {
 /// Configuration for LOD system
 pub const LODConfig = struct {
     /// Radius in chunks for each LOD level
+    /// Reduced radii for performance (only generates visible regions)
     lod0_radius: i32 = 16,
-    lod1_radius: i32 = 24, // Reduced from 32
-    lod2_radius: i32 = 32, // Reduced from 64
-    lod3_radius: i32 = 48, // Reduced from 100
+    lod1_radius: i32 = 20, // Reduced from 24
+    lod2_radius: i32 = 28, // Reduced from 32
+    lod3_radius: i32 = 36, // Reduced from 48
 
     /// Memory budget in MB
     memory_budget_mb: u32 = 256,

@@ -1089,49 +1089,69 @@ pub const TerrainGenerator = struct {
         }
     }
 
-    // LOD-optimized noise functions (fewer octaves)
+    // LOD-optimized noise functions (more octaves for better terrain match)
     fn getContinentalnessLOD(self: *const TerrainGenerator, x: f32, z: f32) f32 {
-        // Only 2 octaves instead of 4
-        const val = self.continentalness_noise.fbm2D(x, z, 2, 2.0, 0.5, self.params.continental_scale);
+        // 3 octaves instead of 4 (full terrain uses 4)
+        const val = self.continentalness_noise.fbm2D(x, z, 3, 2.0, 0.5, self.params.continental_scale);
         return (val + 1.0) * 0.5;
     }
 
     fn getErosionLOD(self: *const TerrainGenerator, x: f32, z: f32) f32 {
-        // Only 2 octaves instead of 4
-        const val = self.erosion_noise.fbm2D(x, z, 2, 2.0, 0.5, self.params.erosion_scale);
+        // 3 octaves instead of 4
+        const val = self.erosion_noise.fbm2D(x, z, 3, 2.0, 0.5, self.params.erosion_scale);
         return (val + 1.0) * 0.5;
     }
 
     fn getTemperatureLOD(self: *const TerrainGenerator, x: f32, z: f32) f32 {
-        // Only 2 octaves, use macro scale for LOD temperature
-        const val = self.temperature_noise.fbm2D(x, z, 2, 2.0, 0.5, self.params.temperature_macro_scale);
+        // 3 octaves, use macro scale for LOD temperature
+        const val = self.temperature_noise.fbm2D(x, z, 3, 2.0, 0.5, self.params.temperature_macro_scale);
         return clamp01((val + 1.0) * 0.5);
     }
 
     fn computeHeightLOD(self: *const TerrainGenerator, c: f32, e: f32, x: f32, z: f32, sea: f32) f32 {
         const p = self.params;
 
-        // Base height from continentalness and erosion
-        var base_height: f32 = undefined;
+        // Use same base logic as full terrain for consistency
+        // Ocean handling (same as computeHeight)
         if (c < p.ocean_threshold) {
-            // Ocean
-            const depth_factor = 1.0 - (c / p.ocean_threshold);
-            base_height = sea - 10 - depth_factor * 30;
-        } else {
-            // Land
-            const land_factor = (c - p.ocean_threshold) / (1.0 - p.ocean_threshold);
-            const erosion_factor = 1.0 - e * 0.5;
-            base_height = sea + 5 + land_factor * 60 * erosion_factor;
+            const ocean_depth_factor = c / p.ocean_threshold;
+            const deep_ocean_depth = sea - 55.0;
+            const shallow_ocean_depth = sea - 12.0;
+
+            // Minimal seabed variation for LOD
+            const seabed_detail = self.seabed_noise.fbm2D(x, z, 2, 2.0, 0.5, p.seabed_scale) * p.seabed_amp;
+
+            return std.math.lerp(deep_ocean_depth, shallow_ocean_depth, ocean_depth_factor) + seabed_detail;
         }
 
-        // Add terrain detail noise (simplified - fewer octaves)
-        // This makes LOD terrain match full-detail terrain better
+        // For land, use simplified V7-style terrain (same as full but fewer octaves)
+        // V7: Blend terrain_base and terrain_alt using height_select
+        const base_height = self.terrain_base.get2D(x, z);
+        const alt_height = self.terrain_alt.get2D(x, z);
+        const select = self.height_select.get2D(x, z);
+        const persist = self.terrain_persist.get2D(x, z);
+
+        const base_modulated = base_height * persist;
+        const alt_modulated = alt_height * persist;
+
+        const blend = clamp01((select + 8.0) / 16.0);
+        const v7_terrain = std.math.lerp(base_modulated, alt_modulated, blend);
+
+        // Combine with continental base (simplified for LOD)
+        const land_factor = (c - p.ocean_threshold) / (1.0 - p.ocean_threshold);
+        const erosion_factor = 1.0 - e * 0.5;
+        const continental_base = sea + 5 + land_factor * 60 * erosion_factor;
+
+        // Blend V7 terrain with continental base
+        const height = std.math.lerp(continental_base, v7_terrain, 0.7);
+
+        // Add some detail noise for LOD
         if (c >= p.ocean_threshold) {
-            const detail = self.detail_noise.fbm2D(x, z, 2, 2.0, 0.5, 0.02);
-            base_height += detail * 15.0 * (1.0 - e);
+            const detail = self.detail_noise.fbm2D(x, z, 3, 2.0, 0.5, 0.02);
+            return height + detail * 15.0 * (1.0 - e);
         }
 
-        return base_height;
+        return height;
     }
 
     fn getBiomeFromTemperature(self: *const TerrainGenerator, temperature: f32, is_ocean: bool, height: i32, sea_level: i32) BiomeId {

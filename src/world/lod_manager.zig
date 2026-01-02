@@ -505,12 +505,10 @@ pub const LODManager = struct {
 
     /// Unload regions that are too far from player
     fn unloadDistantRegions(self: *LODManager) !void {
-        const unload_buffer: i32 = 2;
-
-        // Unload LOD1
-        try self.unloadDistantForLevel(.lod1, self.config.lod1_radius + unload_buffer);
-        try self.unloadDistantForLevel(.lod2, self.config.lod2_radius + unload_buffer);
-        try self.unloadDistantForLevel(.lod3, self.config.lod3_radius + unload_buffer);
+        // Use same radius as queuing to prevent accumulation
+        try self.unloadDistantForLevel(.lod1, self.config.lod1_radius);
+        try self.unloadDistantForLevel(.lod2, self.config.lod2_radius);
+        try self.unloadDistantForLevel(.lod3, self.config.lod3_radius);
     }
 
     fn unloadDistantForLevel(self: *LODManager, lod: LODLevel, max_radius: i32) !void {
@@ -524,7 +522,9 @@ pub const LODManager = struct {
         const scale: i32 = @intCast(lod.chunksPerSide());
         const player_rx = @divFloor(self.player_cx, scale);
         const player_rz = @divFloor(self.player_cz, scale);
-        const region_radius = @divFloor(max_radius, scale);
+
+        // Use same +1 buffer as queuing to match radius exactly
+        const region_radius = @divFloor(max_radius, scale) + 1;
 
         var to_remove = std.ArrayListUnmanaged(LODRegionKey).empty;
         defer to_remove.deinit(self.allocator);
@@ -553,6 +553,19 @@ pub const LODManager = struct {
         // Remove outside of iteration
         for (to_remove.items) |key| {
             if (storage.get(key)) |chunk| {
+                // Clean up mesh before removing chunk
+                const meshes = switch (lod) {
+                    .lod0 => return,
+                    .lod1 => &self.lod1_meshes,
+                    .lod2 => &self.lod2_meshes,
+                    .lod3 => &self.lod3_meshes,
+                };
+                if (meshes.get(key)) |mesh| {
+                    mesh.deinit(self.rhi);
+                    self.allocator.destroy(mesh);
+                    _ = meshes.remove(key);
+                }
+
                 chunk.deinit(self.allocator);
                 self.allocator.destroy(chunk);
                 _ = storage.remove(key);
