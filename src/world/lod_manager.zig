@@ -94,7 +94,7 @@ pub const LODManager = struct {
     lod2_gen_queue: *JobQueue,
     lod3_gen_queue: *JobQueue,
 
-    // Worker pools (shared across LOD levels for now)
+    // Worker pool for LOD generation
     lod_gen_pool: ?*WorkerPool,
 
     // Upload queues per LOD level
@@ -386,9 +386,13 @@ pub const LODManager = struct {
         self.mutex.lockShared();
         defer self.mutex.unlockShared();
 
+        const max_meshes_per_frame = 2; // Reduce from 4 for less main thread work
+        var meshes_built: u32 = 0;
+
         // Check LOD1 regions
         var iter1 = self.lod1_regions.iterator();
         while (iter1.next()) |entry| {
+            if (meshes_built >= max_meshes_per_frame) break;
             const chunk = entry.value_ptr.*;
             if (chunk.state == .generated) {
                 chunk.state = .queued_for_mesh;
@@ -398,6 +402,7 @@ pub const LODManager = struct {
                     continue;
                 };
                 chunk.state = .mesh_ready;
+                meshes_built += 1;
             } else if (chunk.state == .mesh_ready) {
                 chunk.state = .uploading;
                 try self.lod1_upload_queue.push(chunk);
@@ -407,6 +412,7 @@ pub const LODManager = struct {
         // Check LOD2 regions
         var iter2 = self.lod2_regions.iterator();
         while (iter2.next()) |entry| {
+            if (meshes_built >= max_meshes_per_frame) break;
             const chunk = entry.value_ptr.*;
             if (chunk.state == .generated) {
                 chunk.state = .queued_for_mesh;
@@ -415,6 +421,7 @@ pub const LODManager = struct {
                     continue;
                 };
                 chunk.state = .mesh_ready;
+                meshes_built += 1;
             } else if (chunk.state == .mesh_ready) {
                 chunk.state = .uploading;
                 try self.lod2_upload_queue.push(chunk);
@@ -424,6 +431,7 @@ pub const LODManager = struct {
         // Check LOD3 regions
         var iter3 = self.lod3_regions.iterator();
         while (iter3.next()) |entry| {
+            if (meshes_built >= max_meshes_per_frame) break;
             const chunk = entry.value_ptr.*;
             if (chunk.state == .generated) {
                 chunk.state = .queued_for_mesh;
@@ -432,6 +440,7 @@ pub const LODManager = struct {
                     continue;
                 };
                 chunk.state = .mesh_ready;
+                meshes_built += 1;
             } else if (chunk.state == .mesh_ready) {
                 chunk.state = .uploading;
                 try self.lod3_upload_queue.push(chunk);

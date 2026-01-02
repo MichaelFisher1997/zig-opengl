@@ -75,16 +75,17 @@ pub const LODSimplifiedData = struct {
     allocator: std.mem.Allocator,
 
     /// Get optimal grid size for a given LOD level.
-    /// We want ~2 blocks per cell for smooth terrain:
-    /// - LOD1: region=64 blocks, 32x32 grid = 2 blocks/cell
-    /// - LOD2: region=128 blocks, 64x64 grid = 2 blocks/cell
-    /// - LOD3: region=256 blocks, 128x128 grid = 2 blocks/cell
+    /// Get grid size for LOD terrain rendering (balanced for performance).
+    /// Smaller grids = fewer vertices, better performance:
+    /// - LOD1: 16x16 grid = 4 blocks/cell, ~3k vertices per mesh
+    /// - LOD2: 20x20 grid = 6.4 blocks/cell, ~4.8k vertices per mesh
+    /// - LOD3: 24x24 grid = 10.7 blocks/cell, ~7k vertices per mesh
     pub fn getGridSize(lod_level: LODLevel) u32 {
         return switch (lod_level) {
             .lod0 => 16, // Not used for LOD0
-            .lod1 => 32, // 64 blocks / 32 = 2 blocks per cell
-            .lod2 => 64, // 128 blocks / 64 = 2 blocks per cell
-            .lod3 => 128, // 256 blocks / 128 = 2 blocks per cell
+            .lod1 => 16, // 64 blocks / 16 = 4 blocks per cell
+            .lod2 => 20, // 128 blocks / 20 = 6.4 blocks per cell
+            .lod3 => 24, // 256 blocks / 24 = 10.7 blocks per cell
         };
     }
 
@@ -272,15 +273,15 @@ pub const LODChunk = struct {
 pub const LODConfig = struct {
     /// Radius in chunks for each LOD level
     lod0_radius: i32 = 16,
-    lod1_radius: i32 = 32,
-    lod2_radius: i32 = 64,
-    lod3_radius: i32 = 100,
+    lod1_radius: i32 = 24, // Reduced from 32
+    lod2_radius: i32 = 32, // Reduced from 64
+    lod3_radius: i32 = 48, // Reduced from 100
 
     /// Memory budget in MB
     memory_budget_mb: u32 = 256,
 
     /// Maximum uploads per frame per LOD level
-    max_uploads_per_frame: u32 = 16,
+    max_uploads_per_frame: u32 = 4, // Reduced from 16
 
     /// Enable fog-masked transitions
     fog_transitions: bool = true,
