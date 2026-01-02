@@ -121,8 +121,8 @@ pub const LODManager = struct {
     // RHI for GPU operations
     rhi: RHI,
 
-    // Terrain generator for LOD generation
-    generator: *const TerrainGenerator,
+    // Terrain generator for LOD generation (mutable for cache recentering)
+    generator: *TerrainGenerator,
 
     // Paused state
     paused: bool,
@@ -130,7 +130,7 @@ pub const LODManager = struct {
     // Memory tracking
     memory_used_bytes: usize,
 
-    pub fn init(allocator: std.mem.Allocator, config: LODConfig, rhi: RHI, generator: *const TerrainGenerator) !*LODManager {
+    pub fn init(allocator: std.mem.Allocator, config: LODConfig, rhi: RHI, generator: *TerrainGenerator) !*LODManager {
         const mgr = try allocator.create(LODManager);
 
         // Create job queues for each LOD level
@@ -266,6 +266,12 @@ pub const LODManager = struct {
 
         self.player_cx = pc.chunk_x;
         self.player_cz = pc.chunk_z;
+
+        // Issue #119 Phase 4: Recenter classification cache if player moved far enough.
+        // This ensures LOD chunks have cache coverage for consistent biome/surface data.
+        const player_wx: i32 = @intFromFloat(player_pos.x);
+        const player_wz: i32 = @intFromFloat(player_pos.z);
+        _ = self.generator.maybeRecenterCache(player_wx, player_wz);
 
         // Queue LOD regions that need loading (also queue on first frame)
         // Priority: LOD3 first (fast, fills horizon), then LOD2, LOD1

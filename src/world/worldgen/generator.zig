@@ -244,6 +244,9 @@ pub const TerrainGenerator = struct {
 
     // Classification cache for LOD generation (Issue #119)
     classification_cache: ClassificationCache,
+    // Last player position for cache recentering
+    cache_center_x: i32,
+    cache_center_z: i32,
 
     // V7-style multi-layer terrain noises (Issue #105)
     terrain_base: ConfiguredNoise,
@@ -252,6 +255,12 @@ pub const TerrainGenerator = struct {
     terrain_persist: ConfiguredNoise,
     // Variant noise for sub-biomes (Issue #110)
     variant_noise: ConfiguredNoise,
+
+    /// Distance threshold for cache recentering (blocks).
+    /// When player is this far from cache center, recenter the cache.
+    /// 512 blocks = 1/4 of cache coverage (2048 blocks), ensures we recenter
+    /// before reaching the cache edge.
+    pub const CACHE_RECENTER_THRESHOLD: i32 = 512;
 
     pub fn init(seed: u64, allocator: std.mem.Allocator) TerrainGenerator {
         var prng = std.Random.DefaultPrng.init(seed);
@@ -278,6 +287,8 @@ pub const TerrainGenerator = struct {
             .params = .{},
             .allocator = allocator,
             .classification_cache = ClassificationCache.init(),
+            .cache_center_x = 0,
+            .cache_center_z = 0,
 
             // V7-style terrain layers - spread values based on Luanti defaults
             // terrain_base: Base terrain shape, rolling hills character
@@ -365,11 +376,40 @@ pub const TerrainGenerator = struct {
         };
     }
 
+    /// Check if classification cache should be recentered around player position.
+    /// Call this periodically (e.g., in LODManager.update or World.update).
+    /// Recentering invalidates the cache, so LOD chunks will fall back to
+    /// full-detail computation until LOD0 populates the cache again.
+    ///
+    /// Returns true if recentering occurred.
+    pub fn maybeRecenterCache(self: *TerrainGenerator, player_x: i32, player_z: i32) bool {
+        const dx = player_x - self.cache_center_x;
+        const dz = player_z - self.cache_center_z;
+
+        // Check if player has moved far enough from cache center
+        if (dx * dx + dz * dz > CACHE_RECENTER_THRESHOLD * CACHE_RECENTER_THRESHOLD) {
+            self.classification_cache.recenter(player_x, player_z);
+            self.cache_center_x = player_x;
+            self.cache_center_z = player_z;
+            return true;
+        }
+        return false;
+    }
+
     pub fn generate(self: *TerrainGenerator, chunk: *Chunk, stop_flag: ?*const bool) void {
         const world_x = chunk.getWorldX();
         const world_z = chunk.getWorldZ();
         const p = self.params;
         const sea: f32 = @floatFromInt(p.sea_level);
+
+        // Issue #119 Phase 4: Ensure cache is centered near this chunk on first generation.
+        // This handles the case where player spawns far from (0,0).
+        // If chunk is outside cache bounds, recenter around it.
+        if (!self.classification_cache.contains(world_x, world_z)) {
+            self.classification_cache.recenter(world_x, world_z);
+            self.cache_center_x = world_x;
+            self.cache_center_z = world_z;
+        }
 
         var surface_heights: [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32 = undefined;
         var biome_ids: [CHUNK_SIZE_X * CHUNK_SIZE_Z]BiomeId = undefined;
