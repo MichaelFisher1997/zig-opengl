@@ -884,14 +884,15 @@ pub const TerrainGenerator = struct {
 
                     // Still need to compute height (it's always needed for mesh)
                     // Use full-detail functions for consistency
-                    const c = self.getContinentalness(wx, wz);
-                    const e_val = self.getErosion(wx, wz);
-                    const pv = self.getPeaksValleys(wx, wz);
-                    const river_mask = self.getRiverMask(wx, wz);
-                    const region_info = region_pkg.getRegion(self.continentalness_noise.seed, wx_i, wz_i);
                     const warp = self.computeWarp(wx, wz);
                     const xw = wx + warp.x;
                     const zw = wz + warp.z;
+
+                    const c = self.getContinentalness(xw, zw);
+                    const e_val = self.getErosion(xw, zw);
+                    const pv = self.getPeaksValleys(xw, zw);
+                    const river_mask = self.getRiverMask(xw, zw);
+                    const region_info = region_pkg.getRegion(self.continentalness_noise.seed, wx_i, wz_i);
                     const coast_jitter = self.coast_jitter_noise.fbm2D(xw, zw, 2, 2.0, 0.5, p.coast_jitter_scale) * 0.03;
                     const c_jittered = clamp01(c + coast_jitter);
                     const terrain_height = self.computeHeight(c_jittered, e_val, pv, xw, zw, river_mask, region_info);
@@ -900,27 +901,42 @@ pub const TerrainGenerator = struct {
                     // === Fallback: Compute from scratch using FULL-DETAIL functions ===
                     // For chunks not yet visited at LOD0, compute using the same
                     // functions as LOD0 for perfect semantic consistency (Issue #119 Phase 3).
-                    const c = self.getContinentalness(wx, wz);
-                    const e_val = self.getErosion(wx, wz);
-                    const pv = self.getPeaksValleys(wx, wz);
-                    const river_mask = self.getRiverMask(wx, wz);
-                    const region_info = region_pkg.getRegion(self.continentalness_noise.seed, wx_i, wz_i);
                     const warp = self.computeWarp(wx, wz);
                     const xw = wx + warp.x;
                     const zw = wz + warp.z;
+
+                    const c = self.getContinentalness(xw, zw);
+                    const e_val = self.getErosion(xw, zw);
+                    const pv = self.getPeaksValleys(xw, zw);
+                    const river_mask = self.getRiverMask(xw, zw);
+                    const region_info = region_pkg.getRegion(self.continentalness_noise.seed, wx_i, wz_i);
                     const coast_jitter = self.coast_jitter_noise.fbm2D(xw, zw, 2, 2.0, 0.5, p.coast_jitter_scale) * 0.03;
                     const c_jittered = clamp01(c + coast_jitter);
 
                     // Use full-detail computeHeight for consistency
                     const terrain_height = self.computeHeight(c_jittered, e_val, pv, xw, zw, river_mask, region_info);
                     const terrain_height_i: i32 = @intFromFloat(terrain_height);
-                    const is_ocean_water = c < p.ocean_threshold;
+                    const is_ocean_water = c_jittered < p.ocean_threshold;
 
                     // Use full-detail biome calculation
-                    const temperature = self.getTemperature(wx, wz);
-                    const humidity = self.getHumidity(wx, wz);
-                    const climate = biome_mod.computeClimateParams(temperature, humidity, terrain_height_i, c, e_val, p.sea_level, CHUNK_SIZE_Y);
-                    const biome_id = biome_mod.selectBiomeSimple(climate);
+                    const altitude_offset: f32 = @max(0, terrain_height - @as(f32, @floatFromInt(p.sea_level)));
+                    var temperature = self.getTemperature(xw, zw);
+                    temperature = clamp01(temperature - (altitude_offset / 512.0) * p.temp_lapse);
+                    const humidity = self.getHumidity(xw, zw);
+
+                    const climate = biome_mod.computeClimateParams(temperature, humidity, terrain_height_i, c_jittered, e_val, p.sea_level, CHUNK_SIZE_Y);
+
+                    // Use more robust biome selection matching generate()
+                    const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered);
+                    // Approximation for slope in simplified heightmap (0 for now, same as previous simplified LODs)
+                    const slope: i32 = 0;
+                    const structural = biome_mod.StructuralParams{
+                        .height = terrain_height_i,
+                        .slope = slope,
+                        .continentalness = c_jittered,
+                        .ridge_mask = ridge_mask,
+                    };
+                    const biome_id = biome_mod.selectBiomeWithConstraintsAndRiver(climate, structural, river_mask);
 
                     data.heightmap[idx] = @intCast(terrain_height_i);
                     data.biomes[idx] = biome_id;

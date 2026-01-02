@@ -76,16 +76,16 @@ pub const LODSimplifiedData = struct {
 
     /// Get optimal grid size for a given LOD level.
     /// Get grid size for LOD terrain rendering (balanced for performance).
-    /// Smaller grids = fewer vertices, better performance:
-    /// - LOD1: 16x16 grid = 4 blocks/cell, ~3k vertices per mesh
-    /// - LOD2: 20x20 grid = 6.4 blocks/cell, ~4.8k vertices per mesh
-    /// - LOD3: 24x24 grid = 10.7 blocks/cell, ~7k vertices per mesh
+    /// Grid size must be a divisor of region size to prevent gaps.
+    /// - LOD1: 32x32 grid = 2 blocks/cell
+    /// - LOD2: 32x32 grid = 4 blocks/cell
+    /// - LOD3: 32x32 grid = 8 blocks/cell
     pub fn getGridSize(lod_level: LODLevel) u32 {
         return switch (lod_level) {
             .lod0 => 16, // Not used for LOD0
-            .lod1 => 16, // 64 blocks / 16 = 4 blocks per cell
-            .lod2 => 20, // 128 blocks / 20 = 6.4 blocks per cell
-            .lod3 => 24, // 256 blocks / 24 = 10.7 blocks per cell
+            .lod1 => 32,
+            .lod2 => 32,
+            .lod3 => 32,
         };
     }
 
