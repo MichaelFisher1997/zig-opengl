@@ -286,7 +286,15 @@ pub const World = struct {
             // Update LOD config to match render distance
             if (self.lod_manager) |lod_mgr| {
                 lod_mgr.config.lod0_radius = distance;
-                std.log.info("LOD lod0_radius updated to {}", .{distance});
+                lod_mgr.config.lod1_radius = distance + 6;
+                lod_mgr.config.lod2_radius = distance + 14;
+                lod_mgr.config.lod3_radius = distance + 22;
+                std.log.info("LOD radii updated: LOD0={}, LOD1={}, LOD2={}, LOD3={}", .{
+                    lod_mgr.config.lod0_radius,
+                    lod_mgr.config.lod1_radius,
+                    lod_mgr.config.lod2_radius,
+                    lod_mgr.config.lod3_radius,
+                });
             }
             // Force chunk rescan on next update
             self.last_pc = .{ .x = 9999, .z = 9999 };

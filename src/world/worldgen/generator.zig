@@ -529,46 +529,53 @@ pub const TerrainGenerator = struct {
         // Use coarse grid sampling to detect biome boundaries and inject transition biomes
         const EDGE_GRID_SIZE = CHUNK_SIZE_X / biome_mod.EDGE_STEP; // 4 cells for 16-block chunk
 
-        // For each coarse grid cell, detect if we're near a biome edge
-        var gz: u32 = 0;
-        while (gz < EDGE_GRID_SIZE) : (gz += 1) {
-            if (stop_flag) |sf| if (sf.*) return;
-            var gx: u32 = 0;
-            while (gx < EDGE_GRID_SIZE) : (gx += 1) {
-                // Sample at the center of each grid cell
-                const sample_x = gx * biome_mod.EDGE_STEP + biome_mod.EDGE_STEP / 2;
-                const sample_z = gz * biome_mod.EDGE_STEP + biome_mod.EDGE_STEP / 2;
-                const sample_idx = sample_x + sample_z * CHUNK_SIZE_X;
-                const base_biome = biome_ids[sample_idx];
+        // Optimization (Issue #119): Only run edge detection for close chunks
+        // This significantly improves loading performance at high render distances.
+        const player_dist_sq = (world_x - self.cache_center_x) * (world_x - self.cache_center_x) +
+            (world_z - self.cache_center_z) * (world_z - self.cache_center_z);
 
-                // Detect edge using world coordinates (allows sampling outside chunk)
-                const sample_wx = world_x + @as(i32, @intCast(sample_x));
-                const sample_wz = world_z + @as(i32, @intCast(sample_z));
-                const edge_info = self.detectBiomeEdge(sample_wx, sample_wz, base_biome);
+        if (player_dist_sq < 256 * 256) { // 16 chunks radius
+            // For each coarse grid cell, detect if we're near a biome edge
+            var gz: u32 = 0;
+            while (gz < EDGE_GRID_SIZE) : (gz += 1) {
+                if (stop_flag) |sf| if (sf.*) return;
+                var gx: u32 = 0;
+                while (gx < EDGE_GRID_SIZE) : (gx += 1) {
+                    // Sample at the center of each grid cell
+                    const sample_x = gx * biome_mod.EDGE_STEP + biome_mod.EDGE_STEP / 2;
+                    const sample_z = gz * biome_mod.EDGE_STEP + biome_mod.EDGE_STEP / 2;
+                    const sample_idx = sample_x + sample_z * CHUNK_SIZE_X;
+                    const base_biome = biome_ids[sample_idx];
 
-                // If edge detected, apply transition biome to this grid cell
-                if (edge_info.edge_band != .none) {
-                    if (edge_info.neighbor_biome) |neighbor| {
-                        if (biome_mod.getTransitionBiome(base_biome, neighbor)) |transition_biome| {
-                            // Apply transition biome to all blocks in this grid cell
-                            var cell_z: u32 = 0;
-                            while (cell_z < biome_mod.EDGE_STEP) : (cell_z += 1) {
-                                var cell_x: u32 = 0;
-                                while (cell_x < biome_mod.EDGE_STEP) : (cell_x += 1) {
-                                    const lx = gx * biome_mod.EDGE_STEP + cell_x;
-                                    const lz = gz * biome_mod.EDGE_STEP + cell_z;
-                                    if (lx < CHUNK_SIZE_X and lz < CHUNK_SIZE_Z) {
-                                        const cell_idx = lx + lz * CHUNK_SIZE_X;
-                                        // Store transition as primary, original as secondary for blending
-                                        secondary_biome_ids[cell_idx] = biome_ids[cell_idx];
-                                        biome_ids[cell_idx] = transition_biome;
-                                        // Set blend factor based on edge band (inner = more blend)
-                                        biome_blends[cell_idx] = switch (edge_info.edge_band) {
-                                            .inner => 0.3, // Closer to boundary: more original showing through
-                                            .middle => 0.2,
-                                            .outer => 0.1,
-                                            .none => 0.0,
-                                        };
+                    // Detect edge using world coordinates (allows sampling outside chunk)
+                    const sample_wx = world_x + @as(i32, @intCast(sample_x));
+                    const sample_wz = world_z + @as(i32, @intCast(sample_z));
+                    const edge_info = self.detectBiomeEdge(sample_wx, sample_wz, base_biome);
+
+                    // If edge detected, apply transition biome to this grid cell
+                    if (edge_info.edge_band != .none) {
+                        if (edge_info.neighbor_biome) |neighbor| {
+                            if (biome_mod.getTransitionBiome(base_biome, neighbor)) |transition_biome| {
+                                // Apply transition biome to all blocks in this grid cell
+                                var cell_z: u32 = 0;
+                                while (cell_z < biome_mod.EDGE_STEP) : (cell_z += 1) {
+                                    var cell_x: u32 = 0;
+                                    while (cell_x < biome_mod.EDGE_STEP) : (cell_x += 1) {
+                                        const lx = gx * biome_mod.EDGE_STEP + cell_x;
+                                        const lz = gz * biome_mod.EDGE_STEP + cell_z;
+                                        if (lx < CHUNK_SIZE_X and lz < CHUNK_SIZE_Z) {
+                                            const cell_idx = lx + lz * CHUNK_SIZE_X;
+                                            // Store transition as primary, original as secondary for blending
+                                            secondary_biome_ids[cell_idx] = biome_ids[cell_idx];
+                                            biome_ids[cell_idx] = transition_biome;
+                                            // Set blend factor based on edge band (inner = more blend)
+                                            biome_blends[cell_idx] = switch (edge_info.edge_band) {
+                                                .inner => 0.3, // Closer to boundary: more original showing through
+                                                .middle => 0.2,
+                                                .outer => 0.1,
+                                                .none => 0.0,
+                                            };
+                                        }
                                     }
                                 }
                             }
