@@ -723,6 +723,7 @@ pub const LODManager = struct {
         const player_cz = @as(f32, @floatFromInt(self.player_cz));
         const world_scale: f32 = @floatFromInt(CHUNK_SIZE_X);
 
+        // Circular radii squared for fast checks
         const lod0_r2 = @as(f32, @floatFromInt(self.config.lod0_radius * self.config.lod0_radius));
         const lod1_r2 = @as(f32, @floatFromInt(self.config.lod1_radius * self.config.lod1_radius));
         const lod2_r2 = @as(f32, @floatFromInt(self.config.lod2_radius * self.config.lod2_radius));
@@ -736,10 +737,20 @@ pub const LODManager = struct {
                 if (chunk.state != .renderable) continue;
                 const bounds = chunk.worldBounds();
 
-                // Annular masking: Cull if entirely within LOD2 radius
-                const dx = (@as(f32, @floatFromInt(bounds.min_x + bounds.max_x)) * 0.5) / world_scale - player_cx;
-                const dz = (@as(f32, @floatFromInt(bounds.min_z + bounds.max_z)) * 0.5) / world_scale - player_cz;
-                if (dx * dx + dz * dz < lod2_r2 - 64.0) continue;
+                // Conservative Masking: only cull if ALL 4 corners are inside the inner detail circle (Issue #119: No gaps)
+                const c1x = @as(f32, @floatFromInt(bounds.min_x)) / world_scale - player_cx;
+                const c1z = @as(f32, @floatFromInt(bounds.min_z)) / world_scale - player_cz;
+                const c2x = @as(f32, @floatFromInt(bounds.max_x)) / world_scale - player_cx;
+                const c2z = @as(f32, @floatFromInt(bounds.max_z)) / world_scale - player_cz;
+
+                const d1 = c1x * c1x + c1z * c1z;
+                const d2 = c2x * c2x + c1z * c1z;
+                const d3 = c1x * c1x + c2z * c2z;
+                const d4 = c2x * c2x + c2z * c2z;
+
+                // Safety buffer: 2 chunks (32 blocks) overlap
+                const inner_r2 = (std.math.sqrt(lod2_r2) - 2.0) * (std.math.sqrt(lod2_r2) - 2.0);
+                if (d1 <= inner_r2 and d2 <= inner_r2 and d3 <= inner_r2 and d4 <= inner_r2) continue;
 
                 if (!frustum.intersectsAABB(AABB.init(Vec3.init(@floatFromInt(bounds.min_x), -camera_pos.y, @floatFromInt(bounds.min_z)).sub(camera_pos), Vec3.init(@floatFromInt(bounds.max_x), 256.0 - camera_pos.y, @floatFromInt(bounds.max_z)).sub(camera_pos)))) continue;
 
@@ -757,10 +768,18 @@ pub const LODManager = struct {
                 if (chunk.state != .renderable) continue;
                 const bounds = chunk.worldBounds();
 
-                // Annular masking: Cull if entirely within LOD1 radius
-                const dx = (@as(f32, @floatFromInt(bounds.min_x + bounds.max_x)) * 0.5) / world_scale - player_cx;
-                const dz = (@as(f32, @floatFromInt(bounds.min_z + bounds.max_z)) * 0.5) / world_scale - player_cz;
-                if (dx * dx + dz * dz < lod1_r2 - 16.0) continue;
+                const c1x = @as(f32, @floatFromInt(bounds.min_x)) / world_scale - player_cx;
+                const c1z = @as(f32, @floatFromInt(bounds.min_z)) / world_scale - player_cz;
+                const c2x = @as(f32, @floatFromInt(bounds.max_x)) / world_scale - player_cx;
+                const c2z = @as(f32, @floatFromInt(bounds.max_z)) / world_scale - player_cz;
+
+                const d1 = c1x * c1x + c1z * c1z;
+                const d2 = c2x * c2x + c1z * c1z;
+                const d3 = c1x * c1x + c2z * c2z;
+                const d4 = c2x * c2x + c2z * c2z;
+
+                const inner_r2 = (std.math.sqrt(lod1_r2) - 2.0) * (std.math.sqrt(lod1_r2) - 2.0);
+                if (d1 <= inner_r2 and d2 <= inner_r2 and d3 <= inner_r2 and d4 <= inner_r2) continue;
 
                 if (!frustum.intersectsAABB(AABB.init(Vec3.init(@floatFromInt(bounds.min_x), -camera_pos.y, @floatFromInt(bounds.min_z)).sub(camera_pos), Vec3.init(@floatFromInt(bounds.max_x), 256.0 - camera_pos.y, @floatFromInt(bounds.max_z)).sub(camera_pos)))) continue;
 
@@ -778,10 +797,18 @@ pub const LODManager = struct {
                 if (chunk.state != .renderable) continue;
                 const bounds = chunk.worldBounds();
 
-                // Annular masking: Cull if entirely within LOD0 radius
-                const dx = (@as(f32, @floatFromInt(bounds.min_x + bounds.max_x)) * 0.5) / world_scale - player_cx;
-                const dz = (@as(f32, @floatFromInt(bounds.min_z + bounds.max_z)) * 0.5) / world_scale - player_cz;
-                if (dx * dx + dz * dz < lod0_r2 - 4.0) continue;
+                const c1x = @as(f32, @floatFromInt(bounds.min_x)) / world_scale - player_cx;
+                const c1z = @as(f32, @floatFromInt(bounds.min_z)) / world_scale - player_cz;
+                const c2x = @as(f32, @floatFromInt(bounds.max_x)) / world_scale - player_cx;
+                const c2z = @as(f32, @floatFromInt(bounds.max_z)) / world_scale - player_cz;
+
+                const d1 = c1x * c1x + c1z * c1z;
+                const d2 = c2x * c2x + c1z * c1z;
+                const d3 = c1x * c1x + c2z * c2z;
+                const d4 = c2x * c2x + c2z * c2z;
+
+                const inner_r2 = (std.math.sqrt(lod0_r2) - 2.0) * (std.math.sqrt(lod0_r2) - 2.0);
+                if (d1 <= inner_r2 and d2 <= inner_r2 and d3 <= inner_r2 and d4 <= inner_r2) continue;
 
                 if (!frustum.intersectsAABB(AABB.init(Vec3.init(@floatFromInt(bounds.min_x), -camera_pos.y, @floatFromInt(bounds.min_z)).sub(camera_pos), Vec3.init(@floatFromInt(bounds.max_x), 256.0 - camera_pos.y, @floatFromInt(bounds.max_z)).sub(camera_pos)))) continue;
 
