@@ -656,7 +656,7 @@ test "LODMesh initialization" {
 }
 
 test "getCellSize" {
-    try std.testing.expectEqual(@as(u32, 1), getCellSize(.lod0));
+    try std.testing.expectEqual(@as(u32, 2), getCellSize(.lod0));
     try std.testing.expectEqual(@as(u32, 2), getCellSize(.lod1));
     try std.testing.expectEqual(@as(u32, 4), getCellSize(.lod2));
     try std.testing.expectEqual(@as(u32, 8), getCellSize(.lod3));

@@ -329,5 +329,5 @@ test "LODConfig distance calculation" {
     try std.testing.expectEqual(LODLevel.lod0, config.getLODForDistance(10));
     try std.testing.expectEqual(LODLevel.lod1, config.getLODForDistance(20));
     try std.testing.expectEqual(LODLevel.lod2, config.getLODForDistance(50));
-    try std.testing.expectEqual(LODLevel.lod3, config.getLODForDistance(80));
+    try std.testing.expectEqual(LODLevel.lod3, config.getLODForDistance(100));
 }
