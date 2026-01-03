@@ -256,8 +256,16 @@ pub const LODChunk = struct {
         return self.pin_count.load(.monotonic) > 0;
     }
 
+    /// World-space bounds structure for LOD regions
+    pub const WorldBounds = struct {
+        min_x: i32,
+        min_z: i32,
+        max_x: i32,
+        max_z: i32,
+    };
+
     /// Get the world-space bounds of this LOD region
-    pub fn worldBounds(self: *const LODChunk) struct { min_x: i32, min_z: i32, max_x: i32, max_z: i32 } {
+    pub fn worldBounds(self: *const LODChunk) WorldBounds {
         const scale: i32 = @intCast(self.lod_level.chunksPerSide());
         const size: i32 = scale * CHUNK_SIZE_X;
         return .{

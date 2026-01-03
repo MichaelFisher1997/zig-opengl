@@ -590,9 +590,14 @@ pub const World = struct {
     pub fn render(self: *World, view_proj: Mat4, camera_pos: Vec3) void {
         self.last_render_stats = .{};
 
+        // Lock chunks for the chunk checker callback
+        self.chunks_mutex.lockShared();
+        defer self.chunks_mutex.unlockShared();
+
         // Render LOD meshes first (background, distant)
+        // Pass a chunk checker so LOD regions only hide when chunks are actually loaded
         if (self.lod_manager) |lod_mgr| {
-            lod_mgr.render(view_proj, camera_pos);
+            lod_mgr.render(view_proj, camera_pos, isChunkRenderable, @ptrCast(self));
         }
 
         // IMPORTANT: Reset mask radius to 0 for LOD0 chunks
@@ -602,9 +607,6 @@ pub const World = struct {
             _ = lod_mgr;
             // self.rhi.setMaskRadius(0); // If I used setMaskRadius
         }
-
-        self.chunks_mutex.lockShared();
-        defer self.chunks_mutex.unlockShared();
 
         self.visible_chunks.clearRetainingCapacity();
 
@@ -735,5 +737,15 @@ pub const World = struct {
     /// Check if LOD system is enabled
     pub fn isLODEnabled(self: *const World) bool {
         return self.lod_enabled;
+    }
+
+    /// Callback for LODManager to check if a chunk is loaded and renderable.
+    /// Must be called while chunks_mutex is held.
+    fn isChunkRenderable(chunk_x: i32, chunk_z: i32, ctx: *anyopaque) bool {
+        const self: *World = @ptrCast(@alignCast(ctx));
+        if (self.chunks.get(.{ .x = chunk_x, .z = chunk_z })) |data| {
+            return data.chunk.state == .renderable;
+        }
+        return false;
     }
 };
