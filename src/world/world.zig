@@ -606,18 +606,23 @@ pub const World = struct {
 
         const render_dist = if (self.lod_manager) |mgr| @min(self.render_distance, mgr.config.lod0_radius) else self.render_distance;
 
-        var cz = pc.chunk_z - render_dist;
-        while (cz <= pc.chunk_z + render_dist) : (cz += 1) {
-            var cx = pc.chunk_x - render_dist;
-            while (cx <= pc.chunk_x + render_dist) : (cx += 1) {
-                if (self.chunks.get(.{ .x = cx, .z = cz })) |data| {
-                    if (data.chunk.state == .renderable) {
-                        if (frustum.intersectsChunkRelative(cx, cz, camera_pos.x, camera_pos.y, camera_pos.z)) {
-                            self.visible_chunks.append(self.allocator, data) catch {};
-                        } else {
-                            self.last_render_stats.chunks_culled += 1;
-                        }
-                    }
+        // Issue #119 Performance fix: Iterate over loaded chunks instead of checking every coordinate in a square.
+        // This avoids thousands of hash map lookups per frame when render distance is high.
+        var iter = self.chunks.iterator();
+        while (iter.next()) |entry| {
+            const data = entry.value_ptr.*;
+            const key = entry.key_ptr.*;
+
+            // Fast distance check
+            const dx = key.x - pc.chunk_x;
+            const dz = key.z - pc.chunk_z;
+            if (@abs(dx) > render_dist or @abs(dz) > render_dist) continue;
+
+            if (data.chunk.state == .renderable) {
+                if (frustum.intersectsChunkRelative(key.x, key.z, camera_pos.x, camera_pos.y, camera_pos.z)) {
+                    self.visible_chunks.append(self.allocator, data) catch {};
+                } else {
+                    self.last_render_stats.chunks_culled += 1;
                 }
             }
         }

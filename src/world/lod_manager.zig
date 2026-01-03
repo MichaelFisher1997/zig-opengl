@@ -130,6 +130,13 @@ pub const LODManager = struct {
     // Memory tracking
     memory_used_bytes: usize,
 
+    // Performance tracking for throttling
+    update_tick: u32 = 0,
+
+    // Deferred mesh deletion queue (Vulkan/GL optimization)
+    deletion_queue: std.ArrayListUnmanaged(*LODMesh),
+    deletion_timer: f32 = 0,
+
     pub fn init(allocator: std.mem.Allocator, config: LODConfig, rhi: RHI, generator: *TerrainGenerator) !*LODManager {
         const mgr = try allocator.create(LODManager);
 
@@ -169,6 +176,9 @@ pub const LODManager = struct {
             .generator = generator,
             .paused = false,
             .memory_used_bytes = 0,
+            .update_tick = 0,
+            .deletion_queue = .empty,
+            .deletion_timer = 0,
         };
 
         // Initialize worker pool for LOD generation and meshing (3 workers for LOD tasks)
@@ -259,6 +269,25 @@ pub const LODManager = struct {
     /// Update LOD system with player position
     pub fn update(self: *LODManager, player_pos: Vec3, player_velocity: Vec3) !void {
         if (self.paused) return;
+
+        // Deferred deletion handling (Issue #119: Performance optimization)
+        // Clean up deleted meshes once per second to avoid waitIdle stalls
+        self.deletion_timer += 0.016; // Approx 60fps delta
+        if (self.deletion_timer >= 1.0 or self.deletion_queue.items.len > 100) {
+            if (self.deletion_queue.items.len > 0) {
+                self.rhi.waitIdle();
+                for (self.deletion_queue.items) |mesh| {
+                    mesh.deinit(self.rhi);
+                    self.allocator.destroy(mesh);
+                }
+                self.deletion_queue.clearRetainingCapacity();
+            }
+            self.deletion_timer = 0;
+        }
+
+        // Throttle heavy LOD management logic
+        self.update_tick += 1;
+        if (self.update_tick % 4 != 0) return; // Only update every 4 frames
 
         const pc = worldToChunk(@intFromFloat(player_pos.x), @intFromFloat(player_pos.z));
         _ = pc.chunk_x != self.player_cx or pc.chunk_z != self.player_cz; // Track movement for future use
@@ -563,8 +592,6 @@ pub const LODManager = struct {
 
         // Remove outside of iteration
         if (to_remove.items.len > 0) {
-            // Vulkan: Wait for GPU idle before destroying buffers that might be in flight
-            self.rhi.waitIdle();
             for (to_remove.items) |key| {
                 if (storage.get(key)) |chunk| {
                     // Clean up mesh before removing chunk
@@ -575,8 +602,12 @@ pub const LODManager = struct {
                         .lod3 => &self.lod3_meshes,
                     };
                     if (meshes.get(key)) |mesh| {
-                        mesh.deinit(self.rhi);
-                        self.allocator.destroy(mesh);
+                        // Push to deferred deletion queue instead of deleting immediately
+                        self.deletion_queue.append(self.allocator, mesh) catch {
+                            // Fallback if allocation fails: delete immediately (slow but safe)
+                            mesh.deinit(self.rhi);
+                            self.allocator.destroy(mesh);
+                        };
                         _ = meshes.remove(key);
                     }
 
