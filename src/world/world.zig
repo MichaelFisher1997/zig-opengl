@@ -590,9 +590,14 @@ pub const World = struct {
     pub fn render(self: *World, view_proj: Mat4, camera_pos: Vec3) void {
         self.last_render_stats = .{};
 
+        // Lock chunks for the chunk checker callback
+        self.chunks_mutex.lockShared();
+        defer self.chunks_mutex.unlockShared();
+
         // Render LOD meshes first (background, distant)
+        // Pass a chunk checker so LOD regions only hide when chunks are actually loaded
         if (self.lod_manager) |lod_mgr| {
-            lod_mgr.render(view_proj, camera_pos);
+            lod_mgr.render(view_proj, camera_pos, isChunkRenderable, @ptrCast(self));
         }
 
         // IMPORTANT: Reset mask radius to 0 for LOD0 chunks
@@ -602,9 +607,6 @@ pub const World = struct {
             _ = lod_mgr;
             // self.rhi.setMaskRadius(0); // If I used setMaskRadius
         }
-
-        self.chunks_mutex.lockShared();
-        defer self.chunks_mutex.unlockShared();
 
         self.visible_chunks.clearRetainingCapacity();
 
@@ -634,9 +636,7 @@ pub const World = struct {
 
         for (self.visible_chunks.items) |data| {
             self.last_render_stats.chunks_rendered += 1;
-            for (data.mesh.subchunks) |s| {
-                self.last_render_stats.vertices_rendered += s.count_solid;
-            }
+            self.last_render_stats.vertices_rendered += data.mesh.solid_count;
 
             const chunk_world_x: f32 = @floatFromInt(data.chunk.chunk_x * CHUNK_SIZE_X);
             const chunk_world_z: f32 = @floatFromInt(data.chunk.chunk_z * CHUNK_SIZE_Z);
@@ -650,9 +650,7 @@ pub const World = struct {
         }
 
         for (self.visible_chunks.items) |data| {
-            for (data.mesh.subchunks) |s| {
-                self.last_render_stats.vertices_rendered += s.count_fluid;
-            }
+            self.last_render_stats.vertices_rendered += data.mesh.fluid_count;
 
             const chunk_world_x: f32 = @floatFromInt(data.chunk.chunk_x * CHUNK_SIZE_X);
             const chunk_world_z: f32 = @floatFromInt(data.chunk.chunk_z * CHUNK_SIZE_Z);
@@ -666,10 +664,13 @@ pub const World = struct {
         }
     }
 
-    pub fn renderShadowPass(self: *World, view_proj: Mat4, camera_pos: Vec3) void {
-        _ = view_proj;
-        self.chunks_mutex.lock();
-        defer self.chunks_mutex.unlock();
+    pub fn renderShadowPass(self: *World, light_space_matrix: Mat4, camera_pos: Vec3) void {
+        // Build frustum from the light's orthographic projection matrix
+        // This culls chunks that are outside the shadow cascade's view
+        const shadow_frustum = Frustum.fromViewProj(light_space_matrix);
+
+        self.chunks_mutex.lockShared();
+        defer self.chunks_mutex.unlockShared();
 
         var iter = self.chunks.iterator();
         while (iter.next()) |entry| {
@@ -680,6 +681,12 @@ pub const World = struct {
 
             const chunk_world_x: f32 = @floatFromInt(key.x * CHUNK_SIZE_X);
             const chunk_world_z: f32 = @floatFromInt(key.z * CHUNK_SIZE_Z);
+
+            // Frustum culling against the shadow cascade's orthographic projection
+            // Use intersectsChunkRelative with camera_pos for consistent coordinate system
+            if (!shadow_frustum.intersectsChunkRelative(key.x, key.z, camera_pos.x, camera_pos.y, camera_pos.z)) {
+                continue;
+            }
 
             const rel_x = chunk_world_x - camera_pos.x;
             const rel_z = chunk_world_z - camera_pos.z;
@@ -702,9 +709,7 @@ pub const World = struct {
         var total_verts: u64 = 0;
         var iter = self.chunks.iterator();
         while (iter.next()) |entry| {
-            for (entry.value_ptr.*.mesh.subchunks) |s| {
-                total_verts += s.count_solid + s.count_fluid;
-            }
+            total_verts += entry.value_ptr.*.mesh.solid_count + entry.value_ptr.*.mesh.fluid_count;
         }
 
         self.gen_queue.mutex.lock();
@@ -735,5 +740,15 @@ pub const World = struct {
     /// Check if LOD system is enabled
     pub fn isLODEnabled(self: *const World) bool {
         return self.lod_enabled;
+    }
+
+    /// Callback for LODManager to check if a chunk is loaded and renderable.
+    /// Must be called while chunks_mutex is held.
+    fn isChunkRenderable(chunk_x: i32, chunk_z: i32, ctx: *anyopaque) bool {
+        const self: *World = @ptrCast(@alignCast(ctx));
+        if (self.chunks.get(.{ .x = chunk_x, .z = chunk_z })) |data| {
+            return data.chunk.state == .renderable;
+        }
+        return false;
     }
 };

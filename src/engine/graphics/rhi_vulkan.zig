@@ -54,9 +54,10 @@ const GlobalUniforms = extern struct {
 
 /// Shadow cascade uniforms for CSM. Bound to descriptor set 0, binding 2.
 const ShadowUniforms = extern struct {
-    light_space_matrices: [shadows.ShadowMap.CASCADE_COUNT]Mat4,
-    cascade_splits: [4]f32, // View-space depth splits
-    shadow_texel_sizes: [4]f32,
+    light_space_matrices: [rhi.SHADOW_CASCADE_COUNT]Mat4,
+    cascade_splits: [rhi.SHADOW_CASCADE_COUNT]f32,
+    shadow_texel_sizes: [rhi.SHADOW_CASCADE_COUNT]f32,
+    padding: f32 = 0.0,
 };
 
 /// Per-draw model matrix, passed via push constants for efficiency.
@@ -2302,7 +2303,7 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
     }
 
     var shadow_infos: [3]c.VkDescriptorImageInfo = undefined;
-    for (0..3) |si| {
+    for (0..rhi.SHADOW_CASCADE_COUNT) |si| {
         if (ctx.shadow_image_views[si] != null) {
             shadow_infos[si] = .{
                 .sampler = ctx.shadow_sampler,
@@ -2594,13 +2595,13 @@ fn setModelMatrix(ctx_ptr: *anyopaque, model: Mat4, mask_radius: f32) void {
     ctx.current_mask_radius = mask_radius;
 }
 
-fn setTextureUniforms(ctx_ptr: *anyopaque, texture_enabled: bool, shadow_map_handles: [3]rhi.TextureHandle) void {
+fn setTextureUniforms(ctx_ptr: *anyopaque, texture_enabled: bool, shadow_map_handles: [rhi.SHADOW_CASCADE_COUNT]rhi.TextureHandle) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.textures_enabled = texture_enabled;
     // Force descriptor update so internal shadow maps are bound even if handles are 0
     ctx.descriptors_updated = false;
 
-    for (0..3) |i| {
+    for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
         if (shadow_map_handles[i] != 0) {
             if (ctx.textures.get(shadow_map_handles[i])) |tex| {
                 ctx.shadow_image_views[i] = tex.view;
@@ -3472,7 +3473,7 @@ fn draw(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.Dra
 
                     // Update shadow map descriptors (bindings 3, 4, 5) if this is the first update of the frame
                     if (!ctx.descriptors_updated) {
-                        for (0..3) |i| {
+                        for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
                             const view = if (ctx.shadow_image_views[i] != null) ctx.shadow_image_views[i] else blk: {
                                 ctx.mutex.lock();
                                 const t = ctx.textures.get(ctx.current_texture);
@@ -3757,8 +3758,9 @@ fn updateShadowUniforms(ctx_ptr: *anyopaque, params: rhi.ShadowParams) void {
 
     const shadow_uniforms = ShadowUniforms{
         .light_space_matrices = params.light_space_matrices,
-        .cascade_splits = .{ params.cascade_splits[0], params.cascade_splits[1], params.cascade_splits[2], 0.0 },
-        .shadow_texel_sizes = .{ params.shadow_texel_sizes[0], params.shadow_texel_sizes[1], params.shadow_texel_sizes[2], 0.0 },
+        .cascade_splits = .{ params.cascade_splits[0], params.cascade_splits[1] },
+        .shadow_texel_sizes = .{ params.shadow_texel_sizes[0], params.shadow_texel_sizes[1] },
+        .padding = 0.0,
     };
 
     var map_ptr: ?*anyopaque = null;

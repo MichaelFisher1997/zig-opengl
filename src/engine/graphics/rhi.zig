@@ -30,7 +30,7 @@ pub const InvalidShaderHandle: ShaderHandle = 0;
 pub const TextureHandle = u32;
 pub const InvalidTextureHandle: TextureHandle = 0;
 
-pub const SHADOW_CASCADE_COUNT = 3;
+pub const SHADOW_CASCADE_COUNT = 2;
 
 pub const BufferUsage = enum {
     vertex,
@@ -216,7 +216,7 @@ pub const RHI = struct {
         setModelMatrix: *const fn (ctx: *anyopaque, model: Mat4, mask_radius: f32) void,
         updateGlobalUniforms: *const fn (ctx: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, time: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32, use_texture: bool, cloud_params: CloudParams) void,
         updateShadowUniforms: *const fn (ctx: *anyopaque, params: ShadowParams) void,
-        setTextureUniforms: *const fn (ctx: *anyopaque, texture_enabled: bool, shadow_map_handles: [3]TextureHandle) void,
+        setTextureUniforms: *const fn (ctx: *anyopaque, texture_enabled: bool, shadow_map_handles: [SHADOW_CASCADE_COUNT]TextureHandle) void,
 
         // Draw Calls
         draw: *const fn (ctx: *anyopaque, handle: BufferHandle, count: u32, mode: DrawMode) void,
@@ -367,7 +367,7 @@ pub const RHI = struct {
         self.vtable.setModelMatrix(self.ptr, model, mask_radius);
     }
 
-    pub fn setTextureUniforms(self: RHI, texture_enabled: bool, shadow_map_handles: [3]TextureHandle) void {
+    pub fn setTextureUniforms(self: RHI, texture_enabled: bool, shadow_map_handles: [SHADOW_CASCADE_COUNT]TextureHandle) void {
         self.vtable.setTextureUniforms(self.ptr, texture_enabled, shadow_map_handles);
     }
 

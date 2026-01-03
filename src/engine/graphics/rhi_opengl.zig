@@ -519,10 +519,10 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
     _ = time;
 }
 
-fn setTextureUniforms(ctx_ptr: *anyopaque, texture_enabled: bool, shadow_map_handles: [3]rhi.TextureHandle) void {
+fn setTextureUniforms(ctx_ptr: *anyopaque, texture_enabled: bool, shadow_map_handles: [rhi.SHADOW_CASCADE_COUNT]rhi.TextureHandle) void {
     const ctx: *OpenGLContext = @ptrCast(@alignCast(ctx_ptr));
 
-    const shadow_map_names = [_][:0]const u8{ "uShadowMap0", "uShadowMap1", "uShadowMap2" };
+    const shadow_map_names = [_][:0]const u8{ "uShadowMap0", "uShadowMap1" };
 
     if (ctx.active_shader) |shader| {
         shader.use();
@@ -530,7 +530,7 @@ fn setTextureUniforms(ctx_ptr: *anyopaque, texture_enabled: bool, shadow_map_han
         shader.setIntCached("uTexture", 0);
         shader.setIntCached("uUseTexture", if (texture_enabled) 1 else 0);
 
-        for (0..3) |i| {
+        for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
             const slot: i32 = 1 + @as(i32, @intCast(i));
             c.glActiveTexture().?(@as(c.GLenum, @intCast(@as(u32, @intCast(c.GL_TEXTURE0)) + @as(u32, @intCast(slot)))));
             c.glBindTexture(c.GL_TEXTURE_2D, @intCast(shadow_map_handles[i]));
@@ -542,7 +542,7 @@ fn setTextureUniforms(ctx_ptr: *anyopaque, texture_enabled: bool, shadow_map_han
         setUniformIntDirect(ctx.active_program, "uTexture", 0);
         setUniformIntDirect(ctx.active_program, "uUseTexture", if (texture_enabled) 1 else 0);
 
-        for (0..3) |i| {
+        for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
             const slot: i32 = 1 + @as(i32, @intCast(i));
             c.glActiveTexture().?(@as(c.GLenum, @intCast(@as(u32, @intCast(c.GL_TEXTURE0)) + @as(u32, @intCast(slot)))));
             c.glBindTexture(c.GL_TEXTURE_2D, @intCast(shadow_map_handles[i]));
