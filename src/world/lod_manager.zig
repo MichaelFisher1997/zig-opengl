@@ -282,8 +282,9 @@ pub const LODManager = struct {
         // Deferred deletion handling (Issue #119: Performance optimization)
         // Clean up deleted meshes once per second to avoid waitIdle stalls
         self.deletion_timer += 0.016; // Approx 60fps delta
-        if (self.deletion_timer >= 1.0 or self.deletion_queue.items.len > 100) {
+        if (self.deletion_timer >= 1.0 or self.deletion_queue.items.len > 50) {
             if (self.deletion_queue.items.len > 0) {
+                // Ensure GPU is done with resources before deleting
                 self.rhi.waitIdle();
                 for (self.deletion_queue.items) |mesh| {
                     mesh.deinit(self.rhi);
@@ -759,6 +760,11 @@ pub const LODManager = struct {
         // This prevents LOD from poking through voxel chunks (caves, overhangs, etc.)
         const lod_y_offset: f32 = -3.0;
 
+        // Check and free LOD meshes where all underlying chunks are loaded
+        if (chunk_checker) |checker| {
+            self.unloadLODWhereChunksLoaded(checker, checker_ctx.?);
+        }
+
         // Render LOD3 first (furthest/lowest detail - will be covered by higher detail LODs)
         var iter3 = self.lod3_meshes.iterator();
         while (iter3.next()) |entry| {
@@ -828,6 +834,45 @@ pub const LODManager = struct {
 
                 self.rhi.setModelMatrix(Mat4.translate(Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, -camera_pos.y + lod_y_offset, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z)), 0.0);
                 mesh.draw(self.rhi);
+            }
+        }
+    }
+
+    /// Free LOD meshes where all underlying chunks are loaded
+    fn unloadLODWhereChunksLoaded(self: *LODManager, checker: ChunkChecker, ctx: *anyopaque) void {
+        const levels = [_]LODLevel{ .lod1, .lod2, .lod3 };
+        const storages = [_]*std.HashMap(LODRegionKey, *LODChunk, LODRegionKeyContext, 80){ &self.lod1_regions, &self.lod2_regions, &self.lod3_regions };
+        const meshes_maps = [_]*std.HashMap(LODRegionKey, *LODMesh, LODRegionKeyContext, 80){ &self.lod1_meshes, &self.lod2_meshes, &self.lod3_meshes };
+
+        for (levels, 0..) |_, i| {
+            const storage = storages[i];
+            const meshes = meshes_maps[i];
+
+            var to_remove = std.ArrayListUnmanaged(LODRegionKey).empty;
+            defer to_remove.deinit(self.allocator);
+
+            var iter = meshes.iterator();
+            while (iter.next()) |entry| {
+                if (storage.get(entry.key_ptr.*)) |chunk| {
+                    const bounds = chunk.worldBounds();
+                    if (self.areAllChunksLoaded(bounds, checker, ctx)) {
+                        to_remove.append(self.allocator, entry.key_ptr.*) catch {};
+                    }
+                }
+            }
+
+            for (to_remove.items) |key| {
+                if (meshes.fetchRemove(key)) |mesh_entry| {
+                    // Queue for deferred deletion to avoid waitIdle stutter
+                    self.deletion_queue.append(self.allocator, mesh_entry.value) catch {
+                        mesh_entry.value.deinit(self.rhi);
+                        self.allocator.destroy(mesh_entry.value);
+                    };
+                }
+                if (storage.fetchRemove(key)) |chunk_entry| {
+                    chunk_entry.value.deinit(self.allocator);
+                    self.allocator.destroy(chunk_entry.value);
+                }
             }
         }
     }
