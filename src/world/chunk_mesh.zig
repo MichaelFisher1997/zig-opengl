@@ -306,6 +306,7 @@ pub const ChunkMesh = struct {
     }
 
     /// Upload pending mesh data to the GPU using GlobalVertexAllocator.
+    /// Upload pending mesh data to the GPU using GlobalVertexAllocator.
     pub fn upload(self: *ChunkMesh, allocator: *GlobalVertexAllocator) void {
         self.mutex.lock();
         defer self.mutex.unlock();
