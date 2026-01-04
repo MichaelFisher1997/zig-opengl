@@ -55,9 +55,8 @@ const GlobalUniforms = extern struct {
 /// Shadow cascade uniforms for CSM. Bound to descriptor set 0, binding 2.
 const ShadowUniforms = extern struct {
     light_space_matrices: [rhi.SHADOW_CASCADE_COUNT]Mat4,
-    cascade_splits: [rhi.SHADOW_CASCADE_COUNT]f32,
-    shadow_texel_sizes: [rhi.SHADOW_CASCADE_COUNT]f32,
-    padding: f32 = 0.0,
+    cascade_splits: [4]f32, // vec4 in shader
+    shadow_texel_sizes: [4]f32, // vec4 in shader
 };
 
 /// Per-draw model matrix, passed via push constants for efficiency.
@@ -3705,11 +3704,15 @@ fn endShadowPass(ctx_ptr: *anyopaque) void {
 fn updateShadowUniforms(ctx_ptr: *anyopaque, params: rhi.ShadowParams) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
 
+    var splits = [_]f32{ 0, 0, 0, 0 };
+    var sizes = [_]f32{ 0, 0, 0, 0 };
+    @memcpy(splits[0..rhi.SHADOW_CASCADE_COUNT], &params.cascade_splits);
+    @memcpy(sizes[0..rhi.SHADOW_CASCADE_COUNT], &params.shadow_texel_sizes);
+
     const shadow_uniforms = ShadowUniforms{
         .light_space_matrices = params.light_space_matrices,
-        .cascade_splits = .{ params.cascade_splits[0], params.cascade_splits[1] },
-        .shadow_texel_sizes = .{ params.shadow_texel_sizes[0], params.shadow_texel_sizes[1] },
-        .padding = 0.0,
+        .cascade_splits = splits,
+        .shadow_texel_sizes = sizes,
     };
 
     var map_ptr: ?*anyopaque = null;
