@@ -748,7 +748,7 @@ pub const LODManager = struct {
 
     /// Render all LOD meshes
     /// chunk_checker: Optional callback to check if regular chunks cover this region.
-    ///                If all chunks in the region are loaded, the LOD region is skipped.
+    ///                If all chunks in region are loaded, the LOD region is skipped.
     pub fn render(self: *LODManager, view_proj: Mat4, camera_pos: Vec3, chunk_checker: ?ChunkChecker, checker_ctx: ?*anyopaque) void {
         self.mutex.lockShared();
         defer self.mutex.unlockShared();
@@ -759,13 +759,6 @@ pub const LODManager = struct {
         // This prevents LOD from poking through voxel chunks (caves, overhangs, etc.)
         const lod_y_offset: f32 = -3.0;
 
-        // Chunk render distance in blocks - used to determine when to apply min distance checks
-        // These are percentages of the render distance to scale LOD visibility properly
-        const render_dist_blocks: f32 = @as(f32, @floatFromInt(self.config.lod0_radius * CHUNK_SIZE_X));
-        const lod1_min_dist: f32 = render_dist_blocks * 0.6; // LOD1 only visible beyond 60% of render distance
-        const lod2_min_dist: f32 = render_dist_blocks * 0.4; // LOD2 only visible beyond 40% of render distance
-        const lod3_min_dist: f32 = render_dist_blocks * 0.25; // LOD3 only visible beyond 25% of render distance
-
         // Render LOD3 first (furthest/lowest detail - will be covered by higher detail LODs)
         var iter3 = self.lod3_meshes.iterator();
         while (iter3.next()) |entry| {
@@ -775,23 +768,17 @@ pub const LODManager = struct {
                 if (chunk.state != .renderable) continue;
                 const bounds = chunk.worldBounds();
 
-                // Calculate distance to closest point of this LOD region
-                const closest_x3 = @max(@as(f32, @floatFromInt(bounds.min_x)), @min(camera_pos.x, @as(f32, @floatFromInt(bounds.max_x))));
-                const closest_z3 = @max(@as(f32, @floatFromInt(bounds.min_z)), @min(camera_pos.z, @as(f32, @floatFromInt(bounds.max_z))));
-                const dist_to_closest3 = @sqrt((closest_x3 - camera_pos.x) * (closest_x3 - camera_pos.x) + (closest_z3 - camera_pos.z) * (closest_z3 - camera_pos.z));
-
-                // Only apply min distance check within chunk render distance (where chunks should exist)
-                if (dist_to_closest3 < render_dist_blocks and dist_to_closest3 < lod3_min_dist) continue;
-
                 // Skip if ALL underlying chunks are loaded and renderable
                 if (chunk_checker) |checker| {
                     if (self.areAllChunksLoaded(bounds, checker, checker_ctx.?)) continue;
                 }
 
-                // Frustum cull
-                if (!frustum.intersectsAABB(AABB.init(Vec3.init(@floatFromInt(bounds.min_x), -camera_pos.y, @floatFromInt(bounds.min_z)).sub(camera_pos), Vec3.init(@floatFromInt(bounds.max_x), 256.0 - camera_pos.y, @floatFromInt(bounds.max_z)).sub(camera_pos)))) continue;
+                // Frustum cull - AABB in camera-relative coords (Y from 0 to 256 in world space)
+                const aabb_min = Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, 0.0 - camera_pos.y, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z);
+                const aabb_max = Vec3.init(@as(f32, @floatFromInt(bounds.max_x)) - camera_pos.x, 256.0 - camera_pos.y, @as(f32, @floatFromInt(bounds.max_z)) - camera_pos.z);
+                if (!frustum.intersectsAABB(AABB.init(aabb_min, aabb_max))) continue;
 
-                self.rhi.setModelMatrix(Mat4.translate(Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, -camera_pos.y + lod_y_offset, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z)), 160.0);
+                self.rhi.setModelMatrix(Mat4.translate(Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, -camera_pos.y + lod_y_offset, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z)), 0.0);
                 mesh.draw(self.rhi);
             }
         }
@@ -805,23 +792,17 @@ pub const LODManager = struct {
                 if (chunk.state != .renderable) continue;
                 const bounds = chunk.worldBounds();
 
-                // Calculate distance to closest point of this LOD region
-                const closest_x2 = @max(@as(f32, @floatFromInt(bounds.min_x)), @min(camera_pos.x, @as(f32, @floatFromInt(bounds.max_x))));
-                const closest_z2 = @max(@as(f32, @floatFromInt(bounds.min_z)), @min(camera_pos.z, @as(f32, @floatFromInt(bounds.max_z))));
-                const dist_to_closest2 = @sqrt((closest_x2 - camera_pos.x) * (closest_x2 - camera_pos.x) + (closest_z2 - camera_pos.z) * (closest_z2 - camera_pos.z));
-
-                // Only apply min distance check within chunk render distance (where chunks should exist)
-                if (dist_to_closest2 < render_dist_blocks and dist_to_closest2 < lod2_min_dist) continue;
-
                 // Skip if ALL underlying chunks are loaded and renderable
                 if (chunk_checker) |checker| {
                     if (self.areAllChunksLoaded(bounds, checker, checker_ctx.?)) continue;
                 }
 
-                // Frustum cull
-                if (!frustum.intersectsAABB(AABB.init(Vec3.init(@floatFromInt(bounds.min_x), -camera_pos.y, @floatFromInt(bounds.min_z)).sub(camera_pos), Vec3.init(@floatFromInt(bounds.max_x), 256.0 - camera_pos.y, @floatFromInt(bounds.max_z)).sub(camera_pos)))) continue;
+                // Frustum cull - AABB in camera-relative coords (Y from 0 to 256 in world space)
+                const aabb_min = Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, 0.0 - camera_pos.y, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z);
+                const aabb_max = Vec3.init(@as(f32, @floatFromInt(bounds.max_x)) - camera_pos.x, 256.0 - camera_pos.y, @as(f32, @floatFromInt(bounds.max_z)) - camera_pos.z);
+                if (!frustum.intersectsAABB(AABB.init(aabb_min, aabb_max))) continue;
 
-                self.rhi.setModelMatrix(Mat4.translate(Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, -camera_pos.y + lod_y_offset, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z)), 80.0);
+                self.rhi.setModelMatrix(Mat4.translate(Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, -camera_pos.y + lod_y_offset, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z)), 0.0);
                 mesh.draw(self.rhi);
             }
         }
@@ -835,23 +816,17 @@ pub const LODManager = struct {
                 if (chunk.state != .renderable) continue;
                 const bounds = chunk.worldBounds();
 
-                // Calculate distance to closest point of this LOD region
-                const closest_x = @max(@as(f32, @floatFromInt(bounds.min_x)), @min(camera_pos.x, @as(f32, @floatFromInt(bounds.max_x))));
-                const closest_z = @max(@as(f32, @floatFromInt(bounds.min_z)), @min(camera_pos.z, @as(f32, @floatFromInt(bounds.max_z))));
-                const dist_to_closest = @sqrt((closest_x - camera_pos.x) * (closest_x - camera_pos.x) + (closest_z - camera_pos.z) * (closest_z - camera_pos.z));
-
-                // Only apply min distance check within chunk render distance (where chunks should exist)
-                if (dist_to_closest < render_dist_blocks and dist_to_closest < lod1_min_dist) continue;
-
                 // Skip if ALL underlying chunks are loaded and renderable
                 if (chunk_checker) |checker| {
                     if (self.areAllChunksLoaded(bounds, checker, checker_ctx.?)) continue;
                 }
 
-                // Frustum cull
-                if (!frustum.intersectsAABB(AABB.init(Vec3.init(@floatFromInt(bounds.min_x), -camera_pos.y, @floatFromInt(bounds.min_z)).sub(camera_pos), Vec3.init(@floatFromInt(bounds.max_x), 256.0 - camera_pos.y, @floatFromInt(bounds.max_z)).sub(camera_pos)))) continue;
+                // Frustum cull - AABB in camera-relative coords (Y from 0 to 256 in world space)
+                const aabb_min = Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, 0.0 - camera_pos.y, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z);
+                const aabb_max = Vec3.init(@as(f32, @floatFromInt(bounds.max_x)) - camera_pos.x, 256.0 - camera_pos.y, @as(f32, @floatFromInt(bounds.max_z)) - camera_pos.z);
+                if (!frustum.intersectsAABB(AABB.init(aabb_min, aabb_max))) continue;
 
-                self.rhi.setModelMatrix(Mat4.translate(Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, -camera_pos.y + lod_y_offset, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z)), 40.0);
+                self.rhi.setModelMatrix(Mat4.translate(Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, -camera_pos.y + lod_y_offset, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z)), 0.0);
                 mesh.draw(self.rhi);
             }
         }

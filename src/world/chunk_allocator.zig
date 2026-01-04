@@ -68,7 +68,7 @@ pub const GlobalVertexAllocator = struct {
                 };
 
                 // Upload immediately
-                self.rhi.updateBuffer(self.buffer, block.offset, std.mem.sliceAsBytes(vertices));
+                self.rhi.uploadBuffer(self.buffer, std.mem.sliceAsBytes(vertices));
 
                 // Update free block
                 if (block.size > size_needed) {

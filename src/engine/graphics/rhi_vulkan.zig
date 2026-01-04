@@ -1887,10 +1887,13 @@ fn createBuffer(ctx_ptr: *anyopaque, size: usize, usage: rhi.BufferUsage) rhi.Bu
 }
 
 fn uploadBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8) void {
+    updateBuffer(ctx_ptr, handle, 0, data);
+}
+
+fn updateBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, dst_offset: usize, data: []const u8) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (data.len == 0 or handle == 0) return;
 
-    // Ensure we have a command buffer ready for transfers
     ensureFrameReady(ctx);
 
     ctx.mutex.lock();
@@ -1898,10 +1901,9 @@ fn uploadBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8)
     ctx.mutex.unlock();
 
     if (buf_opt) |buf| {
-        // Try mapping directly first (for HOST_VISIBLE buffers like UBOs)
         if (buf.is_host_visible) {
             var map_ptr: ?*anyopaque = null;
-            const result = c.vkMapMemory(ctx.vk_device, buf.memory, 0, @intCast(data.len), 0, &map_ptr);
+            const result = c.vkMapMemory(ctx.vk_device, buf.memory, @intCast(dst_offset), @intCast(data.len), 0, &map_ptr);
             if (result == c.VK_SUCCESS) {
                 @memcpy(@as([*]u8, @ptrCast(map_ptr))[0..data.len], data);
                 c.vkUnmapMemory(ctx.vk_device, buf.memory);
@@ -1909,23 +1911,19 @@ fn uploadBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8)
             }
         }
 
-        // Try async upload via staging ring
         const staging = &ctx.staging_buffers[ctx.current_sync_frame];
-        if (staging.allocate(data.len)) |offset| {
-            // Copy to staging memory
-            const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + offset;
+        if (staging.allocate(data.len)) |src_offset| {
+            const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + src_offset;
             @memcpy(dest[0..data.len], data);
 
-            // Record copy command
             const transfer_cb = ctx.transfer_command_buffers[ctx.current_sync_frame];
 
             var copy_region = std.mem.zeroes(c.VkBufferCopy);
-            copy_region.srcOffset = offset;
-            copy_region.dstOffset = 0;
+            copy_region.srcOffset = src_offset;
+            copy_region.dstOffset = @intCast(dst_offset);
             copy_region.size = @intCast(data.len);
             c.vkCmdCopyBuffer(transfer_cb, staging.buffer, buf.buffer, 1, &copy_region);
 
-            // Add barrier to ensure copy finishes before vertex/index input
             var barrier = std.mem.zeroes(c.VkBufferMemoryBarrier);
             barrier.sType = c.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
             barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -1933,64 +1931,13 @@ fn uploadBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8)
             barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
             barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
             barrier.buffer = buf.buffer;
-            barrier.offset = 0;
+            barrier.offset = @intCast(dst_offset);
             barrier.size = @intCast(data.len);
 
             c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, 0, null, 1, &barrier, 0, null);
-            return;
+        } else {
+            std.log.err("Staging buffer full! Skipping upload of {} bytes", .{data.len});
         }
-
-        // Fallback to synchronous upload if staging buffer is full
-        // std.log.warn("Staging buffer full, falling back to synchronous upload", .{});
-        const staging_temp = createVulkanBuffer(ctx, data.len, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        defer {
-            if (staging_temp.buffer != null) c.vkDestroyBuffer(ctx.vk_device, staging_temp.buffer, null);
-            if (staging_temp.memory != null) c.vkFreeMemory(ctx.vk_device, staging_temp.memory, null);
-        }
-
-        if (staging_temp.buffer == null) return;
-
-        // Copy to staging
-        var map_ptr: ?*anyopaque = null;
-        if (c.vkMapMemory(ctx.vk_device, staging_temp.memory, 0, @intCast(data.len), 0, &map_ptr) == c.VK_SUCCESS) {
-            @memcpy(@as([*]u8, @ptrCast(map_ptr))[0..data.len], data);
-            c.vkUnmapMemory(ctx.vk_device, staging_temp.memory);
-        }
-
-        // Use the old single-use transfer buffer if we are here (WaitIdle!)
-        // Note: we can't use the per-frame transfer CB here because we are going to wait immediately.
-        // We'll allocate a temporary command buffer.
-
-        var alloc_info = std.mem.zeroes(c.VkCommandBufferAllocateInfo);
-        alloc_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        alloc_info.level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        alloc_info.commandPool = ctx.transfer_command_pool; // Reuse pool
-        alloc_info.commandBufferCount = 1;
-
-        var temp_cb: c.VkCommandBuffer = null;
-        _ = c.vkAllocateCommandBuffers(ctx.vk_device, &alloc_info, &temp_cb);
-
-        var begin_info = std.mem.zeroes(c.VkCommandBufferBeginInfo);
-        begin_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        begin_info.flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        _ = c.vkBeginCommandBuffer(temp_cb, &begin_info);
-
-        var copy_region = std.mem.zeroes(c.VkBufferCopy);
-        copy_region.size = @intCast(data.len);
-        c.vkCmdCopyBuffer(temp_cb, staging_temp.buffer, buf.buffer, 1, &copy_region);
-
-        _ = c.vkEndCommandBuffer(temp_cb);
-
-        var submit_info = std.mem.zeroes(c.VkSubmitInfo);
-        submit_info.sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &temp_cb;
-
-        _ = c.vkQueueSubmit(ctx.queue, 1, &submit_info, null);
-        _ = c.vkQueueWaitIdle(ctx.queue);
-
-        c.vkFreeCommandBuffers(ctx.vk_device, ctx.transfer_command_pool, 1, &temp_cb);
     }
 }
 
@@ -3516,9 +3463,117 @@ fn draw(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.Dra
         };
         c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
 
-        const offset: c.VkDeviceSize = 0;
-        c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &vbo.buffer, &offset);
+        const offset_vbo: c.VkDeviceSize = 0;
+        c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &vbo.buffer, &offset_vbo);
         c.vkCmdDraw(command_buffer, count, 1, 0, 0);
+    }
+}
+
+fn drawOffset(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.DrawMode, offset: usize) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (!ctx.frame_in_progress) return;
+    if (!ctx.main_pass_active and !ctx.shadow_pass_active) beginMainPass(ctx_ptr);
+
+    _ = mode;
+
+    const use_shadow = ctx.shadow_pass_active;
+
+    ctx.mutex.lock();
+    const vbo_opt = ctx.buffers.get(handle);
+    ctx.mutex.unlock();
+
+    if (vbo_opt) |vbo| {
+        ctx.draw_call_count += 1;
+
+        const command_buffer = ctx.command_buffers[ctx.current_sync_frame];
+
+        // Bind pipeline only if not already bound
+        if (use_shadow) {
+            if (!ctx.shadow_pipeline_bound) {
+                if (ctx.shadow_pipeline == null) return;
+                c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.shadow_pipeline);
+                c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, &ctx.descriptor_sets[ctx.current_sync_frame], 0, null);
+                ctx.shadow_pipeline_bound = true;
+            }
+        } else {
+            if (!ctx.terrain_pipeline_bound) {
+                const selected_pipeline = if (ctx.wireframe_enabled and ctx.wireframe_pipeline != null)
+                    ctx.wireframe_pipeline
+                else
+                    ctx.pipeline;
+                if (selected_pipeline == null) return;
+                c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, selected_pipeline);
+
+                if (!ctx.descriptors_updated or ctx.current_texture != ctx.bound_texture) {
+                    ctx.mutex.lock();
+                    const tex_opt = ctx.textures.get(ctx.current_texture);
+                    ctx.mutex.unlock();
+
+                    if (tex_opt) |tex| {
+                        var image_info = c.VkDescriptorImageInfo{
+                            .sampler = tex.sampler,
+                            .imageView = tex.view,
+                            .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        };
+
+                        var write = std.mem.zeroes(c.VkWriteDescriptorSet);
+                        write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                        write.dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
+                        write.dstBinding = 1;
+                        write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                        write.descriptorCount = 1;
+                        write.pImageInfo = &image_info;
+
+                        c.vkUpdateDescriptorSets(ctx.vk_device, 1, &write, 0, null);
+                    }
+
+                    if (!ctx.descriptors_updated) {
+                        for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
+                            const view = if (ctx.shadow_image_views[i] != null) ctx.shadow_image_views[i] else blk: {
+                                ctx.mutex.lock();
+                                const t = ctx.textures.get(ctx.current_texture);
+                                ctx.mutex.unlock();
+                                break :blk if (t) |tex| tex.view else null;
+                            };
+                            if (view == null) continue;
+
+                            var image_info = c.VkDescriptorImageInfo{
+                                .sampler = ctx.shadow_sampler,
+                                .imageView = view,
+                                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            };
+                            var write = std.mem.zeroes(c.VkWriteDescriptorSet);
+                            write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                            write.dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
+                            write.dstBinding = @intCast(3 + i);
+                            write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                            write.descriptorCount = 1;
+                            write.pImageInfo = &image_info;
+                            c.vkUpdateDescriptorSets(ctx.vk_device, 1, &write, 0, null);
+                        }
+                    }
+
+                    ctx.descriptors_updated = true;
+                    ctx.bound_texture = ctx.current_texture;
+                }
+
+                c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, &ctx.descriptor_sets[ctx.current_sync_frame], 0, null);
+                ctx.terrain_pipeline_bound = true;
+            }
+        }
+
+        const uniforms = ModelUniforms{
+            .view_proj = if (use_shadow) ctx.shadow_pass_matrix else ctx.current_view_proj,
+            .model = ctx.current_model,
+            .mask_radius = ctx.current_mask_radius,
+            .padding = .{ 0, 0, 0 },
+        };
+        c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
+
+        const offset_vbo: c.VkDeviceSize = 0;
+        c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &vbo.buffer, &offset_vbo);
+        const first_vertex: u32 = @intCast(offset / @sizeOf(rhi.Vertex));
+        c.vkCmdDraw(command_buffer, count, 1, first_vertex, 0);
     }
 }
 
@@ -3850,6 +3905,7 @@ const vtable = rhi.RHI.VTable{
     .deinit = deinit,
     .createBuffer = createBuffer,
     .uploadBuffer = uploadBuffer,
+    .updateBuffer = updateBuffer,
     .destroyBuffer = destroyBuffer,
     .createShader = createShader,
     .destroyShader = destroyShader,
@@ -3872,6 +3928,7 @@ const vtable = rhi.RHI.VTable{
     .updateShadowUniforms = updateShadowUniforms,
     .setTextureUniforms = setTextureUniforms,
     .draw = draw,
+    .drawOffset = drawOffset,
     .drawIndirect = drawIndirect,
     .drawSky = drawSky,
     .createTexture = createTexture,
