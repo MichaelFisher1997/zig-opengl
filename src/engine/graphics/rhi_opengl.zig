@@ -529,7 +529,7 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
 fn setTextureUniforms(ctx_ptr: *anyopaque, texture_enabled: bool, shadow_map_handles: [rhi.SHADOW_CASCADE_COUNT]rhi.TextureHandle) void {
     const ctx: *OpenGLContext = @ptrCast(@alignCast(ctx_ptr));
 
-    const shadow_map_names = [_][:0]const u8{ "uShadowMap0", "uShadowMap1" };
+    const shadow_map_names = [_][:0]const u8{ "uShadowMap0", "uShadowMap1", "uShadowMap2" };
 
     if (ctx.active_shader) |shader| {
         shader.use();
