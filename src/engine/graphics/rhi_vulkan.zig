@@ -632,95 +632,6 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
 
     try checkVk(c.vkCreateImageView(ctx.vk_device, &depth_view_info, null, &ctx.depth_image_view));
 
-    // 5c. Create Dummy Shadow Map (1x1 Depth)
-    var dummy_image_info = std.mem.zeroes(c.VkImageCreateInfo);
-    dummy_image_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    dummy_image_info.imageType = c.VK_IMAGE_TYPE_2D;
-    dummy_image_info.extent.width = 1;
-    dummy_image_info.extent.height = 1;
-    dummy_image_info.extent.depth = 1;
-    dummy_image_info.mipLevels = 1;
-    dummy_image_info.arrayLayers = 1;
-    dummy_image_info.format = depth_format;
-    dummy_image_info.tiling = c.VK_IMAGE_TILING_OPTIMAL;
-    dummy_image_info.initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
-    dummy_image_info.usage = c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    dummy_image_info.samples = c.VK_SAMPLE_COUNT_1_BIT;
-    dummy_image_info.sharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
-
-    try checkVk(c.vkCreateImage(ctx.vk_device, &dummy_image_info, null, &ctx.dummy_shadow_image));
-
-    var dummy_mem_reqs: c.VkMemoryRequirements = undefined;
-    c.vkGetImageMemoryRequirements(ctx.vk_device, ctx.dummy_shadow_image, &dummy_mem_reqs);
-
-    var dummy_alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
-    dummy_alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    dummy_alloc_info.allocationSize = dummy_mem_reqs.size;
-    dummy_alloc_info.memoryTypeIndex = findMemoryType(ctx.physical_device, dummy_mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-    try checkVk(c.vkAllocateMemory(ctx.vk_device, &dummy_alloc_info, null, &ctx.dummy_shadow_memory));
-    try checkVk(c.vkBindImageMemory(ctx.vk_device, ctx.dummy_shadow_image, ctx.dummy_shadow_memory, 0));
-
-    var dummy_view_info = std.mem.zeroes(c.VkImageViewCreateInfo);
-    dummy_view_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    dummy_view_info.image = ctx.dummy_shadow_image;
-    dummy_view_info.viewType = c.VK_IMAGE_VIEW_TYPE_2D;
-    dummy_view_info.format = depth_format;
-    dummy_view_info.subresourceRange.aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT;
-    dummy_view_info.subresourceRange.baseMipLevel = 0;
-    dummy_view_info.subresourceRange.levelCount = 1;
-    dummy_view_info.subresourceRange.baseArrayLayer = 0;
-    dummy_view_info.subresourceRange.layerCount = 1;
-
-    try checkVk(c.vkCreateImageView(ctx.vk_device, &dummy_view_info, null, &ctx.dummy_shadow_view));
-
-    // Transition dummy image to SHADER_READ_ONLY_OPTIMAL immediately
-    {
-        var alloc_info_cmd = std.mem.zeroes(c.VkCommandBufferAllocateInfo);
-        alloc_info_cmd.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        alloc_info_cmd.level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        alloc_info_cmd.commandPool = ctx.command_pool;
-        alloc_info_cmd.commandBufferCount = 1;
-
-        var cmd: c.VkCommandBuffer = null;
-        try checkVk(c.vkAllocateCommandBuffers(ctx.vk_device, &alloc_info_cmd, &cmd));
-
-        var begin_info = std.mem.zeroes(c.VkCommandBufferBeginInfo);
-        begin_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        begin_info.flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-        try checkVk(c.vkBeginCommandBuffer(cmd, &begin_info));
-
-        var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
-        barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = ctx.dummy_shadow_image;
-        barrier.subresourceRange.aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 1;
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
-
-        c.vkCmdPipelineBarrier(cmd, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
-
-        try checkVk(c.vkEndCommandBuffer(cmd));
-
-        var submit_info = std.mem.zeroes(c.VkSubmitInfo);
-        submit_info.sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &cmd;
-
-        try checkVk(c.vkQueueSubmit(ctx.queue, 1, &submit_info, null));
-        try checkVk(c.vkQueueWaitIdle(ctx.queue));
-
-        c.vkFreeCommandBuffers(ctx.vk_device, ctx.command_pool, 1, &cmd);
-    }
-
     // 6. Create Render Pass
 
     var color_attachment = std.mem.zeroes(c.VkAttachmentDescription);
@@ -828,6 +739,95 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
         ctx.staging_buffers[frame_i] = try StagingBuffer.init(ctx, STAGING_SIZE);
     }
     ctx.transfer_ready = false;
+
+    // 5c. Create Dummy Shadow Map (1x1 Depth)
+    var dummy_image_info = std.mem.zeroes(c.VkImageCreateInfo);
+    dummy_image_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    dummy_image_info.imageType = c.VK_IMAGE_TYPE_2D;
+    dummy_image_info.extent.width = 1;
+    dummy_image_info.extent.height = 1;
+    dummy_image_info.extent.depth = 1;
+    dummy_image_info.mipLevels = 1;
+    dummy_image_info.arrayLayers = 1;
+    dummy_image_info.format = c.VK_FORMAT_D32_SFLOAT;
+    dummy_image_info.tiling = c.VK_IMAGE_TILING_OPTIMAL;
+    dummy_image_info.initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
+    dummy_image_info.usage = c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    dummy_image_info.samples = c.VK_SAMPLE_COUNT_1_BIT;
+    dummy_image_info.sharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
+
+    try checkVk(c.vkCreateImage(ctx.vk_device, &dummy_image_info, null, &ctx.dummy_shadow_image));
+
+    var dummy_mem_reqs: c.VkMemoryRequirements = undefined;
+    c.vkGetImageMemoryRequirements(ctx.vk_device, ctx.dummy_shadow_image, &dummy_mem_reqs);
+
+    var dummy_alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
+    dummy_alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    dummy_alloc_info.allocationSize = dummy_mem_reqs.size;
+    dummy_alloc_info.memoryTypeIndex = findMemoryType(ctx.physical_device, dummy_mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    try checkVk(c.vkAllocateMemory(ctx.vk_device, &dummy_alloc_info, null, &ctx.dummy_shadow_memory));
+    try checkVk(c.vkBindImageMemory(ctx.vk_device, ctx.dummy_shadow_image, ctx.dummy_shadow_memory, 0));
+
+    var dummy_view_info = std.mem.zeroes(c.VkImageViewCreateInfo);
+    dummy_view_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    dummy_view_info.image = ctx.dummy_shadow_image;
+    dummy_view_info.viewType = c.VK_IMAGE_VIEW_TYPE_2D;
+    dummy_view_info.format = c.VK_FORMAT_D32_SFLOAT;
+    dummy_view_info.subresourceRange.aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT;
+    dummy_view_info.subresourceRange.baseMipLevel = 0;
+    dummy_view_info.subresourceRange.levelCount = 1;
+    dummy_view_info.subresourceRange.baseArrayLayer = 0;
+    dummy_view_info.subresourceRange.layerCount = 1;
+
+    try checkVk(c.vkCreateImageView(ctx.vk_device, &dummy_view_info, null, &ctx.dummy_shadow_view));
+
+    // Transition dummy image to SHADER_READ_ONLY_OPTIMAL immediately
+    {
+        var alloc_info_cmd = std.mem.zeroes(c.VkCommandBufferAllocateInfo);
+        alloc_info_cmd.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        alloc_info_cmd.level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc_info_cmd.commandPool = ctx.command_pool;
+        alloc_info_cmd.commandBufferCount = 1;
+
+        var cmd: c.VkCommandBuffer = null;
+        try checkVk(c.vkAllocateCommandBuffers(ctx.vk_device, &alloc_info_cmd, &cmd));
+
+        var begin_info = std.mem.zeroes(c.VkCommandBufferBeginInfo);
+        begin_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        try checkVk(c.vkBeginCommandBuffer(cmd, &begin_info));
+
+        var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
+        barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = ctx.dummy_shadow_image;
+        barrier.subresourceRange.aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+
+        c.vkCmdPipelineBarrier(cmd, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
+
+        try checkVk(c.vkEndCommandBuffer(cmd));
+
+        var submit_info = std.mem.zeroes(c.VkSubmitInfo);
+        submit_info.sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &cmd;
+
+        try checkVk(c.vkQueueSubmit(ctx.queue, 1, &submit_info, null));
+        try checkVk(c.vkQueueWaitIdle(ctx.queue));
+
+        c.vkFreeCommandBuffers(ctx.vk_device, ctx.command_pool, 1, &cmd);
+    }
 
     // 9. Sync Objects
     var semaphore_info = std.mem.zeroes(c.VkSemaphoreCreateInfo);
