@@ -700,25 +700,25 @@ pub const World = struct {
             const key = entry.key_ptr.*;
             const data = entry.value_ptr.*;
 
-            if (data.chunk.state != .renderable) continue;
+            if (data.chunk.state == .renderable or data.mesh.solid_allocation != null or data.mesh.fluid_allocation != null) {
+                const chunk_world_x: f32 = @floatFromInt(key.x * CHUNK_SIZE_X);
+                const chunk_world_z: f32 = @floatFromInt(key.z * CHUNK_SIZE_Z);
 
-            const chunk_world_x: f32 = @floatFromInt(key.x * CHUNK_SIZE_X);
-            const chunk_world_z: f32 = @floatFromInt(key.z * CHUNK_SIZE_Z);
+                // Frustum culling against the shadow cascade's orthographic projection
+                // Use intersectsChunkRelative with camera_pos for consistent coordinate system
+                if (!shadow_frustum.intersectsChunkRelative(key.x, key.z, camera_pos.x, camera_pos.y, camera_pos.z)) {
+                    continue;
+                }
 
-            // Frustum culling against the shadow cascade's orthographic projection
-            // Use intersectsChunkRelative with camera_pos for consistent coordinate system
-            if (!shadow_frustum.intersectsChunkRelative(key.x, key.z, camera_pos.x, camera_pos.y, camera_pos.z)) {
-                continue;
+                const rel_x = chunk_world_x - camera_pos.x;
+                const rel_z = chunk_world_z - camera_pos.z;
+                const rel_y = -camera_pos.y;
+
+                const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
+                self.rhi.setModelMatrix(model, 0);
+
+                data.mesh.draw(self.rhi, .solid);
             }
-
-            const rel_x = chunk_world_x - camera_pos.x;
-            const rel_z = chunk_world_z - camera_pos.z;
-            const rel_y = -camera_pos.y;
-
-            const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
-            self.rhi.setModelMatrix(model, 0);
-
-            data.mesh.draw(self.rhi, .solid);
         }
     }
 

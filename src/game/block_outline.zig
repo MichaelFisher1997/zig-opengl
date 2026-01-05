@@ -9,10 +9,10 @@ const Vec3 = @import("../engine/math/vec3.zig").Vec3;
 const Vertex = rhi_pkg.Vertex;
 
 /// Line thickness for the outline
-const LINE_THICKNESS: f32 = 0.025;
+const LINE_THICKNESS: f32 = 0.05;
 
 /// Expansion to avoid z-fighting (sit slightly outside block)
-const EXPAND: f32 = 0.005;
+const EXPAND: f32 = 0.01;
 
 /// Create a vertex with the given position
 fn makeVertex(x: f32, y: f32, z: f32) Vertex {
