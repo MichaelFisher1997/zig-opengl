@@ -171,11 +171,11 @@ pub const HandRenderer = struct {
         const cos_p = @cos(camera_pitch);
         const sin_p = @sin(camera_pitch);
 
-        // Forward vector
-        const fwd = Vec3.init(sin_y * cos_p, sin_p, cos_y * cos_p).normalize();
+        // Forward vector (must match Player/Camera)
+        const fwd = Vec3.init(cos_y * cos_p, sin_p, sin_y * cos_p).normalize();
 
         // Right vector
-        const right = Vec3.init(cos_y, 0, -sin_y).normalize();
+        const right = fwd.cross(Vec3.up).normalize();
 
         // Up vector
         const up = right.cross(fwd).normalize();
@@ -207,25 +207,6 @@ pub const HandRenderer = struct {
         const tilt = Mat4.rotateY(0.4).multiply(Mat4.rotateX(0.2));
 
         const trans_mat = Mat4.translate(Vec3.init(pos.x - camera_pos.x, pos.y - camera_pos.y, pos.z - camera_pos.z));
-
-        // Final Model: Trans * Rot * Tilt * Scale
-        var final_model = scale_mat;
-        final_model = final_model.multiply(tilt); // Apply local tilt
-        final_model = final_model.multiply(rot_mat); // Apply camera rotation
-        final_model = final_model.multiply(trans_mat); // Apply translation relative to camera
-
-        // Wait, order of multiplication in this Math lib?
-        // Usually: Model = Translate * Rotate * Scale
-        // If `multiply` is `self * other` (Post-multiply), then:
-        // Result = Scale * Tilt * Rot * Trans (Transforming vectors from right to left)
-        // Vector v' = Trans * Rot * Tilt * Scale * v
-        // So logic: Scale first, then Tilt, then Camera Rot, then Translate.
-
-        // Let's verify Mat4 multiply order.
-        // Assuming column-major (OpenGL style), `multiply(A, B)` usually means A * B.
-        // If vector is column v, result is A * B * v.
-        // So we want: Translate * Rotate * Scale.
-        // So we should chain: Translate.multiply(Rotate).multiply(Scale).
 
         var m = trans_mat;
         m = m.multiply(rot_mat);
