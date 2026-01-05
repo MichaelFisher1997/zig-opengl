@@ -57,36 +57,61 @@ fn makeEdgeQuad(
 }
 
 /// Generate all 12 edges as thin quads
-/// Each edge is represented as 2 quads (to be visible from any direction)
+/// Each edge is represented as 2 quads * 2 sides (double-sided) = 4 quads
 const outline_vertices = blk: {
     const s: f32 = -EXPAND; // Start
     const e: f32 = 1.0 + EXPAND; // End
     const t: f32 = LINE_THICKNESS;
 
-    // 12 edges * 2 sides * 6 vertices = 144 vertices
-    var verts: [144]Vertex = undefined;
+    // 12 edges * 2 quads * 2 sides * 6 vertices = 288 vertices
+    var verts: [288]Vertex = undefined;
     var idx: usize = 0;
 
-    // Helper to add an edge with two quads (perpendicular to each other for visibility)
-    const addEdge = struct {
-        fn f(v: *[144]Vertex, i: *usize, x0: f32, y0: f32, z0: f32, x1: f32, y1: f32, z1: f32, t1x: f32, t1y: f32, t1z: f32, t2x: f32, t2y: f32, t2z: f32) void {
-            // First quad
-            v[i.*] = makeVertex(x0, y0, z0);
-            v[i.* + 1] = makeVertex(x1, y1, z1);
-            v[i.* + 2] = makeVertex(x1 + t1x, y1 + t1y, z1 + t1z);
-            v[i.* + 3] = makeVertex(x0, y0, z0);
-            v[i.* + 4] = makeVertex(x1 + t1x, y1 + t1y, z1 + t1z);
-            v[i.* + 5] = makeVertex(x0 + t1x, y0 + t1y, z0 + t1z);
-            i.* += 6;
+    // Helper to add a quad (single sided)
+    const addQuad = struct {
+        fn f(v: *[288]Vertex, i: *usize, p0: Vertex, p1: Vertex, p2: Vertex, p3: Vertex) void {
+            // Triangle 1
+            v[i.*] = p0;
+            i.* += 1;
+            v[i.*] = p1;
+            i.* += 1;
+            v[i.*] = p2;
+            i.* += 1;
+            // Triangle 2
+            v[i.*] = p0;
+            i.* += 1;
+            v[i.*] = p2;
+            i.* += 1;
+            v[i.*] = p3;
+            i.* += 1;
+        }
+    }.f;
 
-            // Second quad (perpendicular)
-            v[i.*] = makeVertex(x0, y0, z0);
-            v[i.* + 1] = makeVertex(x1, y1, z1);
-            v[i.* + 2] = makeVertex(x1 + t2x, y1 + t2y, z1 + t2z);
-            v[i.* + 3] = makeVertex(x0, y0, z0);
-            v[i.* + 4] = makeVertex(x1 + t2x, y1 + t2y, z1 + t2z);
-            v[i.* + 5] = makeVertex(x0 + t2x, y0 + t2y, z0 + t2z);
-            i.* += 6;
+    // Helper to add an edge with two quads (perpendicular), DOUBLE SIDED
+    const addEdge = struct {
+        fn f(v: *[288]Vertex, i: *usize, x0: f32, y0: f32, z0: f32, x1: f32, y1: f32, z1: f32, t1x: f32, t1y: f32, t1z: f32, t2x: f32, t2y: f32, t2z: f32) void {
+            const addDoubleSidedQuad = struct {
+                fn g(v_arr: *[288]Vertex, idx_ptr: *usize, c0: Vertex, c1: Vertex, c2: Vertex, c3: Vertex) void {
+                    // Front face
+                    addQuad(v_arr, idx_ptr, c0, c1, c2, c3);
+                    // Back face (reverse winding)
+                    addQuad(v_arr, idx_ptr, c0, c3, c2, c1);
+                }
+            }.g;
+
+            // First quad
+            const q1_c0 = makeVertex(x0, y0, z0);
+            const q1_c1 = makeVertex(x1, y1, z1);
+            const q1_c2 = makeVertex(x1 + t1x, y1 + t1y, z1 + t1z);
+            const q1_c3 = makeVertex(x0 + t1x, y0 + t1y, z0 + t1z);
+            addDoubleSidedQuad(v, i, q1_c0, q1_c1, q1_c2, q1_c3);
+
+            // Second quad
+            const q2_c0 = makeVertex(x0, y0, z0);
+            const q2_c1 = makeVertex(x1, y1, z1);
+            const q2_c2 = makeVertex(x1 + t2x, y1 + t2y, z1 + t2z);
+            const q2_c3 = makeVertex(x0 + t2x, y0 + t2y, z0 + t2z);
+            addDoubleSidedQuad(v, i, q2_c0, q2_c1, q2_c2, q2_c3);
         }
     }.f;
 
@@ -140,6 +165,6 @@ pub const BlockOutline = struct {
 
         const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
         self.rhi.setModelMatrix(model, 0);
-        self.rhi.draw(self.buffer_handle, 144, .triangles);
+        self.rhi.draw(self.buffer_handle, 288, .triangles);
     }
 };
