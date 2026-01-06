@@ -192,28 +192,33 @@ pub const ResourcePackManager = struct {
     fn detectPBRStructure(self: *Self) bool {
         const pack_path = self.getActivePackPath() orelse return false;
 
-        // Check if any block subfolder exists with PBR files
-        const test_blocks = [_][]const u8{ "stone", "dirt", "cobblestone" };
-        for (test_blocks) |block_name| {
-            const subfolder_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ pack_path, block_name }) catch continue;
-            defer self.allocator.free(subfolder_path);
+        // Scan the pack directory for any subdirectory that contains PBR files
+        var pack_dir = std.fs.cwd().openDir(pack_path, .{ .iterate = true }) catch return false;
+        defer pack_dir.close();
 
-            var dir = std.fs.cwd().openDir(subfolder_path, .{}) catch continue;
-            dir.close();
+        var iter = pack_dir.iterate();
+        while (iter.next() catch null) |entry| {
+            if (entry.kind == .directory) {
+                // Check if this subfolder contains PBR-style textures
+                const subfolder_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ pack_path, entry.name }) catch continue;
+                defer self.allocator.free(subfolder_path);
 
-            // Subfolder exists, check for PBR files
-            const diff_path = std.fmt.allocPrint(self.allocator, "{s}/{s}_diff.png", .{ subfolder_path, block_name }) catch continue;
-            defer self.allocator.free(diff_path);
+                // Check for block_name_diff.png
+                const diff_path = std.fmt.allocPrint(self.allocator, "{s}/{s}_diff.png", .{ subfolder_path, entry.name }) catch continue;
+                defer self.allocator.free(diff_path);
 
-            if (std.fs.cwd().access(diff_path, .{})) |_| {
-                return true;
-            } else |_| {
-                // Also check for just the block name (e.g., stone/stone.png)
-                const base_path = std.fmt.allocPrint(self.allocator, "{s}/{s}.png", .{ subfolder_path, block_name }) catch continue;
-                defer self.allocator.free(base_path);
-                if (std.fs.cwd().access(base_path, .{})) |_| {
+                if (std.fs.cwd().access(diff_path, .{})) |_| {
+                    log.log.debug("Detected PBR structure: found {s}", .{diff_path});
                     return true;
-                } else |_| {}
+                } else |_| {
+                    // Also check for just block_name.png in subfolder
+                    const base_path = std.fmt.allocPrint(self.allocator, "{s}/{s}.png", .{ subfolder_path, entry.name }) catch continue;
+                    defer self.allocator.free(base_path);
+                    if (std.fs.cwd().access(base_path, .{})) |_| {
+                        log.log.debug("Detected PBR structure: found {s}", .{base_path});
+                        return true;
+                    } else |_| {}
+                }
             }
         }
         return false;
