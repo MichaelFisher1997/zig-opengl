@@ -151,10 +151,9 @@ pub const TextureAtlas = struct {
     /// Detect tile size from the first valid texture in the pack
     fn detectTileSize(pack_manager: ?*resource_pack.ResourcePackManager, allocator: std.mem.Allocator) u32 {
         if (pack_manager) |pm| {
-            // Try to load a common texture to detect size
-            const probe_textures = [_][]const u8{ "stone", "dirt", "grass_top", "cobblestone" };
-            for (probe_textures) |name| {
-                if (pm.loadTexture(name)) |loaded_tex| {
+            // Try to load any configured texture to detect size
+            for (tile_configs) |config| {
+                if (pm.loadTexture(config.name)) |loaded_tex| {
                     defer {
                         var tex = loaded_tex;
                         tex.deinit(allocator);
