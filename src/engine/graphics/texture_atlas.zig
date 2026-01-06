@@ -344,11 +344,11 @@ pub const TextureAtlas = struct {
             }
         }
 
-        // Create textures using RHI with NEAREST filtering for sharp pixel art
+        // Create textures using RHI with NEAREST filtering for sharp pixel art, but with mipmaps for performance
         const diffuse_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
-            .min_filter = .nearest,
+            .min_filter = .nearest_mipmap_linear,
             .mag_filter = .nearest,
-            .generate_mipmaps = false,
+            .generate_mipmaps = true,
         }, diffuse_pixels);
 
         var normal_texture: ?Texture = null;
@@ -357,21 +357,21 @@ pub const TextureAtlas = struct {
 
         if (has_pbr) {
             normal_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
-                .min_filter = .linear,
+                .min_filter = .linear_mipmap_linear,
                 .mag_filter = .linear,
-                .generate_mipmaps = false,
+                .generate_mipmaps = true,
             }, normal_pixels.?);
 
             roughness_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
-                .min_filter = .linear,
+                .min_filter = .linear_mipmap_linear,
                 .mag_filter = .linear,
-                .generate_mipmaps = false,
+                .generate_mipmaps = true,
             }, roughness_pixels.?);
 
             displacement_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
-                .min_filter = .linear,
+                .min_filter = .linear_mipmap_linear,
                 .mag_filter = .linear,
-                .generate_mipmaps = false,
+                .generate_mipmaps = true,
             }, displacement_pixels.?);
 
             log.log.info("PBR atlases created: {} textures with {} normal maps", .{ loaded_count, pbr_count });
