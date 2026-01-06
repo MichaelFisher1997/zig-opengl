@@ -1,5 +1,6 @@
 //! Texture Atlas for block textures.
 //! Loads textures from resource packs with solid color fallback.
+//! Supports HD texture packs (16x16, 32x32, 64x64, 128x128, 256x256, 512x512).
 
 const std = @import("std");
 const c = @import("../../c.zig").c;
@@ -12,20 +13,22 @@ const BlockType = @import("../../world/block.zig").BlockType;
 
 const rhi = @import("rhi.zig");
 
-/// Tile size in pixels (each block face texture)
-pub const TILE_SIZE: u32 = 16;
+/// Default tile size in pixels (each block face texture)
+pub const DEFAULT_TILE_SIZE: u32 = 16;
 
 /// Number of tiles per row in the atlas
 pub const TILES_PER_ROW: u32 = 16;
 
-/// Atlas dimensions
-pub const ATLAS_SIZE: u32 = TILE_SIZE * TILES_PER_ROW;
+/// Supported tile sizes for HD texture packs
+pub const SUPPORTED_TILE_SIZES = [_]u32{ 16, 32, 64, 128, 256, 512 };
 
 /// Texture atlas for blocks
 pub const TextureAtlas = struct {
     texture: Texture,
     allocator: std.mem.Allocator,
     pack_manager: ?*resource_pack.ResourcePackManager,
+    tile_size: u32,
+    atlas_size: u32,
 
     /// Tile indices for block faces [top, bottom, side]
     pub const BlockTiles = struct {
@@ -134,8 +137,45 @@ pub const TextureAtlas = struct {
         };
     }
 
+    /// Detect tile size from the first valid texture in the pack
+    fn detectTileSize(pack_manager: ?*resource_pack.ResourcePackManager, allocator: std.mem.Allocator) u32 {
+        if (pack_manager) |pm| {
+            // Try to load a common texture to detect size
+            const probe_textures = [_][]const u8{ "stone", "dirt", "grass_top", "cobblestone" };
+            for (probe_textures) |name| {
+                if (pm.loadTexture(name)) |loaded_tex| {
+                    defer {
+                        var tex = loaded_tex;
+                        tex.deinit(allocator);
+                    }
+                    // Use the larger dimension and snap to nearest supported size
+                    const size = @max(loaded_tex.width, loaded_tex.height);
+                    return snapToSupportedSize(size);
+                }
+            }
+        }
+        return DEFAULT_TILE_SIZE;
+    }
+
+    /// Snap a size to the nearest supported tile size
+    fn snapToSupportedSize(size: u32) u32 {
+        for (SUPPORTED_TILE_SIZES) |supported| {
+            if (size <= supported) {
+                return supported;
+            }
+        }
+        // Cap at maximum supported size
+        return SUPPORTED_TILE_SIZES[SUPPORTED_TILE_SIZES.len - 1];
+    }
+
     pub fn init(allocator: std.mem.Allocator, rhi_instance: rhi.RHI, pack_manager: ?*resource_pack.ResourcePackManager) !TextureAtlas {
-        const pixel_count = ATLAS_SIZE * ATLAS_SIZE * 4;
+        // Detect tile size from pack textures
+        const tile_size = detectTileSize(pack_manager, allocator);
+        const atlas_size = tile_size * TILES_PER_ROW;
+
+        log.log.info("Texture atlas tile size: {}x{} (atlas: {}x{})", .{ tile_size, tile_size, atlas_size, atlas_size });
+
+        const pixel_count = atlas_size * atlas_size * 4;
         const pixels = try allocator.alloc(u8, pixel_count);
         defer allocator.free(pixels);
 
@@ -203,7 +243,7 @@ pub const TextureAtlas = struct {
                         tex.deinit(allocator);
                     }
                     log.log.debug("Loaded texture: {s} ({}x{})", .{ config.name, loaded_tex.width, loaded_tex.height });
-                    copyTextureToTile(pixels, config.index, loaded_tex.pixels, loaded_tex.width, loaded_tex.height);
+                    copyTextureToTile(pixels, config.index, loaded_tex.pixels, loaded_tex.width, loaded_tex.height, tile_size, atlas_size);
                     loaded = true;
                     loaded_count += 1;
                 }
@@ -218,42 +258,44 @@ pub const TextureAtlas = struct {
                     @intFromFloat(@min(base_f32[1] * 255.0, 255.0)),
                     @intFromFloat(@min(base_f32[2] * 255.0, 255.0)),
                 };
-                fillTileWithColor(pixels, config.index, base_u8);
+                fillTileWithColor(pixels, config.index, base_u8, tile_size, atlas_size);
             }
         }
 
         // Create texture using RHI with NEAREST filtering for sharp pixel art
-        const texture = Texture.init(rhi_instance, ATLAS_SIZE, ATLAS_SIZE, .rgba, .{
+        const texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
             .min_filter = .nearest,
             .mag_filter = .nearest,
             .generate_mipmaps = false,
         }, pixels);
-        log.log.info("Texture atlas created: {}x{} - Loaded {} textures from pack", .{ ATLAS_SIZE, ATLAS_SIZE, loaded_count });
+        log.log.info("Texture atlas created: {}x{} - Loaded {} textures from pack", .{ atlas_size, atlas_size, loaded_count });
 
         return .{
             .texture = texture,
             .allocator = allocator,
             .pack_manager = pack_manager,
+            .tile_size = tile_size,
+            .atlas_size = atlas_size,
         };
     }
 
-    fn copyTextureToTile(atlas_pixels: []u8, tile_index: u8, src_pixels: []const u8, src_width: u32, src_height: u32) void {
+    fn copyTextureToTile(atlas_pixels: []u8, tile_index: u8, src_pixels: []const u8, src_width: u32, src_height: u32, tile_size: u32, atlas_size: u32) void {
         const tile_col = tile_index % TILES_PER_ROW;
         const tile_row = tile_index / TILES_PER_ROW;
-        const start_x = tile_col * TILE_SIZE;
-        const start_y = tile_row * TILE_SIZE;
+        const start_x = tile_col * tile_size;
+        const start_y = tile_row * tile_size;
 
         var py: u32 = 0;
-        while (py < TILE_SIZE) : (py += 1) {
+        while (py < tile_size) : (py += 1) {
             var px: u32 = 0;
-            while (px < TILE_SIZE) : (px += 1) {
-                const src_x = (px * src_width) / TILE_SIZE;
-                const src_y = (py * src_height) / TILE_SIZE;
+            while (px < tile_size) : (px += 1) {
+                const src_x = (px * src_width) / tile_size;
+                const src_y = (py * src_height) / tile_size;
                 const src_idx = (src_y * src_width + src_x) * 4;
 
                 const dest_x = start_x + px;
                 const dest_y = start_y + py;
-                const dest_idx = (dest_y * ATLAS_SIZE + dest_x) * 4;
+                const dest_idx = (dest_y * atlas_size + dest_x) * 4;
 
                 if (src_idx + 3 < src_pixels.len and dest_idx + 3 < atlas_pixels.len) {
                     atlas_pixels[dest_idx + 0] = src_pixels[src_idx + 0];
@@ -265,24 +307,26 @@ pub const TextureAtlas = struct {
         }
     }
 
-    fn fillTileWithColor(atlas_pixels: []u8, tile_index: u8, color: [3]u8) void {
+    fn fillTileWithColor(atlas_pixels: []u8, tile_index: u8, color: [3]u8, tile_size: u32, atlas_size: u32) void {
         const tile_col = tile_index % TILES_PER_ROW;
         const tile_row = tile_index / TILES_PER_ROW;
-        const start_x = tile_col * TILE_SIZE;
-        const start_y = tile_row * TILE_SIZE;
+        const start_x = tile_col * tile_size;
+        const start_y = tile_row * tile_size;
 
         var py: u32 = 0;
-        while (py < TILE_SIZE) : (py += 1) {
+        while (py < tile_size) : (py += 1) {
             var px: u32 = 0;
-            while (px < TILE_SIZE) : (px += 1) {
+            while (px < tile_size) : (px += 1) {
                 const dest_x = start_x + px;
                 const dest_y = start_y + py;
-                const dest_idx = (dest_y * ATLAS_SIZE + dest_x) * 4;
+                const dest_idx = (dest_y * atlas_size + dest_x) * 4;
 
-                atlas_pixels[dest_idx + 0] = color[0];
-                atlas_pixels[dest_idx + 1] = color[1];
-                atlas_pixels[dest_idx + 2] = color[2];
-                atlas_pixels[dest_idx + 3] = 255;
+                if (dest_idx + 3 < atlas_pixels.len) {
+                    atlas_pixels[dest_idx + 0] = color[0];
+                    atlas_pixels[dest_idx + 1] = color[1];
+                    atlas_pixels[dest_idx + 2] = color[2];
+                    atlas_pixels[dest_idx + 3] = 255;
+                }
             }
         }
     }
@@ -296,3 +340,7 @@ pub const TextureAtlas = struct {
         self.texture.bind(slot);
     }
 };
+
+// Legacy constants for backward compatibility
+pub const TILE_SIZE: u32 = DEFAULT_TILE_SIZE;
+pub const ATLAS_SIZE: u32 = DEFAULT_TILE_SIZE * TILES_PER_ROW;
