@@ -263,45 +263,31 @@ pub const TextureAtlas = struct {
 
         var normal_pixels: ?[]u8 = null;
         var roughness_pixels: ?[]u8 = null;
-        var displacement_pixels: ?[]u8 = null;
 
         if (has_pbr) {
             normal_pixels = try allocator.alloc(u8, pixel_count);
-            // Default normal: (128, 128, 255, 255) = flat surface pointing up in OpenGL normal map format
+            // Default normal: (128, 128, 255, 255)
             var i: usize = 0;
             while (i < pixel_count) : (i += 4) {
-                normal_pixels.?[i + 0] = 128; // R
-                normal_pixels.?[i + 1] = 128; // G
-                normal_pixels.?[i + 2] = 255; // B (pointing up)
-                normal_pixels.?[i + 3] = 255; // A
+                normal_pixels.?[i + 0] = 128;
+                normal_pixels.?[i + 1] = 128;
+                normal_pixels.?[i + 2] = 255;
+                normal_pixels.?[i + 3] = 255;
             }
 
             roughness_pixels = try allocator.alloc(u8, pixel_count);
-            // Default roughness: 0.5 (medium roughness)
+            // Default roughness: 1.0 (Rough), displacement: 0.0
+            // Packed: R=Roughness, G=Displacement, B=0, A=255
             i = 0;
             while (i < pixel_count) : (i += 4) {
-                roughness_pixels.?[i + 0] = 128;
-                roughness_pixels.?[i + 1] = 128;
-                roughness_pixels.?[i + 2] = 128;
+                roughness_pixels.?[i + 0] = 255; // Roughness (Max)
+                roughness_pixels.?[i + 1] = 0; // Displacement
+                roughness_pixels.?[i + 2] = 0;
                 roughness_pixels.?[i + 3] = 255;
             }
-
-            displacement_pixels = try allocator.alloc(u8, pixel_count);
-            // Default displacement: 0 (flat)
-            @memset(displacement_pixels.?, 0);
-            i = 0;
-            while (i < pixel_count) : (i += 4) {
-                displacement_pixels.?[i + 3] = 255; // Alpha = 1
-            }
-
-            log.log.info("PBR texture pack detected - creating normal, roughness, and displacement atlases", .{});
         }
-
-        defer {
-            if (normal_pixels) |p| allocator.free(p);
-            if (roughness_pixels) |p| allocator.free(p);
-            if (displacement_pixels) |p| allocator.free(p);
-        }
+        defer if (normal_pixels) |p| allocator.free(p);
+        defer if (roughness_pixels) |p| allocator.free(p);
 
         var loaded_count: u32 = 0;
         var pbr_count: u32 = 0;
@@ -315,7 +301,6 @@ pub const TextureAtlas = struct {
                     defer pbr_set.deinit(allocator);
 
                     if (pbr_set.diffuse) |diffuse| {
-                        log.log.debug("Loaded texture: {s} ({}x{})", .{ config.name, diffuse.width, diffuse.height });
                         copyTextureToTile(diffuse_pixels, config.index, diffuse.pixels, diffuse.width, diffuse.height, tile_size, atlas_size);
                         loaded = true;
                         loaded_count += 1;
@@ -325,11 +310,13 @@ pub const TextureAtlas = struct {
                         copyTextureToTile(normal_pixels.?, config.index, normal.pixels, normal.width, normal.height, tile_size, atlas_size);
                         pbr_count += 1;
                     }
+
+                    // Pack Roughness into RED and Displacement into GREEN channel of the same atlas
                     if (pbr_set.roughness) |roughness| {
-                        copyTextureToTile(roughness_pixels.?, config.index, roughness.pixels, roughness.width, roughness.height, tile_size, atlas_size);
+                        copyTextureChannelToTile(roughness_pixels.?, config.index, roughness.pixels, roughness.width, roughness.height, 0, 0, tile_size, atlas_size);
                     }
                     if (pbr_set.displacement) |displacement| {
-                        copyTextureToTile(displacement_pixels.?, config.index, displacement.pixels, displacement.width, displacement.height, tile_size, atlas_size);
+                        copyTextureChannelToTile(roughness_pixels.?, config.index, displacement.pixels, displacement.width, displacement.height, 0, 1, tile_size, atlas_size);
                     }
                 } else {
                     // Legacy: load just diffuse
@@ -368,7 +355,6 @@ pub const TextureAtlas = struct {
 
         var normal_texture: ?Texture = null;
         var roughness_texture: ?Texture = null;
-        var displacement_texture: ?Texture = null;
 
         if (has_pbr) {
             normal_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
@@ -377,17 +363,12 @@ pub const TextureAtlas = struct {
                 .generate_mipmaps = true,
             }, normal_pixels.?);
 
+            // This atlas contains packed Roughness (R) and Displacement (G)
             roughness_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
                 .min_filter = .linear_mipmap_linear,
                 .mag_filter = .linear,
                 .generate_mipmaps = true,
             }, roughness_pixels.?);
-
-            displacement_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
-                .min_filter = .linear_mipmap_linear,
-                .mag_filter = .linear,
-                .generate_mipmaps = true,
-            }, displacement_pixels.?);
 
             log.log.info("PBR atlases created: {} textures with {} normal maps", .{ loaded_count, pbr_count });
         }
@@ -398,13 +379,38 @@ pub const TextureAtlas = struct {
             .texture = diffuse_texture,
             .normal_texture = normal_texture,
             .roughness_texture = roughness_texture,
-            .displacement_texture = displacement_texture,
+            .displacement_texture = null,
             .allocator = allocator,
             .pack_manager = pack_manager,
             .tile_size = tile_size,
             .atlas_size = atlas_size,
             .has_pbr = has_pbr,
         };
+    }
+
+    fn copyTextureChannelToTile(atlas_pixels: []u8, tile_index: u8, src_pixels: []const u8, src_width: u32, src_height: u32, src_channel: u8, dest_channel: u8, tile_size: u32, atlas_size: u32) void {
+        const tile_col = tile_index % TILES_PER_ROW;
+        const tile_row = tile_index / TILES_PER_ROW;
+        const start_x = tile_col * tile_size;
+        const start_y = tile_row * tile_size;
+
+        var py: u32 = 0;
+        while (py < tile_size) : (py += 1) {
+            var px: u32 = 0;
+            while (px < tile_size) : (px += 1) {
+                const src_x = (px * src_width) / tile_size;
+                const src_y = (py * src_height) / tile_size;
+                const src_idx = (src_y * src_width + src_x) * 4;
+
+                const dest_x = start_x + px;
+                const dest_y = start_y + py;
+                const dest_idx = (dest_y * atlas_size + dest_x) * 4;
+
+                if (src_idx + src_channel < src_pixels.len and dest_idx + dest_channel < atlas_pixels.len) {
+                    atlas_pixels[dest_idx + dest_channel] = src_pixels[src_idx + src_channel];
+                }
+            }
+        }
     }
 
     fn copyTextureToTile(atlas_pixels: []u8, tile_index: u8, src_pixels: []const u8, src_width: u32, src_height: u32, tile_size: u32, atlas_size: u32) void {

@@ -277,50 +277,74 @@ void main() {
 
         vec3 albedo = texColor.rgb * vColor;
         
-        // PBR lighting
+        // PBR lighting - Only calculate if maps are present and it's enabled
         if (global.pbr_enabled > 0.5) {
-            // Sample roughness
-            float roughness = texture(uRoughnessMap, uv).r;
-            roughness = clamp(roughness, 0.05, 1.0);
+            vec3 normalMap = texture(uNormalMap, uv).rgb;
+            bool hasNormalMap = length(normalMap) > 0.1 && (normalMap.r != 0.5 || normalMap.g != 0.5 || normalMap.b != 1.0);
             
-            // For blocks, we use a low metallic value (non-metals)
-            float metallic = 0.0;
-            
-            // Calculate view direction
-            vec3 V = normalize(global.cam_pos.xyz - vFragPosWorld);
-            vec3 L = normalize(global.sun_dir.xyz);
-            vec3 H = normalize(V + L);
-            
-            // Calculate reflectance at normal incidence (F0)
-            // For non-metals (dielectrics), use 0.04
-            vec3 F0 = vec3(0.04);
-            F0 = mix(F0, albedo, metallic);
-            
-            // Cook-Torrance BRDF
-            float NDF = DistributionGGX(N, H, roughness);
-            float G = GeometrySmith(N, V, L, roughness);
-            vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-            
-            vec3 numerator = NDF * G * F;
-            float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
-            vec3 specular = numerator / denominator;
-            
-            // kS = Fresnel, kD = 1 - kS (for non-metals)
-            vec3 kS = F;
-            vec3 kD = vec3(1.0) - kS;
-            kD *= 1.0 - metallic;
-            
-            // Outgoing radiance
-            float NdotL = max(dot(N, L), 0.0);
-            vec3 sunColor = vec3(1.0, 0.98, 0.95) * global.sun_intensity;
-            vec3 Lo = (kD * albedo / PI + specular) * sunColor * NdotL * (1.0 - totalShadow);
-            
-            // Ambient lighting (simple approximation)
-            float skyLight = vSkyLight * global.ambient;
-            float blockLight = vBlockLight;
-            vec3 ambientColor = albedo * max(skyLight, blockLight);
-            
-            color = ambientColor + Lo;
+            // Sample roughness (now packed: R=roughness, G=displacement)
+            vec4 packedPBR = texture(uRoughnessMap, uv);
+            float roughness = packedPBR.r;
+            bool hasPBR = hasNormalMap || (roughness < 0.99 && roughness > 0.01);
+
+            if (hasPBR) {
+                roughness = clamp(roughness, 0.05, 1.0);
+                
+                // For blocks, we use a low metallic value (non-metals)
+                float metallic = 0.0;
+                
+                // Construct TBN matrix for normal mapping
+                vec3 N;
+                if (hasNormalMap) {
+                    vec3 tangentNormal = normalMap * 2.0 - 1.0;
+                    vec3 T = normalize(vTangent);
+                    vec3 B = normalize(vBitangent);
+                    vec3 Nw = normalize(vNormal);
+                    mat3 TBN = mat3(T, B, Nw);
+                    N = normalize(TBN * tangentNormal);
+                } else {
+                    N = normalize(vNormal);
+                }
+
+                // Calculate view direction
+                vec3 V = normalize(global.cam_pos.xyz - vFragPosWorld);
+                vec3 L = normalize(global.sun_dir.xyz);
+                vec3 H = normalize(V + L);
+                
+                // Calculate reflectance at normal incidence (F0)
+                vec3 F0 = vec3(0.04);
+                F0 = mix(F0, albedo, metallic);
+                
+                // Cook-Torrance BRDF
+                float NDF = DistributionGGX(N, H, roughness);
+                float G = GeometrySmith(N, V, L, roughness);
+                vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+                
+                vec3 numerator = NDF * G * F;
+                float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+                vec3 specular = numerator / denominator;
+                
+                vec3 kS = F;
+                vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
+                
+                float NdotL = max(dot(N, L), 0.0);
+                vec3 sunColor = vec3(1.0, 0.98, 0.95) * global.sun_intensity;
+                vec3 Lo = (kD * albedo / PI + specular) * sunColor * NdotL * (1.0 - totalShadow);
+                
+                // Ambient lighting
+                float skyLight = vSkyLight * global.ambient;
+                float blockLight = vBlockLight;
+                vec3 ambientColor = albedo * max(skyLight, blockLight);
+                
+                color = ambientColor + Lo;
+            } else {
+                // Fallback to legacy lighting for non-PBR blocks even if PBR is enabled globally
+                float directLight = nDotL * global.sun_intensity * (1.0 - totalShadow);
+                float skyLight = vSkyLight * (global.ambient + directLight * 0.8);
+                float blockLight = vBlockLight;
+                float lightLevel = clamp(max(skyLight, blockLight), global.ambient * 0.5, 1.0);
+                color = albedo * lightLevel;
+            }
         } else {
             // Legacy lighting
             float directLight = nDotL * global.sun_intensity * (1.0 - totalShadow);
