@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
     });
     root_module.addImport("zig-math", zig_math);
     root_module.addImport("zig-noise", zig_noise);
+    root_module.addIncludePath(b.path("libs/stb"));
 
     const exe = b.addExecutable(.{
         .name = "zigcraft",
@@ -30,6 +31,10 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.linkLibC();
+    exe.addCSourceFile(.{
+        .file = b.path("libs/stb/stb_image_impl.c"),
+        .flags = &.{"-std=c99"},
+    });
 
     exe.linkSystemLibrary("sdl3");
     exe.linkSystemLibrary("vulkan");

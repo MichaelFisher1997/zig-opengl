@@ -1,8 +1,9 @@
 //! Resource Pack Manager for loading texture packs.
-//! Supports loading textures from TGA files with fallback to solid colors.
+//! Supports loading textures from PNG files using stb_image with fallback to solid colors.
 
 const std = @import("std");
 const log = @import("../core/log.zig");
+const c = @import("../../c.zig").c;
 
 /// Texture name to file mapping for blocks
 pub const TextureMapping = struct {
@@ -11,55 +12,55 @@ pub const TextureMapping = struct {
     files: []const []const u8,
 };
 
-/// Standard block texture mappings
+/// Standard block texture mappings (PNG preferred)
 pub const BLOCK_TEXTURES = [_]TextureMapping{
-    .{ .name = "stone", .files = &.{ "stone.tga", "stone.png" } },
-    .{ .name = "dirt", .files = &.{ "dirt.tga", "dirt.png" } },
-    .{ .name = "grass_top", .files = &.{ "grass_top.tga", "grass_carried.tga", "grass_block_top.tga", "grass_top.png", "grass_carried.png" } },
-    .{ .name = "grass_side", .files = &.{ "grass_side.tga", "grass_side_carried.tga", "grass_block_side.tga", "grass_side.png", "grass_side_carried.png" } },
-    .{ .name = "sand", .files = &.{ "sand.tga", "sand.png" } },
-    .{ .name = "cobblestone", .files = &.{ "cobblestone.tga", "cobblestone.png" } },
-    .{ .name = "bedrock", .files = &.{ "bedrock.tga", "bedrock.png" } },
-    .{ .name = "gravel", .files = &.{ "gravel.tga", "gravel.png" } },
-    .{ .name = "wood_side", .files = &.{ "wood_side.tga", "oak_log.tga", "log_oak.tga", "wood_side.png" } },
-    .{ .name = "wood_top", .files = &.{ "wood_top.tga", "oak_log_top.tga", "log_oak_top.tga", "wood_top.png" } },
-    .{ .name = "leaves", .files = &.{ "leaves.tga", "oak_leaves.tga", "leaves_oak.tga", "leaves.png" } },
-    .{ .name = "water", .files = &.{ "water.tga", "water_still.tga", "water.png" } },
-    .{ .name = "glass", .files = &.{ "glass.tga", "glass.png" } },
-    .{ .name = "glowstone", .files = &.{ "glowstone.tga", "glowstone.png" } },
-    .{ .name = "mud", .files = &.{ "mud.tga", "mud.png" } },
-    .{ .name = "snow_block", .files = &.{ "snow_block.tga", "snow.tga", "snow_block.png" } },
-    .{ .name = "cactus_side", .files = &.{ "cactus_side.tga", "cactus_side.png" } },
-    .{ .name = "cactus_top", .files = &.{ "cactus_top.tga", "cactus_top.png" } },
-    .{ .name = "coal_ore", .files = &.{ "coal_ore.tga", "coal_ore.png" } },
-    .{ .name = "iron_ore", .files = &.{ "iron_ore.tga", "iron_ore.png" } },
-    .{ .name = "gold_ore", .files = &.{ "gold_ore.tga", "gold_ore.png" } },
-    .{ .name = "clay", .files = &.{ "clay.tga", "clay.png" } },
-    .{ .name = "mangrove_log_side", .files = &.{ "mangrove_log_side.tga", "mangrove_log_side.png" } },
-    .{ .name = "mangrove_log_top", .files = &.{ "mangrove_log_top.tga", "mangrove_log_top.png" } },
-    .{ .name = "mangrove_leaves", .files = &.{ "mangrove_leaves.tga", "mangrove_leaves.png" } },
-    .{ .name = "mangrove_roots", .files = &.{ "mangrove_roots.tga", "mangrove_roots.png" } },
-    .{ .name = "jungle_log_side", .files = &.{ "jungle_log_side.tga", "log_jungle.tga", "jungle_log_side.png" } },
-    .{ .name = "jungle_log_top", .files = &.{ "jungle_log_top.tga", "log_jungle_top.tga", "jungle_log_top.png" } },
-    .{ .name = "jungle_leaves", .files = &.{ "jungle_leaves.tga", "jungle_leaves.png" } },
-    .{ .name = "melon_side", .files = &.{ "melon_side.tga", "melon_side.png" } },
-    .{ .name = "melon_top", .files = &.{ "melon_top.tga", "melon_top.png" } },
-    .{ .name = "bamboo", .files = &.{ "bamboo.tga", "bamboo_stem.tga", "bamboo.png" } },
-    .{ .name = "acacia_log_side", .files = &.{ "acacia_log_side.tga", "log_acacia.tga", "acacia_log_side.png" } },
-    .{ .name = "acacia_log_top", .files = &.{ "acacia_log_top.tga", "log_acacia_top.tga", "acacia_log_top.png" } },
-    .{ .name = "acacia_leaves", .files = &.{ "acacia_leaves.tga", "acacia_leaves.png" } },
-    .{ .name = "acacia_sapling", .files = &.{ "acacia_sapling.tga", "sapling_acacia.tga", "acacia_sapling.png" } },
-    .{ .name = "terracotta", .files = &.{ "terracotta.tga", "hardened_clay.tga", "terracotta.png" } },
-    .{ .name = "red_sand", .files = &.{ "red_sand.tga", "red_sand.png" } },
-    .{ .name = "mycelium_top", .files = &.{ "mycelium_top.tga", "mycelium_top.png" } },
-    .{ .name = "mycelium_side", .files = &.{ "mycelium_side.tga", "mycelium_side.png" } },
-    .{ .name = "mushroom_stem", .files = &.{ "mushroom_stem.tga", "mushroom_block_skin_stem.tga", "mushroom_stem.png" } },
-    .{ .name = "red_mushroom_block", .files = &.{ "red_mushroom_block.tga", "mushroom_block_skin_red.tga", "red_mushroom_block.png" } },
-    .{ .name = "brown_mushroom_block", .files = &.{ "brown_mushroom_block.tga", "mushroom_block_skin_brown.tga", "brown_mushroom_block.png" } },
-    .{ .name = "tall_grass", .files = &.{ "tall_grass.tga", "tallgrass.tga", "tall_grass.png" } },
-    .{ .name = "flower_red", .files = &.{ "flower_red.tga", "flower_rose.tga", "poppy.tga", "flower_red.png" } },
-    .{ .name = "flower_yellow", .files = &.{ "flower_yellow.tga", "flower_dandelion.tga", "dandelion.tga", "flower_yellow.png" } },
-    .{ .name = "dead_bush", .files = &.{ "dead_bush.tga", "deadbush.tga", "dead_bush.png" } },
+    .{ .name = "stone", .files = &.{"stone.png"} },
+    .{ .name = "dirt", .files = &.{"dirt.png"} },
+    .{ .name = "grass_top", .files = &.{ "grass_top.png", "grass_carried.png", "grass_block_top.png" } },
+    .{ .name = "grass_side", .files = &.{ "grass_side.png", "grass_side_carried.png", "grass_block_side.png" } },
+    .{ .name = "sand", .files = &.{"sand.png"} },
+    .{ .name = "cobblestone", .files = &.{"cobblestone.png"} },
+    .{ .name = "bedrock", .files = &.{"bedrock.png"} },
+    .{ .name = "gravel", .files = &.{"gravel.png"} },
+    .{ .name = "wood_side", .files = &.{ "wood_side.png", "oak_log.png", "log_oak.png" } },
+    .{ .name = "wood_top", .files = &.{ "wood_top.png", "oak_log_top.png", "log_oak_top.png" } },
+    .{ .name = "leaves", .files = &.{ "leaves.png", "oak_leaves.png", "leaves_oak.png" } },
+    .{ .name = "water", .files = &.{ "water.png", "water_still.png" } },
+    .{ .name = "glass", .files = &.{"glass.png"} },
+    .{ .name = "glowstone", .files = &.{"glowstone.png"} },
+    .{ .name = "mud", .files = &.{"mud.png"} },
+    .{ .name = "snow_block", .files = &.{ "snow_block.png", "snow.png" } },
+    .{ .name = "cactus_side", .files = &.{"cactus_side.png"} },
+    .{ .name = "cactus_top", .files = &.{"cactus_top.png"} },
+    .{ .name = "coal_ore", .files = &.{"coal_ore.png"} },
+    .{ .name = "iron_ore", .files = &.{"iron_ore.png"} },
+    .{ .name = "gold_ore", .files = &.{"gold_ore.png"} },
+    .{ .name = "clay", .files = &.{"clay.png"} },
+    .{ .name = "mangrove_log_side", .files = &.{"mangrove_log_side.png"} },
+    .{ .name = "mangrove_log_top", .files = &.{"mangrove_log_top.png"} },
+    .{ .name = "mangrove_leaves", .files = &.{"mangrove_leaves.png"} },
+    .{ .name = "mangrove_roots", .files = &.{"mangrove_roots.png"} },
+    .{ .name = "jungle_log_side", .files = &.{ "jungle_log_side.png", "log_jungle.png" } },
+    .{ .name = "jungle_log_top", .files = &.{ "jungle_log_top.png", "log_jungle_top.png" } },
+    .{ .name = "jungle_leaves", .files = &.{"jungle_leaves.png"} },
+    .{ .name = "melon_side", .files = &.{"melon_side.png"} },
+    .{ .name = "melon_top", .files = &.{"melon_top.png"} },
+    .{ .name = "bamboo", .files = &.{ "bamboo.png", "bamboo_stem.png" } },
+    .{ .name = "acacia_log_side", .files = &.{ "acacia_log_side.png", "log_acacia.png" } },
+    .{ .name = "acacia_log_top", .files = &.{ "acacia_log_top.png", "log_acacia_top.png" } },
+    .{ .name = "acacia_leaves", .files = &.{"acacia_leaves.png"} },
+    .{ .name = "acacia_sapling", .files = &.{ "acacia_sapling.png", "sapling_acacia.png" } },
+    .{ .name = "terracotta", .files = &.{ "terracotta.png", "hardened_clay.png" } },
+    .{ .name = "red_sand", .files = &.{"red_sand.png"} },
+    .{ .name = "mycelium_top", .files = &.{"mycelium_top.png"} },
+    .{ .name = "mycelium_side", .files = &.{"mycelium_side.png"} },
+    .{ .name = "mushroom_stem", .files = &.{ "mushroom_stem.png", "mushroom_block_skin_stem.png" } },
+    .{ .name = "red_mushroom_block", .files = &.{ "red_mushroom_block.png", "mushroom_block_skin_red.png" } },
+    .{ .name = "brown_mushroom_block", .files = &.{ "brown_mushroom_block.png", "mushroom_block_skin_brown.png" } },
+    .{ .name = "tall_grass", .files = &.{ "tall_grass.png", "tallgrass.png" } },
+    .{ .name = "flower_red", .files = &.{ "flower_red.png", "flower_rose.png", "poppy.png" } },
+    .{ .name = "flower_yellow", .files = &.{ "flower_yellow.png", "flower_dandelion.png", "dandelion.png" } },
+    .{ .name = "dead_bush", .files = &.{ "dead_bush.png", "deadbush.png" } },
 };
 
 pub const LoadedTexture = struct {
@@ -145,7 +146,7 @@ pub const ResourcePackManager = struct {
                 for (mapping.files) |file_name| {
                     const full_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ pack_path, file_name }) catch continue;
                     defer self.allocator.free(full_path);
-                    if (std.mem.endsWith(u8, file_name, ".tga")) if (self.loadTgaFile(full_path)) |texture| return texture;
+                    if (self.loadImageFile(full_path)) |texture| return texture;
                 }
                 break;
             }
@@ -153,45 +154,47 @@ pub const ResourcePackManager = struct {
         return null;
     }
 
-    fn loadTgaFile(self: *Self, path: []const u8) ?LoadedTexture {
-        const buffer = std.fs.cwd().readFileAlloc(path, self.allocator, @enumFromInt(10 * 1024 * 1024)) catch return null;
-        defer self.allocator.free(buffer);
-        if (buffer.len < 18) return null;
-        const id_length = buffer[0];
-        const image_type = buffer[2];
-        const width = @as(u32, buffer[12]) | (@as(u32, buffer[13]) << 8);
-        const height = @as(u32, buffer[14]) | (@as(u32, buffer[15]) << 8);
-        const pixel_depth = buffer[16];
-        const descriptor = buffer[17];
-        if (image_type != 2 and image_type != 3) return null;
-        const bytes_per_pixel = pixel_depth / 8;
-        if (bytes_per_pixel == 0) return null;
-        const pixel_data_start = 18 + id_length;
-        if (buffer.len < pixel_data_start + width * height * bytes_per_pixel) return null;
-        const pixels = self.allocator.alloc(u8, width * height * 4) catch return null;
-        const top_down = (descriptor & 0x20) != 0;
-        var y: u32 = 0;
-        while (y < height) : (y += 1) {
-            var x: u32 = 0;
-            while (x < width) : (x += 1) {
-                const src_y = if (top_down) y else (height - 1 - y);
-                const src_idx = pixel_data_start + (src_y * width + x) * bytes_per_pixel;
-                const dest_idx = (y * width + x) * 4;
-                if (image_type == 3) {
-                    const val = buffer[src_idx];
-                    pixels[dest_idx + 0] = val;
-                    pixels[dest_idx + 1] = val;
-                    pixels[dest_idx + 2] = val;
-                    pixels[dest_idx + 3] = if (bytes_per_pixel >= 2) buffer[src_idx + 1] else 255;
-                } else {
-                    pixels[dest_idx + 0] = buffer[src_idx + 2];
-                    pixels[dest_idx + 1] = buffer[src_idx + 1];
-                    pixels[dest_idx + 2] = buffer[src_idx + 0];
-                    pixels[dest_idx + 3] = if (bytes_per_pixel >= 4) buffer[src_idx + 3] else 255;
-                }
-            }
+    fn loadImageFile(self: *Self, path: []const u8) ?LoadedTexture {
+        // Read file into memory
+        const file_data = std.fs.cwd().readFileAlloc(path, self.allocator, @enumFromInt(10 * 1024 * 1024)) catch |err| {
+            log.log.debug("Failed to read file {s}: {}", .{ path, err });
+            return null;
+        };
+        defer self.allocator.free(file_data);
+
+        log.log.debug("Read file {s}: {} bytes", .{ path, file_data.len });
+
+        // Use stb_image to decode the image
+        var width: c_int = 0;
+        var height: c_int = 0;
+        var channels: c_int = 0;
+        const img_data = c.stbi_load_from_memory(
+            file_data.ptr,
+            @intCast(file_data.len),
+            &width,
+            &height,
+            &channels,
+            4, // Force RGBA
+        );
+
+        if (img_data == null) {
+            log.log.warn("stbi_load_from_memory failed for {s}", .{path});
+            return null;
         }
-        return .{ .pixels = pixels, .width = width, .height = height };
+        defer c.stbi_image_free(img_data);
+
+        log.log.debug("Decoded image {s}: {}x{} channels={}", .{ path, width, height, channels });
+
+        // Copy to Zig-managed memory
+        const size: usize = @intCast(@as(u32, @intCast(width)) * @as(u32, @intCast(height)) * 4);
+        const pixels = self.allocator.alloc(u8, size) catch return null;
+        @memcpy(pixels, img_data[0..size]);
+
+        return .{
+            .pixels = pixels,
+            .width = @intCast(width),
+            .height = @intCast(height),
+        };
     }
 
     pub fn packExists(self: *const Self, name: []const u8) bool {

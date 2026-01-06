@@ -202,6 +202,7 @@ pub const TextureAtlas = struct {
                         var tex = loaded_tex;
                         tex.deinit(allocator);
                     }
+                    log.log.debug("Loaded texture: {s} ({}x{})", .{ config.name, loaded_tex.width, loaded_tex.height });
                     copyTextureToTile(pixels, config.index, loaded_tex.pixels, loaded_tex.width, loaded_tex.height);
                     loaded = true;
                     loaded_count += 1;
@@ -209,6 +210,7 @@ pub const TextureAtlas = struct {
             }
 
             if (!loaded) {
+                log.log.warn("Failed to load texture: {s}, using fallback color", .{config.name});
                 // Use solid block color as fallback in the atlas
                 const base_f32 = config.block.getColor();
                 const base_u8 = [3]u8{
