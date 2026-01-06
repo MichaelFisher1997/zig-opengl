@@ -259,18 +259,6 @@ pub const ResourcePackManager = struct {
             return tex;
         }
 
-        // Final fallback: try default pack if we aren't already using it
-        if (self.getDefaultPackPath()) |default_path| {
-            // Check by pointer identity if possible, or string equality
-            const is_default = if (pack_path.len == default_path.len) std.mem.eql(u8, pack_path, default_path) else false;
-
-            if (!is_default) {
-                if (self.loadFlatTexture(default_path, texture_name)) |tex| {
-                    return tex;
-                }
-            }
-        }
-
         return null;
     }
 
