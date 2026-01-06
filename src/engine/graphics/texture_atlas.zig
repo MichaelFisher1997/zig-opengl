@@ -1,5 +1,6 @@
 //! Texture Atlas for block textures.
-//! Generates a procedural texture atlas with all block types.
+//! Loads textures from resource packs with solid color fallback.
+//! Supports HD texture packs (16x16 to 512x512) and PBR maps.
 
 const std = @import("std");
 const c = @import("../../c.zig").c;
@@ -7,25 +8,40 @@ const c = @import("../../c.zig").c;
 const Texture = @import("texture.zig").Texture;
 const FilterMode = @import("texture.zig").FilterMode;
 const log = @import("../core/log.zig");
+const resource_pack = @import("resource_pack.zig");
+const BlockType = @import("../../world/block.zig").BlockType;
+const PBRMapType = resource_pack.PBRMapType;
 
 const rhi = @import("rhi.zig");
 
-/// Tile size in pixels (each block face texture)
-pub const TILE_SIZE: u32 = 16;
+/// Default tile size in pixels (each block face texture)
+pub const DEFAULT_TILE_SIZE: u32 = 16;
 
 /// Number of tiles per row in the atlas
 pub const TILES_PER_ROW: u32 = 16;
 
-/// Atlas dimensions
-pub const ATLAS_SIZE: u32 = TILE_SIZE * TILES_PER_ROW;
+/// Supported tile sizes for HD texture packs
+pub const SUPPORTED_TILE_SIZES = [_]u32{ 16, 32, 64, 128, 256, 512 };
 
-/// Texture atlas for blocks
+/// Texture atlas for blocks with PBR support
 pub const TextureAtlas = struct {
+    /// Diffuse/albedo texture atlas
     texture: Texture,
+    /// Normal map atlas (optional)
+    normal_texture: ?Texture,
+    /// Roughness map atlas (optional)
+    roughness_texture: ?Texture,
+    /// Displacement map atlas (optional)
+    displacement_texture: ?Texture,
+
     allocator: std.mem.Allocator,
+    pack_manager: ?*resource_pack.ResourcePackManager,
+    tile_size: u32,
+    atlas_size: u32,
+    /// Whether PBR textures are available
+    has_pbr: bool,
 
     /// Tile indices for block faces [top, bottom, side]
-    /// Each block type maps to 3 tile indices
     pub const BlockTiles = struct {
         top: u8,
         bottom: u8,
@@ -73,352 +89,432 @@ pub const TextureAtlas = struct {
     pub const TILE_MUSHROOM_STEM: u8 = 33;
     pub const TILE_RED_MUSHROOM: u8 = 34;
     pub const TILE_BROWN_MUSHROOM: u8 = 35;
+    pub const TILE_COAL_ORE: u8 = 36;
+    pub const TILE_IRON_ORE: u8 = 37;
+    pub const TILE_GOLD_ORE: u8 = 38;
+    pub const TILE_CLAY: u8 = 39;
+    pub const TILE_SNOW_BLOCK: u8 = 40;
+    pub const TILE_CACTUS_SIDE: u8 = 41;
+    pub const TILE_CACTUS_TOP: u8 = 42;
+    pub const TILE_TALL_GRASS: u8 = 43;
+    pub const TILE_FLOWER_RED: u8 = 44;
+    pub const TILE_FLOWER_YELLOW: u8 = 45;
+    pub const TILE_DEAD_BUSH: u8 = 46;
 
     /// Block type to tile mapping
     pub fn getTilesForBlock(block_id: u8) BlockTiles {
         return switch (block_id) {
-            0 => BlockTiles.uniform(0), // Air (won't be rendered)
-            1 => BlockTiles.uniform(TILE_STONE), // Stone
-            2 => BlockTiles.uniform(TILE_DIRT), // Dirt
-            3 => .{ .top = TILE_GRASS_TOP, .bottom = TILE_DIRT, .side = TILE_GRASS_SIDE }, // Grass
-            4 => BlockTiles.uniform(TILE_SAND), // Sand
-            5 => BlockTiles.uniform(TILE_WATER), // Water
-            6 => .{ .top = TILE_WOOD_TOP, .bottom = TILE_WOOD_TOP, .side = TILE_WOOD_SIDE }, // Wood
-            7 => BlockTiles.uniform(TILE_LEAVES), // Leaves
-            8 => BlockTiles.uniform(TILE_COBBLESTONE), // Cobblestone
-            9 => BlockTiles.uniform(TILE_BEDROCK), // Bedrock
-            10 => BlockTiles.uniform(TILE_GRAVEL), // Gravel
-            11 => BlockTiles.uniform(TILE_GLASS), // Glass
-            18 => BlockTiles.uniform(TILE_GLOWSTONE), // Glowstone
-            19 => BlockTiles.uniform(TILE_MUD), // Mud
-            20 => .{ .top = TILE_MANGROVE_LOG_TOP, .bottom = TILE_MANGROVE_LOG_TOP, .side = TILE_MANGROVE_LOG_SIDE }, // Mangrove Log
-            21 => BlockTiles.uniform(TILE_MANGROVE_LEAVES), // Mangrove Leaves
-            22 => BlockTiles.uniform(TILE_MANGROVE_ROOTS), // Mangrove Roots
-            23 => .{ .top = TILE_JUNGLE_LOG_TOP, .bottom = TILE_JUNGLE_LOG_TOP, .side = TILE_JUNGLE_LOG_SIDE }, // Jungle Log
-            24 => BlockTiles.uniform(TILE_JUNGLE_LEAVES), // Jungle Leaves
-            25 => .{ .top = TILE_MELON_TOP, .bottom = TILE_MELON_TOP, .side = TILE_MELON_SIDE }, // Melon
-            26 => BlockTiles.uniform(TILE_BAMBOO), // Bamboo
-            27 => .{ .top = TILE_ACACIA_LOG_TOP, .bottom = TILE_ACACIA_LOG_TOP, .side = TILE_ACACIA_LOG_SIDE }, // Acacia Log
-            28 => BlockTiles.uniform(TILE_ACACIA_LEAVES), // Acacia Leaves
-            29 => BlockTiles.uniform(TILE_ACACIA_SAPLING), // Acacia Sapling
-            30 => BlockTiles.uniform(TILE_TERRACOTTA), // Terracotta
-            31 => BlockTiles.uniform(TILE_RED_SAND), // Red Sand
-            32 => .{ .top = TILE_MYCELIUM_TOP, .bottom = TILE_DIRT, .side = TILE_MYCELIUM_SIDE }, // Mycelium
-            33 => BlockTiles.uniform(TILE_MUSHROOM_STEM), // Mushroom Stem
-            34 => BlockTiles.uniform(TILE_RED_MUSHROOM), // Red Mushroom Block
-            35 => BlockTiles.uniform(TILE_BROWN_MUSHROOM), // Brown Mushroom Block
+            0 => BlockTiles.uniform(0),
+            1 => BlockTiles.uniform(TILE_STONE),
+            2 => BlockTiles.uniform(TILE_DIRT),
+            3 => .{ .top = TILE_GRASS_TOP, .bottom = TILE_DIRT, .side = TILE_GRASS_SIDE },
+            4 => BlockTiles.uniform(TILE_SAND),
+            5 => BlockTiles.uniform(TILE_WATER),
+            6 => .{ .top = TILE_WOOD_TOP, .bottom = TILE_WOOD_TOP, .side = TILE_WOOD_SIDE },
+            7 => BlockTiles.uniform(TILE_LEAVES),
+            8 => BlockTiles.uniform(TILE_COBBLESTONE),
+            9 => BlockTiles.uniform(TILE_BEDROCK),
+            10 => BlockTiles.uniform(TILE_GRAVEL),
+            11 => BlockTiles.uniform(TILE_GLASS),
+            12 => BlockTiles.uniform(TILE_SNOW_BLOCK),
+            13 => .{ .top = TILE_CACTUS_TOP, .bottom = TILE_CACTUS_TOP, .side = TILE_CACTUS_SIDE },
+            14 => BlockTiles.uniform(TILE_COAL_ORE),
+            15 => BlockTiles.uniform(TILE_IRON_ORE),
+            16 => BlockTiles.uniform(TILE_GOLD_ORE),
+            17 => BlockTiles.uniform(TILE_CLAY),
+            18 => BlockTiles.uniform(TILE_GLOWSTONE),
+            19 => BlockTiles.uniform(TILE_MUD),
+            20 => .{ .top = TILE_MANGROVE_LOG_TOP, .bottom = TILE_MANGROVE_LOG_TOP, .side = TILE_MANGROVE_LOG_SIDE },
+            21 => BlockTiles.uniform(TILE_MANGROVE_LEAVES),
+            22 => BlockTiles.uniform(TILE_MANGROVE_ROOTS),
+            23 => .{ .top = TILE_JUNGLE_LOG_TOP, .bottom = TILE_JUNGLE_LOG_TOP, .side = TILE_JUNGLE_LOG_SIDE },
+            24 => BlockTiles.uniform(TILE_JUNGLE_LEAVES),
+            25 => .{ .top = TILE_MELON_TOP, .bottom = TILE_MELON_TOP, .side = TILE_MELON_SIDE },
+            26 => BlockTiles.uniform(TILE_BAMBOO),
+            27 => .{ .top = TILE_ACACIA_LOG_TOP, .bottom = TILE_ACACIA_LOG_TOP, .side = TILE_ACACIA_LOG_SIDE },
+            28 => BlockTiles.uniform(TILE_ACACIA_LEAVES),
+            29 => BlockTiles.uniform(TILE_ACACIA_SAPLING),
+            30 => BlockTiles.uniform(TILE_TERRACOTTA),
+            31 => BlockTiles.uniform(TILE_RED_SAND),
+            32 => .{ .top = TILE_MYCELIUM_TOP, .bottom = TILE_DIRT, .side = TILE_MYCELIUM_SIDE },
+            33 => BlockTiles.uniform(TILE_MUSHROOM_STEM),
+            34 => BlockTiles.uniform(TILE_RED_MUSHROOM),
+            35 => BlockTiles.uniform(TILE_BROWN_MUSHROOM),
+            36 => BlockTiles.uniform(TILE_TALL_GRASS),
+            37 => BlockTiles.uniform(TILE_FLOWER_RED),
+            38 => BlockTiles.uniform(TILE_FLOWER_YELLOW),
+            39 => BlockTiles.uniform(TILE_DEAD_BUSH),
             else => BlockTiles.uniform(0),
         };
     }
 
-    /// Get UV coordinates for a tile (returns min_u, min_v, max_u, max_v)
-    pub fn getTileUV(tile_index: u8) [4]f32 {
-        const tiles_f: f32 = @floatFromInt(TILES_PER_ROW);
-        const col: f32 = @floatFromInt(tile_index % TILES_PER_ROW);
-        const row: f32 = @floatFromInt(tile_index / TILES_PER_ROW);
+    /// Detect tile size from the first valid texture in the pack
+    fn detectTileSize(pack_manager: ?*resource_pack.ResourcePackManager, allocator: std.mem.Allocator) u32 {
+        if (pack_manager) |pm| {
+            // Try to load any configured texture from the ACTIVE pack only
+            // This ensures we detect the resolution of the custom pack, even if it's incomplete
+            if (pm.getActivePackPath()) |pack_path| {
+                const uses_pbr = pm.hasPBRSupport();
 
-        const tile_size = 1.0 / tiles_f;
-        // Small inset to prevent texture bleeding
-        const inset: f32 = 0.001;
+                for (tile_configs) |config| {
+                    var loaded_tex: ?resource_pack.LoadedTexture = null;
 
-        return .{
-            col * tile_size + inset, // min_u
-            row * tile_size + inset, // min_v
-            (col + 1) * tile_size - inset, // max_u
-            (row + 1) * tile_size - inset, // max_v
-        };
-    }
+                    if (uses_pbr) {
+                        loaded_tex = pm.loadPBRTexture(pack_path, config.name, .diffuse);
+                    }
 
-    pub fn init(allocator: std.mem.Allocator, rhi_instance: rhi.RHI) !TextureAtlas {
-        // Allocate pixel data for the atlas (RGBA)
-        const pixel_count = ATLAS_SIZE * ATLAS_SIZE * 4;
-        var pixels = try allocator.alloc(u8, pixel_count);
-        defer allocator.free(pixels);
+                    if (loaded_tex == null) {
+                        loaded_tex = pm.loadFlatTexture(pack_path, config.name);
+                    }
 
-        // Clear to magenta (missing texture indicator)
-        for (0..ATLAS_SIZE * ATLAS_SIZE) |i| {
-            pixels[i * 4 + 0] = 255; // R
-            pixels[i * 4 + 1] = 0; // G
-            pixels[i * 4 + 2] = 255; // B
-            pixels[i * 4 + 3] = 255; // A
+                    if (loaded_tex) |tex| {
+                        defer {
+                            var t = tex;
+                            t.deinit(allocator);
+                        }
+                        // Use the larger dimension and snap to nearest supported size
+                        const size = @max(tex.width, tex.height);
+                        return snapToSupportedSize(size);
+                    }
+                }
+            }
         }
-
-        // Generate each tile
-        generateTile(pixels, TILE_STONE, .{ 128, 128, 128 }, .stone);
-        generateTile(pixels, TILE_DIRT, .{ 140, 90, 50 }, .noise);
-        generateTile(pixels, TILE_GRASS_TOP, .{ 76, 165, 50 }, .grass);
-        generateTile(pixels, TILE_GRASS_SIDE, .{ 140, 90, 50 }, .grass_side);
-        generateTile(pixels, TILE_SAND, .{ 230, 215, 150 }, .noise);
-        generateTile(pixels, TILE_COBBLESTONE, .{ 100, 100, 100 }, .cobble);
-        generateTile(pixels, TILE_BEDROCK, .{ 40, 40, 40 }, .noise);
-        generateTile(pixels, TILE_GRAVEL, .{ 115, 108, 100 }, .gravel);
-        generateTile(pixels, TILE_WOOD_SIDE, .{ 140, 90, 40 }, .wood_side);
-        generateTile(pixels, TILE_WOOD_TOP, .{ 160, 130, 70 }, .wood_top);
-        generateTile(pixels, TILE_LEAVES, .{ 50, 128, 38 }, .leaves);
-        generateTile(pixels, TILE_WATER, .{ 50, 100, 200 }, .water);
-        generateTile(pixels, TILE_GLASS, .{ 200, 230, 240 }, .glass);
-        generateTile(pixels, TILE_GLOWSTONE, .{ 255, 220, 100 }, .glowstone);
-        generateTile(pixels, TILE_MUD, .{ 90, 75, 75 }, .noise);
-        generateTile(pixels, TILE_MANGROVE_LOG_SIDE, .{ 85, 55, 55 }, .wood_side);
-        generateTile(pixels, TILE_MANGROVE_LOG_TOP, .{ 110, 70, 70 }, .wood_top);
-        generateTile(pixels, TILE_MANGROVE_LEAVES, .{ 50, 130, 40 }, .leaves);
-        generateTile(pixels, TILE_MANGROVE_ROOTS, .{ 100, 70, 50 }, .roots);
-        generateTile(pixels, TILE_JUNGLE_LOG_SIDE, .{ 100, 80, 40 }, .wood_side);
-        generateTile(pixels, TILE_JUNGLE_LOG_TOP, .{ 120, 100, 60 }, .wood_top);
-        generateTile(pixels, TILE_JUNGLE_LEAVES, .{ 40, 160, 40 }, .leaves);
-        generateTile(pixels, TILE_MELON_SIDE, .{ 130, 180, 50 }, .melon_side);
-        generateTile(pixels, TILE_MELON_TOP, .{ 120, 170, 40 }, .melon_top);
-        generateTile(pixels, TILE_BAMBOO, .{ 80, 180, 60 }, .bamboo);
-        generateTile(pixels, TILE_ACACIA_LOG_SIDE, .{ 130, 120, 110 }, .wood_side);
-        generateTile(pixels, TILE_ACACIA_LOG_TOP, .{ 150, 140, 130 }, .wood_top);
-        generateTile(pixels, TILE_ACACIA_LEAVES, .{ 80, 140, 40 }, .leaves);
-        generateTile(pixels, TILE_ACACIA_SAPLING, .{ 100, 160, 60 }, .sapling);
-        generateTile(pixels, TILE_TERRACOTTA, .{ 180, 110, 90 }, .noise);
-        generateTile(pixels, TILE_RED_SAND, .{ 200, 100, 40 }, .noise);
-        generateTile(pixels, TILE_MYCELIUM_TOP, .{ 110, 90, 110 }, .mushroom_pore);
-        generateTile(pixels, TILE_MYCELIUM_SIDE, .{ 140, 90, 50 }, .grass_side); // Reusing grass_side (green top) for now, acceptable placeholder
-        generateTile(pixels, TILE_MUSHROOM_STEM, .{ 200, 200, 195 }, .mushroom_pore);
-        generateTile(pixels, TILE_RED_MUSHROOM, .{ 200, 50, 50 }, .mushroom_cap);
-        generateTile(pixels, TILE_BROWN_MUSHROOM, .{ 150, 100, 70 }, .mushroom_cap);
-
-        // Create texture using RHI
-        const texture = Texture.init(rhi_instance, ATLAS_SIZE, ATLAS_SIZE, .rgba, .{}, pixels);
-
-        log.log.info("Texture atlas created: {}x{} ({} tiles)", .{ ATLAS_SIZE, ATLAS_SIZE, TILES_PER_ROW * TILES_PER_ROW });
-
-        return .{
-            .texture = texture,
-            .allocator = allocator,
-        };
+        return DEFAULT_TILE_SIZE;
     }
 
-    pub fn deinit(self: *TextureAtlas) void {
-        var tex = self.texture;
-        tex.deinit();
+    /// Snap a size to the nearest supported tile size
+    fn snapToSupportedSize(size: u32) u32 {
+        for (SUPPORTED_TILE_SIZES) |supported| {
+            if (size <= supported) {
+                return supported;
+            }
+        }
+        // Cap at maximum supported size
+        return SUPPORTED_TILE_SIZES[SUPPORTED_TILE_SIZES.len - 1];
     }
 
-    pub fn bind(self: *const TextureAtlas, slot: u32) void {
-        self.texture.bind(slot);
-    }
-
-    const TilePattern = enum {
-        solid,
-        noise,
-        stone,
-        grass,
-        grass_side,
-        cobble,
-        gravel,
-        wood_side,
-        wood_top,
-        leaves,
-        water,
-        glass,
-        glowstone,
-        roots,
-        melon_side,
-        melon_top,
-        bamboo,
-        sapling,
-        mushroom_pore,
-        mushroom_cap,
+    const TileConfig = struct { index: u8, name: []const u8, block: BlockType };
+    const tile_configs = [_]TileConfig{
+        .{ .index = TILE_STONE, .name = "stone", .block = .stone },
+        .{ .index = TILE_DIRT, .name = "dirt", .block = .dirt },
+        .{ .index = TILE_GRASS_TOP, .name = "grass_top", .block = .grass },
+        .{ .index = TILE_GRASS_SIDE, .name = "grass_side", .block = .grass },
+        .{ .index = TILE_SAND, .name = "sand", .block = .sand },
+        .{ .index = TILE_COBBLESTONE, .name = "cobblestone", .block = .cobblestone },
+        .{ .index = TILE_BEDROCK, .name = "bedrock", .block = .bedrock },
+        .{ .index = TILE_GRAVEL, .name = "gravel", .block = .gravel },
+        .{ .index = TILE_WOOD_SIDE, .name = "wood_side", .block = .wood },
+        .{ .index = TILE_WOOD_TOP, .name = "wood_top", .block = .wood },
+        .{ .index = TILE_LEAVES, .name = "leaves", .block = .leaves },
+        .{ .index = TILE_WATER, .name = "water", .block = .water },
+        .{ .index = TILE_GLASS, .name = "glass", .block = .glass },
+        .{ .index = TILE_GLOWSTONE, .name = "glowstone", .block = .glowstone },
+        .{ .index = TILE_MUD, .name = "mud", .block = .mud },
+        .{ .index = TILE_MANGROVE_LOG_SIDE, .name = "mangrove_log_side", .block = .mangrove_log },
+        .{ .index = TILE_MANGROVE_LOG_TOP, .name = "mangrove_log_top", .block = .mangrove_log },
+        .{ .index = TILE_MANGROVE_LEAVES, .name = "mangrove_leaves", .block = .mangrove_leaves },
+        .{ .index = TILE_MANGROVE_ROOTS, .name = "mangrove_roots", .block = .mangrove_roots },
+        .{ .index = TILE_JUNGLE_LOG_SIDE, .name = "jungle_log_side", .block = .jungle_log },
+        .{ .index = TILE_JUNGLE_LOG_TOP, .name = "jungle_log_top", .block = .jungle_log },
+        .{ .index = TILE_JUNGLE_LEAVES, .name = "jungle_leaves", .block = .jungle_leaves },
+        .{ .index = TILE_MELON_SIDE, .name = "melon_side", .block = .melon },
+        .{ .index = TILE_MELON_TOP, .name = "melon_top", .block = .melon },
+        .{ .index = TILE_BAMBOO, .name = "bamboo", .block = .bamboo },
+        .{ .index = TILE_ACACIA_LOG_SIDE, .name = "acacia_log_side", .block = .acacia_log },
+        .{ .index = TILE_ACACIA_LOG_TOP, .name = "acacia_log_top", .block = .acacia_log },
+        .{ .index = TILE_ACACIA_LEAVES, .name = "acacia_leaves", .block = .acacia_leaves },
+        .{ .index = TILE_ACACIA_SAPLING, .name = "acacia_sapling", .block = .acacia_sapling },
+        .{ .index = TILE_TERRACOTTA, .name = "terracotta", .block = .terracotta },
+        .{ .index = TILE_RED_SAND, .name = "red_sand", .block = .red_sand },
+        .{ .index = TILE_MYCELIUM_TOP, .name = "mycelium_top", .block = .mycelium },
+        .{ .index = TILE_MYCELIUM_SIDE, .name = "mycelium_side", .block = .mycelium },
+        .{ .index = TILE_MUSHROOM_STEM, .name = "mushroom_stem", .block = .mushroom_stem },
+        .{ .index = TILE_RED_MUSHROOM, .name = "red_mushroom_block", .block = .red_mushroom_block },
+        .{ .index = TILE_BROWN_MUSHROOM, .name = "brown_mushroom_block", .block = .brown_mushroom_block },
+        .{ .index = TILE_COAL_ORE, .name = "coal_ore", .block = .coal_ore },
+        .{ .index = TILE_IRON_ORE, .name = "iron_ore", .block = .iron_ore },
+        .{ .index = TILE_GOLD_ORE, .name = "gold_ore", .block = .gold_ore },
+        .{ .index = TILE_CLAY, .name = "clay", .block = .clay },
+        .{ .index = TILE_SNOW_BLOCK, .name = "snow_block", .block = .snow_block },
+        .{ .index = TILE_CACTUS_SIDE, .name = "cactus_side", .block = .cactus },
+        .{ .index = TILE_CACTUS_TOP, .name = "cactus_top", .block = .cactus },
+        .{ .index = TILE_TALL_GRASS, .name = "tall_grass", .block = .tall_grass },
+        .{ .index = TILE_FLOWER_RED, .name = "flower_red", .block = .flower_red },
+        .{ .index = TILE_FLOWER_YELLOW, .name = "flower_yellow", .block = .flower_yellow },
+        .{ .index = TILE_DEAD_BUSH, .name = "dead_bush", .block = .dead_bush },
     };
 
-    fn generateTile(pixels: []u8, tile_index: u8, base_color: [3]u8, pattern: TilePattern) void {
+    pub fn init(allocator: std.mem.Allocator, rhi_instance: rhi.RHI, pack_manager: ?*resource_pack.ResourcePackManager) !TextureAtlas {
+        // Detect tile size from pack textures
+        const tile_size = detectTileSize(pack_manager, allocator);
+        const atlas_size = tile_size * TILES_PER_ROW;
+
+        log.log.info("Texture atlas tile size: {}x{} (atlas: {}x{})", .{ tile_size, tile_size, atlas_size, atlas_size });
+
+        const pixel_count = atlas_size * atlas_size * 4;
+
+        // Allocate pixel buffers for all atlas types
+        const diffuse_pixels = try allocator.alloc(u8, pixel_count);
+        defer allocator.free(diffuse_pixels);
+        @memset(diffuse_pixels, 255); // White default
+
+        // Check if pack has PBR support
+        const has_pbr = if (pack_manager) |pm| pm.hasPBRSupport() else false;
+
+        var normal_pixels: ?[]u8 = null;
+        var roughness_pixels: ?[]u8 = null;
+
+        if (has_pbr) {
+            normal_pixels = try allocator.alloc(u8, pixel_count);
+            // Default normal: (128, 128, 255, 255)
+            var i: usize = 0;
+            while (i < pixel_count) : (i += 4) {
+                normal_pixels.?[i + 0] = 128;
+                normal_pixels.?[i + 1] = 128;
+                normal_pixels.?[i + 2] = 255;
+                normal_pixels.?[i + 3] = 255;
+            }
+
+            roughness_pixels = try allocator.alloc(u8, pixel_count);
+            // Default roughness: 1.0 (Rough), displacement: 0.0
+            // Packed: R=Roughness, G=Displacement, B=0, A=255
+            i = 0;
+            while (i < pixel_count) : (i += 4) {
+                roughness_pixels.?[i + 0] = 255; // Roughness (Max)
+                roughness_pixels.?[i + 1] = 0; // Displacement
+                roughness_pixels.?[i + 2] = 0;
+                roughness_pixels.?[i + 3] = 255;
+            }
+        }
+        defer if (normal_pixels) |p| allocator.free(p);
+        defer if (roughness_pixels) |p| allocator.free(p);
+
+        var loaded_count: u32 = 0;
+        var pbr_count: u32 = 0;
+
+        for (tile_configs) |config| {
+            var loaded = false;
+            if (pack_manager) |pm| {
+                if (has_pbr) {
+                    // Load full PBR texture set
+                    var pbr_set = pm.loadPBRTextureSet(config.name);
+                    defer pbr_set.deinit(allocator);
+
+                    if (pbr_set.diffuse) |diffuse| {
+                        copyTextureToTile(diffuse_pixels, config.index, diffuse.pixels, diffuse.width, diffuse.height, tile_size, atlas_size);
+                        loaded = true;
+                        loaded_count += 1;
+                    }
+
+                    if (pbr_set.normal) |normal| {
+                        copyTextureToTile(normal_pixels.?, config.index, normal.pixels, normal.width, normal.height, tile_size, atlas_size);
+                        pbr_count += 1;
+                    }
+
+                    // Pack Roughness into RED and Displacement into GREEN channel of the same atlas
+                    if (pbr_set.roughness) |roughness| {
+                        copyTextureChannelToTile(roughness_pixels.?, config.index, roughness.pixels, roughness.width, roughness.height, 0, 0, tile_size, atlas_size);
+                    }
+                    if (pbr_set.displacement) |displacement| {
+                        copyTextureChannelToTile(roughness_pixels.?, config.index, displacement.pixels, displacement.width, displacement.height, 0, 1, tile_size, atlas_size);
+                    }
+                } else {
+                    // Legacy: load just diffuse
+                    if (pm.loadTexture(config.name)) |loaded_tex| {
+                        defer {
+                            var tex = loaded_tex;
+                            tex.deinit(allocator);
+                        }
+                        log.log.debug("Loaded texture: {s} ({}x{})", .{ config.name, loaded_tex.width, loaded_tex.height });
+                        copyTextureToTile(diffuse_pixels, config.index, loaded_tex.pixels, loaded_tex.width, loaded_tex.height, tile_size, atlas_size);
+                        loaded = true;
+                        loaded_count += 1;
+                    }
+                }
+            }
+
+            if (!loaded) {
+                log.log.warn("Failed to load texture: {s}, using fallback color", .{config.name});
+                // Use solid block color as fallback in the atlas
+                const base_f32 = config.block.getColor();
+                const base_u8 = [3]u8{
+                    @intFromFloat(@min(base_f32[0] * 255.0, 255.0)),
+                    @intFromFloat(@min(base_f32[1] * 255.0, 255.0)),
+                    @intFromFloat(@min(base_f32[2] * 255.0, 255.0)),
+                };
+                fillTileWithColor(diffuse_pixels, config.index, base_u8, tile_size, atlas_size);
+            }
+        }
+
+        // Create textures using RHI with NEAREST filtering for sharp pixel art, but with mipmaps for performance
+        const diffuse_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+            .min_filter = .nearest_mipmap_linear,
+            .mag_filter = .nearest,
+            .generate_mipmaps = true,
+        }, diffuse_pixels);
+
+        var normal_texture: ?Texture = null;
+        var roughness_texture: ?Texture = null;
+
+        if (has_pbr) {
+            normal_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+                .min_filter = .linear_mipmap_linear,
+                .mag_filter = .linear,
+                .generate_mipmaps = true,
+            }, normal_pixels.?);
+
+            // This atlas contains packed Roughness (R) and Displacement (G)
+            roughness_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+                .min_filter = .linear_mipmap_linear,
+                .mag_filter = .linear,
+                .generate_mipmaps = true,
+            }, roughness_pixels.?);
+
+            log.log.info("PBR atlases created: {} textures with {} normal maps", .{ loaded_count, pbr_count });
+        }
+
+        log.log.info("Texture atlas created: {}x{} - Loaded {} textures from pack", .{ atlas_size, atlas_size, loaded_count });
+
+        return .{
+            .texture = diffuse_texture,
+            .normal_texture = normal_texture,
+            .roughness_texture = roughness_texture,
+            .displacement_texture = null,
+            .allocator = allocator,
+            .pack_manager = pack_manager,
+            .tile_size = tile_size,
+            .atlas_size = atlas_size,
+            .has_pbr = has_pbr,
+        };
+    }
+
+    fn copyTextureChannelToTile(atlas_pixels: []u8, tile_index: u8, src_pixels: []const u8, src_width: u32, src_height: u32, src_channel: u8, dest_channel: u8, tile_size: u32, atlas_size: u32) void {
         const tile_col = tile_index % TILES_PER_ROW;
         const tile_row = tile_index / TILES_PER_ROW;
-        const start_x = tile_col * TILE_SIZE;
-        const start_y = tile_row * TILE_SIZE;
+        const start_x = tile_col * tile_size;
+        const start_y = tile_row * tile_size;
 
         var py: u32 = 0;
-        while (py < TILE_SIZE) : (py += 1) {
+        while (py < tile_size) : (py += 1) {
             var px: u32 = 0;
-            while (px < TILE_SIZE) : (px += 1) {
-                const x = start_x + px;
-                const y = start_y + py;
-                const idx = (y * ATLAS_SIZE + x) * 4;
+            while (px < tile_size) : (px += 1) {
+                const src_x = (px * src_width) / tile_size;
+                const src_y = (py * src_height) / tile_size;
+                const src_idx = (src_y * src_width + src_x) * 4;
 
-                const color = getPatternColor(px, py, base_color, pattern);
-                pixels[idx + 0] = color[0];
-                pixels[idx + 1] = color[1];
-                pixels[idx + 2] = color[2];
-                if (pattern == .glass) {
-                    pixels[idx + 3] = 200;
-                } else if ((pattern == .sapling or pattern == .roots) and color[0] == 0 and color[1] == 0 and color[2] == 0) {
-                    pixels[idx + 3] = 0;
-                } else {
-                    pixels[idx + 3] = 255;
+                const dest_x = start_x + px;
+                const dest_y = start_y + py;
+                const dest_idx = (dest_y * atlas_size + dest_x) * 4;
+
+                if (src_idx + src_channel < src_pixels.len and dest_idx + dest_channel < atlas_pixels.len) {
+                    atlas_pixels[dest_idx + dest_channel] = src_pixels[src_idx + src_channel];
                 }
             }
         }
     }
 
-    fn getPatternColor(px: u32, py: u32, base: [3]u8, pattern: TilePattern) [3]u8 {
-        const x = @as(i32, @intCast(px));
-        const y = @as(i32, @intCast(py));
+    fn copyTextureToTile(atlas_pixels: []u8, tile_index: u8, src_pixels: []const u8, src_width: u32, src_height: u32, tile_size: u32, atlas_size: u32) void {
+        const tile_col = tile_index % TILES_PER_ROW;
+        const tile_row = tile_index / TILES_PER_ROW;
+        const start_x = tile_col * tile_size;
+        const start_y = tile_row * tile_size;
 
-        return switch (pattern) {
-            .solid => base,
+        var py: u32 = 0;
+        while (py < tile_size) : (py += 1) {
+            var px: u32 = 0;
+            while (px < tile_size) : (px += 1) {
+                const src_x = (px * src_width) / tile_size;
+                const src_y = (py * src_height) / tile_size;
+                const src_idx = (src_y * src_width + src_x) * 4;
 
-            .noise => blk: {
-                const noise = simpleHash(x, y) % 30;
-                break :blk adjustBrightness(base, @as(i8, @intCast(noise)) - 15);
-            },
+                const dest_x = start_x + px;
+                const dest_y = start_y + py;
+                const dest_idx = (dest_y * atlas_size + dest_x) * 4;
 
-            .stone => blk: {
-                const noise = simpleHash(x * 3, y * 3) % 40;
-                const crack = if (@rem(x + y, 8) == 0) @as(i8, -30) else @as(i8, 0);
-                break :blk adjustBrightness(base, @as(i8, @intCast(noise)) - 20 + crack);
-            },
-
-            .grass => blk: {
-                const noise = simpleHash(x * 2, y * 2) % 40;
-                break :blk adjustBrightness(base, @as(i8, @intCast(noise)) - 20);
-            },
-
-            .grass_side => blk: {
-                if (py < 4) {
-                    // Grass top portion
-                    const noise = simpleHash(x * 2, y) % 30;
-                    const grass_color = [3]u8{ 76, 165, 50 };
-                    break :blk adjustBrightness(grass_color, @as(i8, @intCast(noise)) - 15);
-                } else {
-                    // Dirt portion
-                    const noise = simpleHash(x, y) % 30;
-                    break :blk adjustBrightness(base, @as(i8, @intCast(noise)) - 15);
+                if (src_idx + 3 < src_pixels.len and dest_idx + 3 < atlas_pixels.len) {
+                    atlas_pixels[dest_idx + 0] = src_pixels[src_idx + 0];
+                    atlas_pixels[dest_idx + 1] = src_pixels[src_idx + 1];
+                    atlas_pixels[dest_idx + 2] = src_pixels[src_idx + 2];
+                    atlas_pixels[dest_idx + 3] = src_pixels[src_idx + 3];
                 }
-            },
-
-            .cobble => blk: {
-                const cell_x = @divFloor(x, 4);
-                const cell_y = @divFloor(y, 4);
-                const cell_noise = simpleHash(cell_x, cell_y) % 50;
-                const edge = if (@rem(x, 4) == 0 or @rem(y, 4) == 0) @as(i8, -20) else @as(i8, 0);
-                break :blk adjustBrightness(base, @as(i8, @intCast(cell_noise)) - 25 + edge);
-            },
-
-            .gravel => blk: {
-                const noise1 = simpleHash(x, y) % 40;
-                const noise2 = simpleHash(x * 7, y * 7) % 20;
-                break :blk adjustBrightness(base, @as(i8, @intCast(noise1 + noise2)) - 30);
-            },
-
-            .wood_side => blk: {
-                // Vertical wood grain
-                const hash_val = simpleHash(0, y) % 2;
-                const grain = @rem(@as(u32, @intCast(@abs(x * 3 + @as(i32, @intCast(hash_val))))), 4);
-                const noise = simpleHash(x, y * 5) % 20;
-                const dark: i8 = if (grain == 0) -30 else 0;
-                break :blk adjustBrightness(base, @as(i8, @intCast(noise)) - 10 + dark);
-            },
-
-            .wood_top => blk: {
-                // Concentric rings
-                const cx = @as(i32, TILE_SIZE / 2);
-                const cy = @as(i32, TILE_SIZE / 2);
-                const dx = x - cx;
-                const dy = y - cy;
-                const dist = @as(u32, @intCast(@abs(dx * dx + dy * dy)));
-                const ring = (dist / 8) % 2;
-                const adjust: i8 = if (ring == 0) -20 else 10;
-                break :blk adjustBrightness(base, adjust);
-            },
-
-            .leaves => blk: {
-                const noise = simpleHash(x * 5, y * 5) % 60;
-                if (noise > 45) {
-                    // Dark spots (gaps in leaves)
-                    break :blk adjustBrightness(base, -40);
-                } else {
-                    break :blk adjustBrightness(base, @as(i8, @intCast(noise)) - 30);
-                }
-            },
-
-            .water => blk: {
-                const wave = @rem(@as(u32, @intCast(@abs(x + y))), 8);
-                const adjust: i8 = if (wave < 2) 20 else 0;
-                break :blk adjustBrightness(base, adjust);
-            },
-
-            .glass => blk: {
-                // Border highlight
-                if (px == 0 or py == 0 or px == TILE_SIZE - 1 or py == TILE_SIZE - 1) {
-                    break :blk .{ 255, 255, 255 };
-                }
-                break :blk base;
-            },
-
-            .glowstone => blk: {
-                // Bright center, darker edges, noisy
-                const dist_x = @abs(@as(i32, @intCast(px)) - 8);
-                const dist_y = @abs(@as(i32, @intCast(py)) - 8);
-                const dist = dist_x * dist_x + dist_y * dist_y;
-                const noise = simpleHash(x * 4, y * 4) % 40;
-
-                // Brighter in center
-                const center_boost: i8 = if (dist < 16) 20 else -10;
-
-                break :blk adjustBrightness(base, @as(i8, @intCast(noise)) - 20 + center_boost);
-            },
-
-            .roots => blk: {
-                const noise = simpleHash(x * 4, y * 4) % 60;
-                if (noise > 45) break :blk .{ 0, 0, 0 }; // Gap
-                break :blk adjustBrightness(base, @as(i8, @intCast(noise)) - 30);
-            },
-
-            .melon_side => blk: {
-                const stripe = @divTrunc(x, 2);
-                const noise = simpleHash(x, y) % 20;
-                if (@rem(stripe, 2) == 0) break :blk adjustBrightness(base, 20);
-                break :blk adjustBrightness(base, @as(i8, @intCast(noise)) - 10);
-            },
-
-            .melon_top => blk: {
-                const cx = @as(i32, TILE_SIZE / 2);
-                const cy = @as(i32, TILE_SIZE / 2);
-                const dist = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-                break :blk adjustBrightness(base, if (@rem(dist, 20) < 10) 10 else -10);
-            },
-
-            .bamboo => blk: {
-                if (x < 6 or x > 9) break :blk adjustBrightness(base, -20);
-                if (@rem(y, 4) == 0) break :blk adjustBrightness(base, -30);
-                break :blk base;
-            },
-
-            .sapling => blk: {
-                const cx = 8;
-                const dx = @abs(@as(i32, @intCast(px)) - cx);
-                if (y > 8 and dx < 2) break :blk .{ 100, 60, 40 };
-                if (y <= 8 and dx < 5 - @divTrunc(y, 2)) break :blk base;
-                break :blk .{ 0, 0, 0 };
-            },
-
-            .mushroom_pore => blk: {
-                const noise = simpleHash(x * 5, y * 5) % 30;
-                break :blk adjustBrightness(base, @as(i8, @intCast(noise)) - 15);
-            },
-
-            .mushroom_cap => blk: {
-                const spot = simpleHash(@divTrunc(x, 4), @divTrunc(y, 4)) % 5;
-                if (spot == 0) break :blk .{ 220, 200, 180 };
-                break :blk base;
-            },
-        };
+            }
+        }
     }
 
-    fn simpleHash(x: i32, y: i32) u32 {
-        var h: u32 = @bitCast(x *% 374761393 +% y *% 668265263);
-        h = (h ^ (h >> 13)) *% 1274126177;
-        return h ^ (h >> 16);
+    fn fillTileWithColor(atlas_pixels: []u8, tile_index: u8, color: [3]u8, tile_size: u32, atlas_size: u32) void {
+        const tile_col = tile_index % TILES_PER_ROW;
+        const tile_row = tile_index / TILES_PER_ROW;
+        const start_x = tile_col * tile_size;
+        const start_y = tile_row * tile_size;
+
+        var py: u32 = 0;
+        while (py < tile_size) : (py += 1) {
+            var px: u32 = 0;
+            while (px < tile_size) : (px += 1) {
+                const dest_x = start_x + px;
+                const dest_y = start_y + py;
+                const dest_idx = (dest_y * atlas_size + dest_x) * 4;
+
+                if (dest_idx + 3 < atlas_pixels.len) {
+                    atlas_pixels[dest_idx + 0] = color[0];
+                    atlas_pixels[dest_idx + 1] = color[1];
+                    atlas_pixels[dest_idx + 2] = color[2];
+                    atlas_pixels[dest_idx + 3] = 255;
+                }
+            }
+        }
     }
 
-    fn adjustBrightness(color: [3]u8, adjust: i8) [3]u8 {
-        return .{
-            @intCast(std.math.clamp(@as(i16, color[0]) + adjust, 0, 255)),
-            @intCast(std.math.clamp(@as(i16, color[1]) + adjust, 0, 255)),
-            @intCast(std.math.clamp(@as(i16, color[2]) + adjust, 0, 255)),
-        };
+    pub fn deinit(self: *TextureAtlas) void {
+        var tex = self.texture;
+        tex.deinit();
+
+        if (self.normal_texture) |*t| {
+            var nt = t.*;
+            nt.deinit();
+        }
+        if (self.roughness_texture) |*t| {
+            var rt = t.*;
+            rt.deinit();
+        }
+        if (self.displacement_texture) |*t| {
+            var dt = t.*;
+            dt.deinit();
+        }
+    }
+
+    /// Bind diffuse texture
+    pub fn bind(self: *const TextureAtlas, slot: u32) void {
+        self.texture.bind(slot);
+    }
+
+    /// Bind normal map texture (if available)
+    pub fn bindNormal(self: *const TextureAtlas, slot: u32) void {
+        if (self.normal_texture) |*t| {
+            t.bind(slot);
+        }
+    }
+
+    /// Bind roughness texture (if available)
+    pub fn bindRoughness(self: *const TextureAtlas, slot: u32) void {
+        if (self.roughness_texture) |*t| {
+            t.bind(slot);
+        }
+    }
+
+    /// Bind displacement texture (if available)
+    pub fn bindDisplacement(self: *const TextureAtlas, slot: u32) void {
+        if (self.displacement_texture) |*t| {
+            t.bind(slot);
+        }
+    }
+
+    /// Check if PBR textures are available
+    pub fn hasPBR(self: *const TextureAtlas) bool {
+        return self.has_pbr;
     }
 };
+
+// Legacy constants for backward compatibility
+pub const TILE_SIZE: u32 = DEFAULT_TILE_SIZE;
+pub const ATLAS_SIZE: u32 = DEFAULT_TILE_SIZE * TILES_PER_ROW;

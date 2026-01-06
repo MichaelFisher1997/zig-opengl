@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
     });
     root_module.addImport("zig-math", zig_math);
     root_module.addImport("zig-noise", zig_noise);
+    root_module.addIncludePath(b.path("libs/stb"));
 
     const exe = b.addExecutable(.{
         .name = "zigcraft",
@@ -30,6 +31,10 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.linkLibC();
+    exe.addCSourceFile(.{
+        .file = b.path("libs/stb/stb_image_impl.c"),
+        .flags = &.{"-std=c99"},
+    });
 
     exe.linkSystemLibrary("sdl3");
     exe.linkSystemLibrary("vulkan");
@@ -70,11 +75,16 @@ pub fn build(b: *std.Build) void {
     });
     integration_root_module.addImport("zig-math", zig_math);
     integration_root_module.addImport("zig-noise", zig_noise);
+    integration_root_module.addIncludePath(b.path("libs/stb"));
 
     const exe_integration_tests = b.addTest(.{
         .root_module = integration_root_module,
     });
     exe_integration_tests.linkLibC();
+    exe_integration_tests.addCSourceFile(.{
+        .file = b.path("libs/stb/stb_image_impl.c"),
+        .flags = &.{"-std=c99"},
+    });
     exe_integration_tests.linkSystemLibrary("sdl3");
     exe_integration_tests.linkSystemLibrary("vulkan");
 

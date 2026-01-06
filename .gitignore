@@ -1,6 +1,8 @@
 zig-cache/
 .zig-cache/
 zig-out/
+blocks-temp/
+libs/zig-image/
 result
 .direnv/
 *-profile*
@@ -12,3 +14,5 @@ result
 .idea/
 *.swp
 .DS_Store
+*.spv
+wiki/

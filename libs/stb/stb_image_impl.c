@@ -1,0 +1,8 @@
+// stb_image implementation file
+// This file compiles stb_image.h as a library
+
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_STDIO  // We'll use memory loading only
+#define STBI_NO_HDR    // No HDR support needed
+#define STBI_NO_LINEAR // No linear light conversion needed
+#include "stb_image.h"

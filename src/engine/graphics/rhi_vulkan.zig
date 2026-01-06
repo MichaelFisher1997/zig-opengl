@@ -48,7 +48,8 @@ const GlobalUniforms = extern struct {
     cloud_coverage: f32,
     cloud_shadow_strength: f32,
     cloud_height: f32,
-    padding: [2]f32, // Align to 16 bytes
+    pbr_enabled: f32, // 1.0 = PBR textures available
+    padding: f32, // Align to 16 bytes
 };
 
 /// Shadow cascade uniforms for CSM. Bound to descriptor set 0, binding 2.
@@ -2341,7 +2342,8 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
         .cloud_coverage = cloud_params.cloud_coverage,
         .cloud_shadow_strength = 0.15,
         .cloud_height = cloud_params.cloud_height,
-        .padding = .{ 0, 0 },
+        .pbr_enabled = if (cloud_params.pbr_enabled) 1.0 else 0.0,
+        .padding = 0,
     };
 
     var map_ptr: ?*anyopaque = null;
@@ -3432,7 +3434,8 @@ fn beginShadowPass(ctx_ptr: *anyopaque, cascade_index: u32) void {
 
     if (ctx.shadow_framebuffers[cascade_index] == null) return;
 
-    transitionShadowImage(ctx, cascade_index, c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    // Render pass handles transition from UNDEFINED to DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    ctx.shadow_image_layouts[cascade_index] = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     var render_pass_info = std.mem.zeroes(c.VkRenderPassBeginInfo);
     render_pass_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -3480,7 +3483,8 @@ fn endShadowPass(ctx_ptr: *anyopaque) void {
     const cascade_index = ctx.shadow_pass_index;
     ctx.shadow_pass_active = false;
 
-    transitionShadowImage(ctx, cascade_index, c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    // Render pass handles transition to SHADER_READ_ONLY_OPTIMAL
+    ctx.shadow_image_layouts[cascade_index] = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
 fn updateShadowUniforms(ctx_ptr: *anyopaque, params: rhi.ShadowParams) void {
