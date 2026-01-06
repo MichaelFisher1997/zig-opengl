@@ -151,16 +151,31 @@ pub const TextureAtlas = struct {
     /// Detect tile size from the first valid texture in the pack
     fn detectTileSize(pack_manager: ?*resource_pack.ResourcePackManager, allocator: std.mem.Allocator) u32 {
         if (pack_manager) |pm| {
-            // Try to load any configured texture to detect size
-            for (tile_configs) |config| {
-                if (pm.loadTexture(config.name)) |loaded_tex| {
-                    defer {
-                        var tex = loaded_tex;
-                        tex.deinit(allocator);
+            // Try to load any configured texture from the ACTIVE pack only
+            // This ensures we detect the resolution of the custom pack, even if it's incomplete
+            if (pm.getActivePackPath()) |pack_path| {
+                const uses_pbr = pm.hasPBRSupport();
+
+                for (tile_configs) |config| {
+                    var loaded_tex: ?resource_pack.LoadedTexture = null;
+
+                    if (uses_pbr) {
+                        loaded_tex = pm.loadPBRTexture(pack_path, config.name, .diffuse);
                     }
-                    // Use the larger dimension and snap to nearest supported size
-                    const size = @max(loaded_tex.width, loaded_tex.height);
-                    return snapToSupportedSize(size);
+
+                    if (loaded_tex == null) {
+                        loaded_tex = pm.loadFlatTexture(pack_path, config.name);
+                    }
+
+                    if (loaded_tex) |tex| {
+                        defer {
+                            var t = tex;
+                            t.deinit(allocator);
+                        }
+                        // Use the larger dimension and snap to nearest supported size
+                        const size = @max(tex.width, tex.height);
+                        return snapToSupportedSize(size);
+                    }
                 }
             }
         }

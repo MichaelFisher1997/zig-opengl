@@ -231,6 +231,13 @@ pub const ResourcePackManager = struct {
         return null;
     }
 
+    pub fn getDefaultPackPath(self: *const Self) ?[]const u8 {
+        for (self.available_packs.items) |pack| {
+            if (std.mem.eql(u8, pack.name, "default")) return pack.path;
+        }
+        return null;
+    }
+
     /// Check if the active pack has PBR textures
     pub fn hasPBRSupport(self: *const Self) bool {
         return self.uses_pbr_structure;
@@ -247,7 +254,28 @@ pub const ResourcePackManager = struct {
             }
         }
 
-        // Fall back to flat structure: pack/block_name.png
+        // Fall back to flat structure in active pack: pack/block_name.png
+        if (self.loadFlatTexture(pack_path, texture_name)) |tex| {
+            return tex;
+        }
+
+        // Final fallback: try default pack if we aren't already using it
+        if (self.getDefaultPackPath()) |default_path| {
+            // Check by pointer identity if possible, or string equality
+            const is_default = if (pack_path.len == default_path.len) std.mem.eql(u8, pack_path, default_path) else false;
+
+            if (!is_default) {
+                if (self.loadFlatTexture(default_path, texture_name)) |tex| {
+                    return tex;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// Helper to load a flat texture from a specific pack path
+    pub fn loadFlatTexture(self: *Self, pack_path: []const u8, texture_name: []const u8) ?LoadedTexture {
         for (BLOCK_TEXTURES) |mapping| {
             if (std.mem.eql(u8, mapping.name, texture_name)) {
                 for (mapping.files) |file_name| {
@@ -281,7 +309,7 @@ pub const ResourcePackManager = struct {
     }
 
     /// Load a PBR texture from the folder structure
-    fn loadPBRTexture(self: *Self, pack_path: []const u8, texture_name: []const u8, map_type: PBRMapType) ?LoadedTexture {
+    pub fn loadPBRTexture(self: *Self, pack_path: []const u8, texture_name: []const u8, map_type: PBRMapType) ?LoadedTexture {
         // Try: pack/texture_name/texture_name_suffix.png
         const suffix = map_type.getSuffix();
         const alt_suffix = map_type.getDefaultSuffix();
