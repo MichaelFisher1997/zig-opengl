@@ -41,6 +41,7 @@ pub const TextureFormat = enum {
     rgba,
     red,
     depth,
+    rgba32f,
 };
 
 pub const FilterMode = enum {
@@ -128,6 +129,10 @@ pub const CloudParams = struct {
     wind_offset_z: f32 = 0.0,
     base_color: Vec3 = Vec3.init(1.0, 1.0, 1.0),
     pbr_enabled: bool = false,
+    shadow_samples: u8 = 12,
+    shadow_blend: bool = true,
+    cloud_shadows: bool = true,
+    pbr_quality: u8 = 2,
 };
 
 /// RGBA color for UI rendering

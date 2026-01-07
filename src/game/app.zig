@@ -25,6 +25,7 @@ const rhi_pkg = @import("../engine/graphics/rhi.zig");
 const RHI = rhi_pkg.RHI;
 const rhi_vulkan = @import("../engine/graphics/rhi_vulkan.zig");
 const TextureAtlas = @import("../engine/graphics/texture_atlas.zig").TextureAtlas;
+const Texture = @import("../engine/graphics/texture.zig").Texture;
 const RenderGraph = @import("../engine/graphics/render_graph.zig").RenderGraph;
 const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").ResourcePackManager;
 
@@ -242,6 +243,7 @@ pub const App = struct {
     shader: rhi_pkg.ShaderHandle = rhi_pkg.InvalidShaderHandle,
     resource_pack_manager: ResourcePackManager,
     atlas: TextureAtlas,
+    env_map: ?@import("../engine/graphics/texture.zig").Texture,
     render_graph: RenderGraph,
     atmosphere: AtmosphereState,
     clouds: CloudState,
@@ -298,12 +300,35 @@ pub const App = struct {
             try resource_pack_manager.setActivePack("default");
         }
 
-        const atlas = try TextureAtlas.init(allocator, rhi, &resource_pack_manager);
+        const atlas = try TextureAtlas.init(allocator, rhi, &resource_pack_manager, settings.max_texture_resolution);
         atlas.bind(1);
         // Bind PBR textures if available
         atlas.bindNormal(6);
         atlas.bindRoughness(7);
         atlas.bindDisplacement(8);
+
+        // Load EXR Environment Map
+        var env_map: ?Texture = null;
+        if (!std.mem.eql(u8, settings.environment_map, "default")) {
+            if (resource_pack_manager.loadImageFileFloat(settings.environment_map)) |tex_data| {
+                env_map = Texture.initFloat(rhi, tex_data.width, tex_data.height, tex_data.pixels);
+                env_map.?.bind(9);
+                log.log.info("Loaded Environment Map: {s}", .{settings.environment_map});
+                var td = tex_data;
+                td.deinit(allocator);
+            } else {
+                log.log.warn("Could not load environment map: {s}", .{settings.environment_map});
+                // Fallback to white
+                const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+                env_map = Texture.initFloat(rhi, 1, 1, &white_pixel);
+                env_map.?.bind(9);
+            }
+        } else {
+            // Default white
+            const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+            env_map = Texture.initFloat(rhi, 1, 1, &white_pixel);
+            env_map.?.bind(9);
+        }
 
         var atmosphere = AtmosphereState{};
         atmosphere.setTimeOfDay(0.25);
@@ -326,6 +351,7 @@ pub const App = struct {
             .shader = rhi_pkg.InvalidShaderHandle,
             .resource_pack_manager = resource_pack_manager,
             .atlas = atlas,
+            .env_map = env_map,
             .render_graph = render_graph,
             .atmosphere = atmosphere,
             .clouds = clouds,
@@ -365,6 +391,7 @@ pub const App = struct {
         self.block_outline.deinit();
         self.hand_renderer.deinit();
         self.atlas.deinit();
+        if (self.env_map) |*t| t.deinit();
         self.resource_pack_manager.deinit();
         self.settings.deinit(self.allocator);
         if (self.shader != rhi_pkg.InvalidShaderHandle) self.rhi.destroyShader(self.shader);
@@ -442,7 +469,12 @@ pub const App = struct {
                         self.seed_focused = false;
                     },
                     .settings => self.app_state = self.last_state,
+                    .graphics => self.app_state = .settings,
                     .resource_packs => {
+                        self.settings.save(self.allocator);
+                        self.app_state = self.last_state;
+                    },
+                    .environment => {
                         self.settings.save(self.allocator);
                         self.app_state = self.last_state;
                     },
@@ -594,7 +626,11 @@ pub const App = struct {
                         .cloud_coverage = p.cloud_coverage,
                         .cloud_height = p.cloud_height,
                         .base_color = self.clouds.base_color,
-                        .pbr_enabled = self.atlas.has_pbr,
+                        .pbr_enabled = self.settings.pbr_enabled and self.atlas.has_pbr,
+                        .shadow_samples = self.settings.shadow_pcf_samples,
+                        .shadow_blend = self.settings.shadow_cascade_blend,
+                        .cloud_shadows = self.settings.cloud_shadows_enabled,
+                        .pbr_quality = self.settings.pbr_quality,
                     };
                 };
 
@@ -738,18 +774,47 @@ pub const App = struct {
                     if (action == .quit) self.input.should_quit = true;
                 },
                 .settings => Menus.drawSettings(ctx, &self.app_state, &self.settings, self.last_state, self.rhi),
+                .graphics => try Menus.drawGraphics(ctx, &self.app_state, &self.settings, self.last_state, self.rhi),
                 .resource_packs => {
                     const prev_pack_ptr = self.settings.texture_pack.ptr;
                     try Menus.drawResourcePacks(ctx, &self.app_state, &self.settings, self.last_state);
                     if (prev_pack_ptr != self.settings.texture_pack.ptr) {
                         self.rhi.waitIdle();
                         self.atlas.deinit();
-                        self.atlas = try TextureAtlas.init(self.allocator, self.rhi, &self.resource_pack_manager);
+                        self.atlas = try TextureAtlas.init(self.allocator, self.rhi, &self.resource_pack_manager, self.settings.max_texture_resolution);
                         self.atlas.bind(1);
                         // Bind PBR textures if available
                         self.atlas.bindNormal(6);
                         self.atlas.bindRoughness(7);
                         self.atlas.bindDisplacement(8);
+                    }
+                },
+                .environment => {
+                    const prev_env_ptr = self.settings.environment_map.ptr;
+                    try Menus.drawEnvironment(ctx, &self.app_state, &self.settings, self.last_state);
+                    if (prev_env_ptr != self.settings.environment_map.ptr) {
+                        self.rhi.waitIdle();
+                        if (self.env_map) |*t| t.deinit();
+                        self.env_map = null;
+
+                        if (!std.mem.eql(u8, self.settings.environment_map, "default")) {
+                            if (self.resource_pack_manager.loadImageFileFloat(self.settings.environment_map)) |tex_data| {
+                                self.env_map = Texture.initFloat(self.rhi, tex_data.width, tex_data.height, tex_data.pixels);
+                                self.env_map.?.bind(9);
+                                log.log.info("Loaded Environment Map: {s}", .{self.settings.environment_map});
+                                var td = tex_data;
+                                td.deinit(self.allocator);
+                            } else {
+                                log.log.warn("Could not load environment map: {s}", .{self.settings.environment_map});
+                                const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+                                self.env_map = Texture.initFloat(self.rhi, 1, 1, &white_pixel);
+                                self.env_map.?.bind(9);
+                            }
+                        } else {
+                            const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+                            self.env_map = Texture.initFloat(self.rhi, 1, 1, &white_pixel);
+                            self.env_map.?.bind(9);
+                        }
                     }
                 },
                 .singleplayer => try Menus.drawSingleplayer(ctx, &self.app_state, &self.seed_input, &self.seed_focused, &self.pending_new_world_seed),

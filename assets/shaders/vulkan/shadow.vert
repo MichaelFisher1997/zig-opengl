@@ -6,7 +6,9 @@ layout(push_constant) uniform ModelUniforms {
     mat4 view_proj;
     mat4 model;
     float mask_radius;
-    vec3 padding;
+    float _pad0;
+    float _pad1;
+    float _pad2;
 } pc;
 
 void main() {

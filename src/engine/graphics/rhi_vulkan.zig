@@ -37,19 +37,11 @@ const GlobalUniforms = extern struct {
     cam_pos: [4]f32, // Camera world position (w unused)
     sun_dir: [4]f32, // Sun direction (w unused)
     fog_color: [4]f32, // Fog RGB (a unused)
-    time: f32,
-    fog_density: f32,
-    fog_enabled: f32, // 0.0 or 1.0
-    sun_intensity: f32,
-    ambient: f32,
-    use_texture: f32, // 0.0 = vertex colors, 1.0 = textures
-    cloud_wind_offset: [2]f32,
-    cloud_scale: f32,
-    cloud_coverage: f32,
-    cloud_shadow_strength: f32,
-    cloud_height: f32,
-    pbr_enabled: f32, // 1.0 = PBR textures available
-    padding: f32, // Align to 16 bytes
+    cloud_wind_offset: [4]f32, // xy = offset, z = scale, w = coverage
+    params: [4]f32, // x = time, y = fog_density, z = fog_enabled, w = sun_intensity
+    lighting: [4]f32, // x = ambient, y = use_texture, z = pbr_enabled, w = cloud_shadow_strength
+    cloud_params: [4]f32, // x = cloud_height, y = shadow_samples, z = shadow_blend, w = cloud_shadows
+    pbr_params: [4]f32, // x = pbr_quality, yzw = padding
 };
 
 /// Shadow cascade uniforms for CSM. Bound to descriptor set 0, binding 2.
@@ -157,8 +149,10 @@ const StagingBuffer = struct {
 /// Owns Vulkan objects and manages their lifecycle.
 const VulkanContext = struct {
     allocator: std.mem.Allocator,
-    render_device: ?*RenderDevice,
+    window: *c.SDL_Window,
+    render_device: ?*anyopaque,
     instance: c.VkInstance,
+
     surface: c.VkSurfaceKHR,
     physical_device: c.VkPhysicalDevice,
     vk_device: c.VkDevice,
@@ -202,8 +196,10 @@ const VulkanContext = struct {
 
     // Uniforms
     global_ubos: [MAX_FRAMES_IN_FLIGHT]VulkanBuffer,
+    global_ubos_mapped: [MAX_FRAMES_IN_FLIGHT]?*anyopaque,
     model_ubo: VulkanBuffer,
     shadow_ubos: [MAX_FRAMES_IN_FLIGHT]VulkanBuffer,
+    shadow_ubos_mapped: [MAX_FRAMES_IN_FLIGHT]?*anyopaque,
     descriptor_pool: c.VkDescriptorPool,
     descriptor_set_layout: c.VkDescriptorSetLayout,
     descriptor_sets: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSet,
@@ -226,34 +222,17 @@ const VulkanContext = struct {
     textures: std.AutoHashMap(rhi.TextureHandle, TextureResource),
     next_texture_handle: rhi.TextureHandle,
     current_texture: rhi.TextureHandle,
-
-    mutex: std.Thread.Mutex,
-
-    memory_type_index: u32, // Host visible coherent
-
-    current_model: Mat4,
-    current_mask_radius: f32,
-
-    // For swapchain recreation
-    window: *c.SDL_Window,
-    framebuffer_resized: bool,
-    frame_in_progress: bool,
-    main_pass_active: bool,
-    shadow_pass_active: bool,
-    shadow_pass_index: u32,
-    shadow_pass_matrix: Mat4,
-    current_view_proj: Mat4,
-
-    clear_color: [4]f32,
-
-    // Debug
-    draw_call_count: u32,
-
-    // Frame-level state tracking (for optimization)
-    terrain_pipeline_bound: bool,
-    shadow_pipeline_bound: bool,
-    descriptors_updated: bool,
+    current_normal_texture: rhi.TextureHandle,
+    current_roughness_texture: rhi.TextureHandle,
+    current_displacement_texture: rhi.TextureHandle,
+    current_env_texture: rhi.TextureHandle,
     bound_texture: rhi.TextureHandle,
+    bound_normal_texture: rhi.TextureHandle,
+    bound_roughness_texture: rhi.TextureHandle,
+    bound_displacement_texture: rhi.TextureHandle,
+    bound_env_texture: rhi.TextureHandle,
+    bound_shadow_views: [rhi.SHADOW_CASCADE_COUNT]c.VkImageView,
+    descriptors_dirty: [MAX_FRAMES_IN_FLIGHT]bool,
 
     // Rendering options
     wireframe_enabled: bool,
@@ -272,13 +251,30 @@ const VulkanContext = struct {
     msaa_color_view: c.VkImageView,
 
     shadow_resolution: u32,
+    memory_type_index: u32,
+    framebuffer_resized: bool,
+    draw_call_count: u32,
+    main_pass_active: bool,
+    shadow_pass_active: bool,
+    shadow_pass_index: u32,
+    frame_in_progress: bool,
+    terrain_pipeline_bound: bool,
+    shadow_pipeline_bound: bool,
+    descriptors_updated: bool,
+    shadow_pass_matrix: Mat4,
+    current_view_proj: Mat4,
+    current_model: Mat4,
+    current_mask_radius: f32,
+    mutex: std.Thread.Mutex,
+    clear_color: [4]f32,
 
     // Shadow resources
-    shadow_images: [rhi.SHADOW_CASCADE_COUNT]c.VkImage,
-    shadow_image_memory: [rhi.SHADOW_CASCADE_COUNT]c.VkDeviceMemory,
+    shadow_image: c.VkImage,
+    shadow_image_memory: c.VkDeviceMemory,
+    shadow_image_view: c.VkImageView,
     shadow_image_views: [rhi.SHADOW_CASCADE_COUNT]c.VkImageView,
-    shadow_framebuffers: [rhi.SHADOW_CASCADE_COUNT]c.VkFramebuffer,
     shadow_image_layouts: [rhi.SHADOW_CASCADE_COUNT]c.VkImageLayout,
+    shadow_framebuffers: [rhi.SHADOW_CASCADE_COUNT]c.VkFramebuffer,
     shadow_sampler: c.VkSampler,
     shadow_extent: c.VkExtent2D,
 
@@ -1304,13 +1300,15 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
         .{ .binding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT },
         .{ .binding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
         .{ .binding = 2, .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
-        .{ .binding = 3, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
-        .{ .binding = 4, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
-        .{ .binding = 5, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+        .{ .binding = 3, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Shadow Array
+        .{ .binding = 6, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Normal
+        .{ .binding = 7, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Roughness
+        .{ .binding = 8, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Disp
+        .{ .binding = 9, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Env Map
     };
     var layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
     layout_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout_info.bindingCount = 6;
+    layout_info.bindingCount = @intCast(layout_bindings.len);
     layout_info.pBindings = &layout_bindings[0];
     try checkVk(c.vkCreateDescriptorSetLayout(ctx.vk_device, &layout_info, null, &ctx.descriptor_set_layout));
 
@@ -1405,30 +1403,46 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
     try checkVk(c.vkCreateRenderPass(ctx.vk_device, &shadow_rp_info, null, &ctx.shadow_render_pass));
 
     ctx.shadow_extent = .{ .width = shadow_res, .height = shadow_res };
+
+    var shadow_img_info = std.mem.zeroes(c.VkImageCreateInfo);
+    shadow_img_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    shadow_img_info.imageType = c.VK_IMAGE_TYPE_2D;
+    shadow_img_info.extent = .{ .width = shadow_res, .height = shadow_res, .depth = 1 };
+    shadow_img_info.mipLevels = 1;
+    shadow_img_info.arrayLayers = rhi.SHADOW_CASCADE_COUNT;
+    shadow_img_info.format = depth_format;
+    shadow_img_info.tiling = c.VK_IMAGE_TILING_OPTIMAL;
+    shadow_img_info.usage = c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT;
+    shadow_img_info.samples = c.VK_SAMPLE_COUNT_1_BIT;
+    try checkVk(c.vkCreateImage(ctx.vk_device, &shadow_img_info, null, &ctx.shadow_image));
+
+    var mem_reqs: c.VkMemoryRequirements = undefined;
+    c.vkGetImageMemoryRequirements(ctx.vk_device, ctx.shadow_image, &mem_reqs);
+    var alloc_info = c.VkMemoryAllocateInfo{ .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = mem_reqs.size, .memoryTypeIndex = findMemoryType(ctx.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) };
+    try checkVk(c.vkAllocateMemory(ctx.vk_device, &alloc_info, null, &ctx.shadow_image_memory));
+    try checkVk(c.vkBindImageMemory(ctx.vk_device, ctx.shadow_image, ctx.shadow_image_memory, 0));
+
+    // Full array view for sampling
+    var array_view_info = std.mem.zeroes(c.VkImageViewCreateInfo);
+    array_view_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    array_view_info.image = ctx.shadow_image;
+    array_view_info.viewType = c.VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    array_view_info.format = depth_format;
+    array_view_info.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = rhi.SHADOW_CASCADE_COUNT };
+    try checkVk(c.vkCreateImageView(ctx.vk_device, &array_view_info, null, &ctx.shadow_image_view));
+
+    // Layered views for framebuffers (one per cascade)
     for (0..rhi.SHADOW_CASCADE_COUNT) |si| {
-        var shadow_img_info = std.mem.zeroes(c.VkImageCreateInfo);
-        shadow_img_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        shadow_img_info.imageType = c.VK_IMAGE_TYPE_2D;
-        shadow_img_info.extent = .{ .width = shadow_res, .height = shadow_res, .depth = 1 };
-        shadow_img_info.mipLevels = 1;
-        shadow_img_info.arrayLayers = 1;
-        shadow_img_info.format = depth_format;
-        shadow_img_info.tiling = c.VK_IMAGE_TILING_OPTIMAL;
-        shadow_img_info.usage = c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT;
-        shadow_img_info.samples = c.VK_SAMPLE_COUNT_1_BIT;
-        try checkVk(c.vkCreateImage(ctx.vk_device, &shadow_img_info, null, &ctx.shadow_images[si]));
-        var mem_reqs: c.VkMemoryRequirements = undefined;
-        c.vkGetImageMemoryRequirements(ctx.vk_device, ctx.shadow_images[si], &mem_reqs);
-        var alloc_info = c.VkMemoryAllocateInfo{ .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = mem_reqs.size, .memoryTypeIndex = findMemoryType(ctx.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) };
-        try checkVk(c.vkAllocateMemory(ctx.vk_device, &alloc_info, null, &ctx.shadow_image_memory[si]));
-        try checkVk(c.vkBindImageMemory(ctx.vk_device, ctx.shadow_images[si], ctx.shadow_image_memory[si], 0));
+        var layer_view: c.VkImageView = null;
         var view_info = std.mem.zeroes(c.VkImageViewCreateInfo);
         view_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        view_info.image = ctx.shadow_images[si];
+        view_info.image = ctx.shadow_image;
         view_info.viewType = c.VK_IMAGE_VIEW_TYPE_2D;
         view_info.format = depth_format;
-        view_info.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
-        try checkVk(c.vkCreateImageView(ctx.vk_device, &view_info, null, &ctx.shadow_image_views[si]));
+        view_info.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = @intCast(si), .layerCount = 1 };
+        try checkVk(c.vkCreateImageView(ctx.vk_device, &view_info, null, &layer_view));
+        ctx.shadow_image_views[si] = layer_view;
+
         var fb_info = std.mem.zeroes(c.VkFramebufferCreateInfo);
         fb_info.sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         fb_info.renderPass = ctx.shadow_render_pass;
@@ -1438,7 +1452,6 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
         fb_info.height = shadow_res;
         fb_info.layers = 1;
         try checkVk(c.vkCreateFramebuffer(ctx.vk_device, &fb_info, null, &ctx.shadow_framebuffers[si]));
-
         ctx.shadow_image_layouts[si] = c.VK_IMAGE_LAYOUT_UNDEFINED;
     }
 
@@ -1522,15 +1535,20 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
         ctx.global_ubos[i] = createVulkanBuffer(ctx, @sizeOf(GlobalUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         ctx.shadow_ubos[i] = createVulkanBuffer(ctx, @sizeOf(ShadowUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         ctx.ui_vbos[i] = createVulkanBuffer(ctx, 1024 * 1024, c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        // Persistent mapping for UBOs
+        _ = c.vkMapMemory(ctx.vk_device, ctx.global_ubos[i].memory, 0, @sizeOf(GlobalUniforms), 0, &ctx.global_ubos_mapped[i]);
+        _ = c.vkMapMemory(ctx.vk_device, ctx.shadow_ubos[i].memory, 0, @sizeOf(ShadowUniforms), 0, &ctx.shadow_ubos_mapped[i]);
+        ctx.descriptors_dirty[i] = true;
     }
     ctx.model_ubo = createVulkanBuffer(ctx, @sizeOf(ModelUniforms) * 1000, c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
-    var pool_sizes = [_]c.VkDescriptorPoolSize{ .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 2 * MAX_FRAMES_IN_FLIGHT }, .{ .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 10 * MAX_FRAMES_IN_FLIGHT } };
+    var pool_sizes = [_]c.VkDescriptorPoolSize{ .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 10 * MAX_FRAMES_IN_FLIGHT }, .{ .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 20 * MAX_FRAMES_IN_FLIGHT } };
     var dp_info = std.mem.zeroes(c.VkDescriptorPoolCreateInfo);
     dp_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dp_info.poolSizeCount = 2;
     dp_info.pPoolSizes = &pool_sizes[0];
-    dp_info.maxSets = 10 * MAX_FRAMES_IN_FLIGHT;
+    dp_info.maxSets = 20 * MAX_FRAMES_IN_FLIGHT;
     try checkVk(c.vkCreateDescriptorPool(ctx.vk_device, &dp_info, null, &ctx.descriptor_pool));
 
     for (0..MAX_FRAMES_IN_FLIGHT) |i| {
@@ -1557,6 +1575,9 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
     shadow_sampler_info.addressModeV = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     shadow_sampler_info.addressModeW = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     shadow_sampler_info.borderColor = c.VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    shadow_sampler_info.compareEnable = c.VK_TRUE;
+    // Reverse-Z: Lit if Ref >= Tex (Closer/Larger Z >= Stored Depth)
+    shadow_sampler_info.compareOp = c.VK_COMPARE_OP_GREATER_OR_EQUAL;
     try checkVk(c.vkCreateSampler(ctx.vk_device, &shadow_sampler_info, null, &ctx.shadow_sampler));
 
     // Create Debug Shadow VBO (6 vertices for fullscreen quad)
@@ -1602,10 +1623,219 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
         try checkVk(c.vkCreateFence(ctx.vk_device, &fen_info, null, &ctx.in_flight_fences[i]));
     }
 
-    // 15. Create Dummy Texture for Descriptor set validity
+    // 15. Create Dummy Shadow resources for Descriptor set validity
+    {
+        var dummy_img_info = std.mem.zeroes(c.VkImageCreateInfo);
+        dummy_img_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        dummy_img_info.imageType = c.VK_IMAGE_TYPE_2D;
+        dummy_img_info.extent = .{ .width = 1, .height = 1, .depth = 1 };
+        dummy_img_info.mipLevels = 1;
+        dummy_img_info.arrayLayers = rhi.SHADOW_CASCADE_COUNT;
+        dummy_img_info.format = depth_format;
+        dummy_img_info.tiling = c.VK_IMAGE_TILING_OPTIMAL;
+        dummy_img_info.usage = c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT;
+        dummy_img_info.samples = c.VK_SAMPLE_COUNT_1_BIT;
+        try checkVk(c.vkCreateImage(ctx.vk_device, &dummy_img_info, null, &ctx.dummy_shadow_image));
+
+        var dummy_mem_reqs: c.VkMemoryRequirements = undefined;
+        c.vkGetImageMemoryRequirements(ctx.vk_device, ctx.dummy_shadow_image, &dummy_mem_reqs);
+        var dummy_alloc_info = c.VkMemoryAllocateInfo{ .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = dummy_mem_reqs.size, .memoryTypeIndex = findMemoryType(ctx.physical_device, dummy_mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) };
+        try checkVk(c.vkAllocateMemory(ctx.vk_device, &dummy_alloc_info, null, &ctx.dummy_shadow_memory));
+        try checkVk(c.vkBindImageMemory(ctx.vk_device, ctx.dummy_shadow_image, ctx.dummy_shadow_memory, 0));
+
+        var view_info = std.mem.zeroes(c.VkImageViewCreateInfo);
+        view_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image = ctx.dummy_shadow_image;
+        view_info.viewType = c.VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        view_info.format = depth_format;
+        view_info.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = rhi.SHADOW_CASCADE_COUNT };
+        try checkVk(c.vkCreateImageView(ctx.vk_device, &view_info, null, &ctx.dummy_shadow_view));
+    }
+
+    // 15b. Transition shadow images to SHADER_READ_ONLY_OPTIMAL so they're valid for sampling
+    // before any shadow passes have rendered. This prevents GPU hangs from sampling UNDEFINED layout.
+    {
+        var cmd_alloc_info = std.mem.zeroes(c.VkCommandBufferAllocateInfo);
+        cmd_alloc_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cmd_alloc_info.commandPool = ctx.command_pool;
+        cmd_alloc_info.level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cmd_alloc_info.commandBufferCount = 1;
+
+        var init_cmd: c.VkCommandBuffer = null;
+        try checkVk(c.vkAllocateCommandBuffers(ctx.vk_device, &cmd_alloc_info, &init_cmd));
+
+        var begin_info = std.mem.zeroes(c.VkCommandBufferBeginInfo);
+        begin_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        try checkVk(c.vkBeginCommandBuffer(init_cmd, &begin_info));
+
+        // Transition main shadow image (all cascade layers)
+        var shadow_barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
+        shadow_barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        shadow_barrier.oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
+        shadow_barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        shadow_barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+        shadow_barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+        shadow_barrier.image = ctx.shadow_image;
+        shadow_barrier.subresourceRange.aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT;
+        shadow_barrier.subresourceRange.baseMipLevel = 0;
+        shadow_barrier.subresourceRange.levelCount = 1;
+        shadow_barrier.subresourceRange.baseArrayLayer = 0;
+        shadow_barrier.subresourceRange.layerCount = rhi.SHADOW_CASCADE_COUNT;
+        shadow_barrier.srcAccessMask = 0;
+        shadow_barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+
+        c.vkCmdPipelineBarrier(init_cmd, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &shadow_barrier);
+
+        // Transition dummy shadow image (all cascade layers)
+        var dummy_barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
+        dummy_barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        dummy_barrier.oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
+        dummy_barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        dummy_barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+        dummy_barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+        dummy_barrier.image = ctx.dummy_shadow_image;
+        dummy_barrier.subresourceRange.aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT;
+        dummy_barrier.subresourceRange.baseMipLevel = 0;
+        dummy_barrier.subresourceRange.levelCount = 1;
+        dummy_barrier.subresourceRange.baseArrayLayer = 0;
+        dummy_barrier.subresourceRange.layerCount = rhi.SHADOW_CASCADE_COUNT;
+        dummy_barrier.srcAccessMask = 0;
+        dummy_barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+
+        c.vkCmdPipelineBarrier(init_cmd, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &dummy_barrier);
+
+        try checkVk(c.vkEndCommandBuffer(init_cmd));
+
+        var submit_info = std.mem.zeroes(c.VkSubmitInfo);
+        submit_info.sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &init_cmd;
+
+        try checkVk(c.vkQueueSubmit(ctx.queue, 1, &submit_info, null));
+        try checkVk(c.vkQueueWaitIdle(ctx.queue));
+
+        c.vkFreeCommandBuffers(ctx.vk_device, ctx.command_pool, 1, &init_cmd);
+
+        // Update layout tracking
+        for (0..rhi.SHADOW_CASCADE_COUNT) |si| {
+            ctx.shadow_image_layouts[si] = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+
+        std.log.info("Shadow images transitioned to SHADER_READ_ONLY_OPTIMAL", .{});
+    }
+
+    // 16. Create Dummy Texture for Descriptor set validity
     const white_pixel = [_]u8{ 255, 255, 255, 255 };
     const dummy_handle = createTexture(ctx_ptr, 1, 1, .rgba, .{}, &white_pixel);
     ctx.current_texture = dummy_handle;
+    ctx.current_normal_texture = dummy_handle;
+    ctx.current_roughness_texture = dummy_handle;
+    ctx.current_displacement_texture = dummy_handle;
+    ctx.current_env_texture = dummy_handle;
+
+    // 17. Initialize ALL descriptor bindings with valid resources to prevent undefined behavior
+    // Descriptor sets were only partially written during allocation (bindings 0, 2 for UBOs)
+    // We MUST write texture bindings 1, 3, 6, 7, 8 before any draw calls
+    {
+        ctx.mutex.lock();
+        const dummy_tex = ctx.textures.get(dummy_handle);
+        ctx.mutex.unlock();
+
+        if (dummy_tex) |tex| {
+            for (0..MAX_FRAMES_IN_FLIGHT) |frame_idx| {
+                var image_infos: [6]c.VkDescriptorImageInfo = undefined;
+                var writes: [6]c.VkWriteDescriptorSet = undefined;
+
+                // Binding 1: Main texture atlas (dummy)
+                image_infos[0] = .{
+                    .sampler = tex.sampler,
+                    .imageView = tex.view,
+                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                };
+                writes[0] = std.mem.zeroes(c.VkWriteDescriptorSet);
+                writes[0].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[0].dstSet = ctx.descriptor_sets[frame_idx];
+                writes[0].dstBinding = 1;
+                writes[0].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[0].descriptorCount = 1;
+                writes[0].pImageInfo = &image_infos[0];
+
+                // Binding 3: Shadow array (using proper shadow view)
+                image_infos[1] = .{
+                    .sampler = ctx.shadow_sampler,
+                    .imageView = ctx.shadow_image_view,
+                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                };
+                writes[1] = std.mem.zeroes(c.VkWriteDescriptorSet);
+                writes[1].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[1].dstSet = ctx.descriptor_sets[frame_idx];
+                writes[1].dstBinding = 3;
+                writes[1].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[1].descriptorCount = 1;
+                writes[1].pImageInfo = &image_infos[1];
+
+                // Binding 6: Normal map (dummy)
+                image_infos[2] = .{
+                    .sampler = tex.sampler,
+                    .imageView = tex.view,
+                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                };
+                writes[2] = std.mem.zeroes(c.VkWriteDescriptorSet);
+                writes[2].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[2].dstSet = ctx.descriptor_sets[frame_idx];
+                writes[2].dstBinding = 6;
+                writes[2].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[2].descriptorCount = 1;
+                writes[2].pImageInfo = &image_infos[2];
+
+                // Binding 7: Roughness map (dummy)
+                image_infos[3] = .{
+                    .sampler = tex.sampler,
+                    .imageView = tex.view,
+                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                };
+                writes[3] = std.mem.zeroes(c.VkWriteDescriptorSet);
+                writes[3].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[3].dstSet = ctx.descriptor_sets[frame_idx];
+                writes[3].dstBinding = 7;
+                writes[3].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[3].descriptorCount = 1;
+                writes[3].pImageInfo = &image_infos[3];
+
+                // Binding 8: Displacement map (dummy)
+                image_infos[4] = .{
+                    .sampler = tex.sampler,
+                    .imageView = tex.view,
+                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                };
+                writes[4] = std.mem.zeroes(c.VkWriteDescriptorSet);
+                writes[4].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[4].dstSet = ctx.descriptor_sets[frame_idx];
+                writes[4].dstBinding = 8;
+                writes[4].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[4].descriptorCount = 1;
+                writes[4].pImageInfo = &image_infos[4];
+
+                // Binding 9: Environment Map (dummy)
+                image_infos[5] = .{
+                    .sampler = tex.sampler,
+                    .imageView = tex.view,
+                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                };
+                writes[5] = std.mem.zeroes(c.VkWriteDescriptorSet);
+                writes[5].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[5].dstSet = ctx.descriptor_sets[frame_idx];
+                writes[5].dstBinding = 9;
+                writes[5].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[5].descriptorCount = 1;
+                writes[5].pImageInfo = &image_infos[5];
+
+                c.vkUpdateDescriptorSets(ctx.vk_device, 6, &writes[0], 0, null);
+            }
+            std.log.info("All descriptor bindings initialized with valid resources", .{});
+        }
+    }
 
     std.log.info("Vulkan initialized successfully!", .{});
 }
@@ -1652,9 +1882,11 @@ fn deinit(ctx_ptr: *anyopaque) void {
         for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
             if (ctx.shadow_framebuffers[i] != null) c.vkDestroyFramebuffer(ctx.vk_device, ctx.shadow_framebuffers[i], null);
             if (ctx.shadow_image_views[i] != null) c.vkDestroyImageView(ctx.vk_device, ctx.shadow_image_views[i], null);
-            if (ctx.shadow_images[i] != null) c.vkDestroyImage(ctx.vk_device, ctx.shadow_images[i], null);
-            if (ctx.shadow_image_memory[i] != null) c.vkFreeMemory(ctx.vk_device, ctx.shadow_image_memory[i], null);
         }
+        if (ctx.shadow_image_view != null) c.vkDestroyImageView(ctx.vk_device, ctx.shadow_image_view, null);
+        if (ctx.shadow_image != null) c.vkDestroyImage(ctx.vk_device, ctx.shadow_image, null);
+        if (ctx.shadow_image_memory != null) c.vkFreeMemory(ctx.vk_device, ctx.shadow_image_memory, null);
+
         if (ctx.shadow_render_pass != null) c.vkDestroyRenderPass(ctx.vk_device, ctx.shadow_render_pass, null);
         if (ctx.shadow_sampler != null) c.vkDestroySampler(ctx.vk_device, ctx.shadow_sampler, null);
 
@@ -1695,6 +1927,9 @@ fn deinit(ctx_ptr: *anyopaque) void {
 
         // Clean up UBOS
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            if (ctx.global_ubos_mapped[i] != null) c.vkUnmapMemory(ctx.vk_device, ctx.global_ubos[i].memory);
+            if (ctx.shadow_ubos_mapped[i] != null) c.vkUnmapMemory(ctx.vk_device, ctx.shadow_ubos[i].memory);
+
             if (ctx.global_ubos[i].buffer != null) c.vkDestroyBuffer(ctx.vk_device, ctx.global_ubos[i].buffer, null);
             if (ctx.global_ubos[i].memory != null) c.vkFreeMemory(ctx.vk_device, ctx.global_ubos[i].memory, null);
             if (ctx.shadow_ubos[i].buffer != null) c.vkDestroyBuffer(ctx.vk_device, ctx.shadow_ubos[i].buffer, null);
@@ -2035,61 +2270,101 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
 
     ctx.frame_in_progress = true;
 
-    // Static descriptor updates (Shadow maps) - only update if they changed or on first frame
-    // For now, we update them here once per frame but they are safe because we waited for the fence.
+    // Static descriptor updates (Atlases & Shadow maps)
     ctx.mutex.lock();
-    const tex_opt = ctx.textures.get(ctx.current_texture);
-    const dummy_opt = if (tex_opt == null) ctx.textures.get(1) else null; // Use dummy (handle 1) if nothing bound
+    const cur_tex = ctx.current_texture;
+    const cur_nor = ctx.current_normal_texture;
+    const cur_rou = ctx.current_roughness_texture;
+    const cur_dis = ctx.current_displacement_texture;
+    const cur_env = ctx.current_env_texture;
     ctx.mutex.unlock();
 
-    var writes: [4]c.VkWriteDescriptorSet = undefined;
-    var write_count: u32 = 0;
+    // Check if any texture bindings or shadow views changed since last frame
+    var needs_update = false;
+    if (ctx.bound_texture != cur_tex) needs_update = true;
+    if (ctx.bound_normal_texture != cur_nor) needs_update = true;
+    if (ctx.bound_roughness_texture != cur_rou) needs_update = true;
+    if (ctx.bound_displacement_texture != cur_dis) needs_update = true;
+    if (ctx.bound_env_texture != cur_env) needs_update = true;
 
-    var image_info: c.VkDescriptorImageInfo = undefined;
-    const final_tex = tex_opt orelse dummy_opt;
-    if (final_tex) |tex| {
-        image_info = .{
-            .sampler = tex.sampler,
-            .imageView = tex.view,
-            .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        };
-
-        writes[write_count] = std.mem.zeroes(c.VkWriteDescriptorSet);
-        writes[write_count].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[write_count].dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
-        writes[write_count].dstBinding = 1;
-        writes[write_count].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[write_count].descriptorCount = 1;
-        writes[write_count].pImageInfo = &image_info;
-        write_count += 1;
+    for (0..rhi.SHADOW_CASCADE_COUNT) |si| {
+        if (ctx.bound_shadow_views[si] != ctx.shadow_image_views[si]) needs_update = true;
     }
 
-    var shadow_infos: [3]c.VkDescriptorImageInfo = undefined;
-    for (0..rhi.SHADOW_CASCADE_COUNT) |si| {
-        if (ctx.shadow_image_views[si] != null) {
-            shadow_infos[si] = .{
+    // Also update if we've cycled back to this frame in flight and haven't updated this set yet
+    if (needs_update) {
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| ctx.descriptors_dirty[i] = true;
+        // Update tracking immediately so next frame doesn't re-trigger a dirty state for all frames
+        ctx.bound_texture = cur_tex;
+        ctx.bound_normal_texture = cur_nor;
+        ctx.bound_roughness_texture = cur_rou;
+        ctx.bound_displacement_texture = cur_dis;
+        ctx.bound_env_texture = cur_env;
+        for (0..rhi.SHADOW_CASCADE_COUNT) |si| ctx.bound_shadow_views[si] = ctx.shadow_image_views[si];
+    }
+
+    if (ctx.descriptors_dirty[ctx.current_sync_frame]) {
+        var writes: [10]c.VkWriteDescriptorSet = undefined;
+        var write_count: u32 = 0;
+        var image_infos: [10]c.VkDescriptorImageInfo = undefined;
+        var info_count: u32 = 0;
+
+        const dummy_tex_entry = ctx.textures.get(1); // Default dummy
+
+        const atlas_slots = [_]struct { handle: rhi.TextureHandle, binding: u32 }{
+            .{ .handle = cur_tex, .binding = 1 },
+            .{ .handle = cur_nor, .binding = 6 },
+            .{ .handle = cur_rou, .binding = 7 },
+            .{ .handle = cur_dis, .binding = 8 },
+            .{ .handle = cur_env, .binding = 9 },
+        };
+
+        for (atlas_slots) |slot| {
+            const entry = ctx.textures.get(slot.handle) orelse dummy_tex_entry;
+            if (entry) |tex| {
+                image_infos[info_count] = .{
+                    .sampler = tex.sampler,
+                    .imageView = tex.view,
+                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                };
+                writes[write_count] = std.mem.zeroes(c.VkWriteDescriptorSet);
+                writes[write_count].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[write_count].dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
+                writes[write_count].dstBinding = slot.binding;
+                writes[write_count].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[write_count].descriptorCount = 1;
+                writes[write_count].pImageInfo = &image_infos[info_count];
+                write_count += 1;
+                info_count += 1;
+            }
+        }
+
+        // Shadows
+        {
+            image_infos[info_count] = .{
                 .sampler = ctx.shadow_sampler,
-                .imageView = ctx.shadow_image_views[si],
+                .imageView = ctx.shadow_image_view,
                 .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             };
-
             writes[write_count] = std.mem.zeroes(c.VkWriteDescriptorSet);
             writes[write_count].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[write_count].dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
-            writes[write_count].dstBinding = @intCast(3 + si);
+            writes[write_count].dstBinding = 3;
             writes[write_count].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[write_count].descriptorCount = 1;
-            writes[write_count].pImageInfo = &shadow_infos[si];
+            writes[write_count].pImageInfo = &image_infos[info_count];
             write_count += 1;
+            info_count += 1;
         }
-    }
 
-    if (write_count > 0) {
-        c.vkUpdateDescriptorSets(ctx.vk_device, write_count, &writes[0], 0, null);
+        if (write_count > 0) {
+            c.vkUpdateDescriptorSets(ctx.vk_device, write_count, &writes[0], 0, null);
+        }
+
+        ctx.descriptors_dirty[ctx.current_sync_frame] = false;
     }
 
     ctx.descriptors_updated = true;
-    ctx.bound_texture = ctx.current_texture;
 }
 
 fn abortFrame(ctx_ptr: *anyopaque) void {
@@ -2210,23 +2485,22 @@ fn setClearColor(ctx_ptr: *anyopaque, color: Vec3) void {
 
 fn transitionShadowImage(ctx: *VulkanContext, cascade_index: u32, new_layout: c.VkImageLayout) void {
     if (cascade_index >= rhi.SHADOW_CASCADE_COUNT) return;
-    if (ctx.shadow_images[cascade_index] == null) return;
+    if (ctx.shadow_image == null) return;
 
     const old_layout = ctx.shadow_image_layouts[cascade_index];
     if (old_layout == new_layout) return;
 
     var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
     barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    // Always use UNDEFINED as old layout when going to ATTACHMENT_OPTIMAL to avoid layout mismatch errors
     barrier.oldLayout = if (new_layout == c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) c.VK_IMAGE_LAYOUT_UNDEFINED else old_layout;
     barrier.newLayout = new_layout;
     barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = ctx.shadow_images[cascade_index];
+    barrier.image = ctx.shadow_image;
     barrier.subresourceRange.aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT;
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.baseArrayLayer = @intCast(cascade_index);
     barrier.subresourceRange.layerCount = 1;
 
     var src_stage: c.VkPipelineStageFlags = c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -2331,27 +2605,16 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
         .cam_pos = .{ cam_pos.x, cam_pos.y, cam_pos.z, 0 },
         .sun_dir = .{ sun_dir.x, sun_dir.y, sun_dir.z, 0 },
         .fog_color = .{ fog_color.x, fog_color.y, fog_color.z, 1 },
-        .time = time_val,
-        .fog_density = fog_density,
-        .fog_enabled = if (fog_enabled) 1.0 else 0.0,
-        .sun_intensity = sun_intensity,
-        .ambient = ambient,
-        .use_texture = if (use_texture) 1.0 else 0.0,
-        .cloud_wind_offset = .{ cloud_params.wind_offset_x, cloud_params.wind_offset_z },
-        .cloud_scale = cloud_params.cloud_scale,
-        .cloud_coverage = cloud_params.cloud_coverage,
-        .cloud_shadow_strength = 0.15,
-        .cloud_height = cloud_params.cloud_height,
-        .pbr_enabled = if (cloud_params.pbr_enabled) 1.0 else 0.0,
-        .padding = 0,
+        .cloud_wind_offset = .{ cloud_params.wind_offset_x, cloud_params.wind_offset_z, cloud_params.cloud_scale, cloud_params.cloud_coverage },
+        .params = .{ time_val, fog_density, if (fog_enabled) 1.0 else 0.0, sun_intensity },
+        .lighting = .{ ambient, if (use_texture) 1.0 else 0.0, if (cloud_params.pbr_enabled) 1.0 else 0.0, 0.15 },
+        .cloud_params = .{ cloud_params.cloud_height, @floatFromInt(cloud_params.shadow_samples), if (cloud_params.shadow_blend) 1.0 else 0.0, if (cloud_params.cloud_shadows) 1.0 else 0.0 },
+        .pbr_params = .{ @floatFromInt(cloud_params.pbr_quality), 0, 0, 0 },
     };
 
-    var map_ptr: ?*anyopaque = null;
-    const global_ubo = ctx.global_ubos[ctx.current_sync_frame];
-    if (c.vkMapMemory(ctx.vk_device, global_ubo.memory, 0, @sizeOf(GlobalUniforms), 0, &map_ptr) == c.VK_SUCCESS) {
+    if (ctx.global_ubos_mapped[ctx.current_sync_frame]) |map_ptr| {
         const mapped: *GlobalUniforms = @ptrCast(@alignCast(map_ptr));
         mapped.* = uniforms;
-        c.vkUnmapMemory(ctx.vk_device, global_ubo.memory);
     }
 }
 
@@ -2364,16 +2627,9 @@ fn setModelMatrix(ctx_ptr: *anyopaque, model: Mat4, mask_radius: f32) void {
 fn setTextureUniforms(ctx_ptr: *anyopaque, texture_enabled: bool, shadow_map_handles: [rhi.SHADOW_CASCADE_COUNT]rhi.TextureHandle) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.textures_enabled = texture_enabled;
-    // Force descriptor update so internal shadow maps are bound even if handles are 0
+    _ = shadow_map_handles;
+    // Force descriptor update so internal shadow maps are bound
     ctx.descriptors_updated = false;
-
-    for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
-        if (shadow_map_handles[i] != 0) {
-            if (ctx.textures.get(shadow_map_handles[i])) |tex| {
-                ctx.shadow_image_views[i] = tex.view;
-            }
-        }
-    }
 }
 
 fn drawClouds(ctx_ptr: *anyopaque, params: rhi.CloudParams) void {
@@ -2497,6 +2753,7 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
         .rgb => c.VK_FORMAT_R8G8B8_UNORM,
         .red => c.VK_FORMAT_R8_UNORM,
         .depth => c.VK_FORMAT_D32_SFLOAT,
+        .rgba32f => c.VK_FORMAT_R32G32B32A32_SFLOAT,
     };
 
     // Calculate mip levels
@@ -2856,10 +3113,16 @@ fn destroyTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle) void {
 
 fn bindTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, slot: u32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    _ = slot;
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
-    ctx.current_texture = handle;
+    switch (slot) {
+        0, 1 => ctx.current_texture = handle,
+        6 => ctx.current_normal_texture = handle,
+        7 => ctx.current_roughness_texture = handle,
+        8 => ctx.current_displacement_texture = handle,
+        9 => ctx.current_env_texture = handle,
+        else => ctx.current_texture = handle,
+    }
 }
 
 fn updateTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u8) void {
@@ -3198,27 +3461,20 @@ fn drawOffset(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: r
                         c.vkUpdateDescriptorSets(ctx.vk_device, 1, &write, 0, null);
                     }
 
+                    // Bind shadow array texture (binding 3) if descriptors not yet updated
                     if (!ctx.descriptors_updated) {
-                        for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
-                            var view = ctx.shadow_image_views[i];
-                            if (view == null) {
-                                ctx.mutex.lock();
-                                const t = ctx.textures.get(ctx.current_texture);
-                                ctx.mutex.unlock();
-                                if (t) |tex| view = tex.view;
-                            }
-                            if (view == null) view = ctx.dummy_shadow_view;
-                            if (view == null) continue;
-
+                        // Use the full shadow array view (not individual cascade views)
+                        const shadow_view = if (ctx.shadow_image_view != null) ctx.shadow_image_view else ctx.dummy_shadow_view;
+                        if (shadow_view != null) {
                             var image_info = c.VkDescriptorImageInfo{
                                 .sampler = ctx.shadow_sampler,
-                                .imageView = view,
+                                .imageView = shadow_view,
                                 .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                             };
                             var write = std.mem.zeroes(c.VkWriteDescriptorSet);
                             write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                             write.dstSet = ctx.descriptor_sets[ctx.current_sync_frame];
-                            write.dstBinding = @intCast(3 + i);
+                            write.dstBinding = 3; // Single array sampler at binding 3
                             write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                             write.descriptorCount = 1;
                             write.pImageInfo = &image_info;
@@ -3501,12 +3757,9 @@ fn updateShadowUniforms(ctx_ptr: *anyopaque, params: rhi.ShadowParams) void {
         .shadow_texel_sizes = sizes,
     };
 
-    var map_ptr: ?*anyopaque = null;
-    const shadow_ubo = ctx.shadow_ubos[ctx.current_sync_frame];
-    if (c.vkMapMemory(ctx.vk_device, shadow_ubo.memory, 0, @sizeOf(ShadowUniforms), 0, &map_ptr) == c.VK_SUCCESS) {
+    if (ctx.shadow_ubos_mapped[ctx.current_sync_frame]) |map_ptr| {
         const mapped: *ShadowUniforms = @ptrCast(@alignCast(map_ptr));
         mapped.* = shadow_uniforms;
-        c.vkUnmapMemory(ctx.vk_device, shadow_ubo.memory);
     }
 }
 
@@ -3731,9 +3984,10 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.max_msaa_samples = 1;
     ctx.shadow_sampler = null;
     ctx.shadow_extent = .{ .width = 0, .height = 0 };
+    ctx.shadow_image = null;
+    ctx.shadow_image_view = null;
+    ctx.shadow_image_memory = null;
     for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
-        ctx.shadow_images[i] = null;
-        ctx.shadow_image_memory[i] = null;
         ctx.shadow_image_views[i] = null;
         ctx.shadow_framebuffers[i] = null;
         ctx.shadow_image_layouts[i] = c.VK_IMAGE_LAYOUT_UNDEFINED;

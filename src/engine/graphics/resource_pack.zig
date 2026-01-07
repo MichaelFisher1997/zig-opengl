@@ -100,6 +100,15 @@ pub const LoadedTexture = struct {
     }
 };
 
+pub const LoadedTextureFloat = struct {
+    pixels: []f32,
+    width: u32,
+    height: u32,
+    pub fn deinit(self: *LoadedTextureFloat, allocator: std.mem.Allocator) void {
+        allocator.free(self.pixels);
+    }
+};
+
 /// PBR texture set for a single block texture
 pub const PBRTextureSet = struct {
     diffuse: ?LoadedTexture,
@@ -382,6 +391,83 @@ pub const ResourcePackManager = struct {
         // Copy to Zig-managed memory
         const size: usize = @intCast(@as(u32, @intCast(width)) * @as(u32, @intCast(height)) * 4);
         const pixels = self.allocator.alloc(u8, size) catch return null;
+        @memcpy(pixels, img_data[0..size]);
+
+        return .{
+            .pixels = pixels,
+            .width = @intCast(width),
+            .height = @intCast(height),
+        };
+    }
+
+    pub fn loadImageFileFloat(self: *Self, path: []const u8) ?LoadedTextureFloat {
+        // Auto-convert EXR to HDR using ImageMagick (since stb_image doesn't support EXR)
+        if (std.mem.endsWith(u8, path, ".exr")) {
+            const hdr_path = std.fmt.allocPrint(self.allocator, "{s}.hdr", .{path}) catch return null;
+            defer self.allocator.free(hdr_path);
+
+            log.log.info("Converting EXR to HDR: {s} -> {s}", .{ path, hdr_path });
+
+            const argv = [_][]const u8{ "magick", path, hdr_path };
+            var child = std.process.Child.init(&argv, self.allocator);
+            const term = child.spawnAndWait() catch |err| {
+                log.log.err("Failed to run ImageMagick: {}", .{err});
+                return null;
+            };
+
+            switch (term) {
+                .Exited => |code| if (code != 0) {
+                    log.log.err("ImageMagick conversion failed with code {}", .{code});
+                    return null;
+                },
+                else => {
+                    log.log.err("ImageMagick terminated abnormally", .{});
+                    return null;
+                },
+            }
+
+            // Load the converted HDR file
+            const result = self.loadImageFileFloat(hdr_path);
+
+            // Clean up temporary file
+            std.fs.cwd().deleteFile(hdr_path) catch |err| {
+                log.log.warn("Failed to delete temp HDR file: {}", .{err});
+            };
+
+            return result;
+        }
+
+        // Read file into memory (200MB limit for large HDRs)
+        const file_data = std.fs.cwd().readFileAlloc(path, self.allocator, @enumFromInt(200 * 1024 * 1024)) catch |err| {
+            log.log.warn("Failed to read float file {s}: {}", .{ path, err });
+            return null;
+        };
+        defer self.allocator.free(file_data);
+
+        log.log.info("Read float file {s}: {} bytes", .{ path, file_data.len });
+
+        var width: c_int = 0;
+        var height: c_int = 0;
+        var channels: c_int = 0;
+
+        // Use stbi_loadf_from_memory for floating point images
+        const img_data = c.stbi_loadf_from_memory(file_data.ptr, @intCast(file_data.len), &width, &height, &channels, 4 // Force RGBA
+        );
+
+        if (img_data == null) {
+            const reason = c.stbi_failure_reason();
+            log.log.warn("stbi_loadf_from_memory failed for {s}: {s}", .{ path, if (reason != null) std.mem.span(reason) else "unknown error" });
+            return null;
+        }
+        defer c.stbi_image_free(img_data);
+
+        log.log.info("Decoded float image {s}: {}x{} channels={}", .{ path, width, height, channels });
+
+        // Copy to Zig memory
+        const pixel_count = @as(usize, @intCast(width)) * @as(usize, @intCast(height));
+        const size = pixel_count * 4; // 4 floats per pixel
+        const pixels = self.allocator.alloc(f32, size) catch return null;
+
         @memcpy(pixels, img_data[0..size]);
 
         return .{

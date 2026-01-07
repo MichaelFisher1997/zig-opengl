@@ -25,25 +25,20 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
     vec4 cam_pos;
     vec4 sun_dir;
     vec4 fog_color;
-    float time;
-    float fog_density;
-    float fog_enabled;
-    float sun_intensity;
-    float ambient;
-    float use_texture;
-    vec2 cloud_wind_offset;
-    float cloud_scale;
-    float cloud_coverage;
-    float cloud_shadow_strength;
-    float cloud_height;
-    float padding[2];
+    vec4 cloud_wind_offset; // xy = offset, z = scale, w = coverage
+    vec4 params; // x = time, y = fog_density, z = fog_enabled, w = sun_intensity
+    vec4 lighting; // x = ambient, y = use_texture, z = pbr_enabled, w = cloud_shadow_strength
+    vec4 cloud_params; // x = cloud_height, y = shadow_samples, z = shadow_blend, w = cloud_shadows
+    vec4 pbr_params; // x = pbr_quality
 } global;
 
 layout(push_constant) uniform ModelUniforms {
     mat4 view_proj;
     mat4 model;
     float mask_radius;
-    vec3 padding;
+    float _pad0;
+    float _pad1;
+    float _pad2;
 } pc;
 
 void main() {

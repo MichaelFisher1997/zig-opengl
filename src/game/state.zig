@@ -7,6 +7,8 @@ pub const AppState = enum {
     paused,
     settings,
     resource_packs,
+    environment,
+    graphics,
 };
 
 pub const Settings = struct {
@@ -25,6 +27,21 @@ pub const Settings = struct {
     window_height: u32 = 1080,
     lod_enabled: bool = false, // Disabled by default due to performance issues
     texture_pack: []const u8 = "default",
+    environment_map: []const u8 = "default", // "default" or filename.exr/hdr
+
+    // PBR Settings
+    pbr_enabled: bool = true,
+    pbr_quality: u8 = 2, // 0=Off, 1=Low (no normal maps), 2=Full
+
+    // Shadow Settings
+    shadow_pcf_samples: u8 = 12, // 4, 8, 12, 16
+    shadow_cascade_blend: bool = true,
+
+    // Cloud Settings
+    cloud_shadows_enabled: bool = true,
+
+    // Texture Settings
+    max_texture_resolution: u32 = 512, // 16, 32, 64, 128, 256, 512
 
     pub const ShadowQuality = struct {
         resolution: u32,
@@ -78,6 +95,73 @@ pub const Settings = struct {
         }
     }
 
+    pub const GraphicsPreset = enum {
+        low,
+        medium,
+        high,
+        ultra,
+        custom,
+    };
+
+    pub const PresetConfig = struct {
+        preset: GraphicsPreset,
+        shadow_quality: u32,
+        shadow_pcf_samples: u8,
+        shadow_cascade_blend: bool,
+        pbr_enabled: bool,
+        pbr_quality: u8,
+        msaa_samples: u8,
+        anisotropic_filtering: u8,
+        max_texture_resolution: u32,
+        cloud_shadows_enabled: bool,
+    };
+
+    pub const GRAPHICS_PRESETS = [_]PresetConfig{
+        // LOW: Prioritize performance
+        .{ .preset = .low, .shadow_quality = 0, .shadow_pcf_samples = 4, .shadow_cascade_blend = false, .pbr_enabled = false, .pbr_quality = 0, .msaa_samples = 1, .anisotropic_filtering = 1, .max_texture_resolution = 64, .cloud_shadows_enabled = false },
+
+        // MEDIUM: Balanced
+        .{ .preset = .medium, .shadow_quality = 1, .shadow_pcf_samples = 8, .shadow_cascade_blend = false, .pbr_enabled = true, .pbr_quality = 1, .msaa_samples = 2, .anisotropic_filtering = 4, .max_texture_resolution = 128, .cloud_shadows_enabled = true },
+
+        // HIGH: Quality focus (target for RX 5700 XT)
+        .{ .preset = .high, .shadow_quality = 2, .shadow_pcf_samples = 12, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 4, .anisotropic_filtering = 8, .max_texture_resolution = 256, .cloud_shadows_enabled = true },
+
+        // ULTRA: Maximum quality
+        .{ .preset = .ultra, .shadow_quality = 3, .shadow_pcf_samples = 16, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 8, .anisotropic_filtering = 16, .max_texture_resolution = 512, .cloud_shadows_enabled = true },
+    };
+
+    pub fn applyPreset(self: *Settings, preset_idx: usize) void {
+        if (preset_idx >= GRAPHICS_PRESETS.len) return;
+        const preset = GRAPHICS_PRESETS[preset_idx];
+        self.shadow_quality = preset.shadow_quality;
+        self.shadow_pcf_samples = preset.shadow_pcf_samples;
+        self.shadow_cascade_blend = preset.shadow_cascade_blend;
+        self.pbr_enabled = preset.pbr_enabled;
+        self.pbr_quality = preset.pbr_quality;
+        self.msaa_samples = preset.msaa_samples;
+        self.anisotropic_filtering = preset.anisotropic_filtering;
+        self.max_texture_resolution = preset.max_texture_resolution;
+        self.cloud_shadows_enabled = preset.cloud_shadows_enabled;
+    }
+
+    pub fn getPresetIndex(self: *const Settings) usize {
+        for (GRAPHICS_PRESETS, 0..) |preset, i| {
+            if (self.shadow_quality == preset.shadow_quality and
+                self.shadow_pcf_samples == preset.shadow_pcf_samples and
+                self.shadow_cascade_blend == preset.shadow_cascade_blend and
+                self.pbr_enabled == preset.pbr_enabled and
+                self.pbr_quality == preset.pbr_quality and
+                self.msaa_samples == preset.msaa_samples and
+                self.anisotropic_filtering == preset.anisotropic_filtering and
+                self.max_texture_resolution == preset.max_texture_resolution and
+                self.cloud_shadows_enabled == preset.cloud_shadows_enabled)
+            {
+                return i;
+            }
+        }
+        return GRAPHICS_PRESETS.len; // Custom
+    }
+
     const CONFIG_DIR = ".config/zigcraft";
     const CONFIG_FILE = "settings.json";
 
@@ -108,6 +192,12 @@ pub const Settings = struct {
             settings.texture_pack = allocator.dupe(u8, settings.texture_pack) catch "default";
         }
 
+        if (std.mem.eql(u8, settings.environment_map, "default")) {
+            settings.environment_map = "default";
+        } else {
+            settings.environment_map = allocator.dupe(u8, settings.environment_map) catch "default";
+        }
+
         std.log.info("Settings loaded from ~/{s}", .{config_path});
         return settings;
     }
@@ -115,6 +205,9 @@ pub const Settings = struct {
     pub fn deinit(self: *Settings, allocator: std.mem.Allocator) void {
         if (!std.mem.eql(u8, self.texture_pack, "default")) {
             allocator.free(self.texture_pack);
+        }
+        if (!std.mem.eql(u8, self.environment_map, "default")) {
+            allocator.free(self.environment_map);
         }
     }
 
@@ -125,6 +218,16 @@ pub const Settings = struct {
             self.texture_pack = "default";
         } else {
             self.texture_pack = try allocator.dupe(u8, name);
+        }
+    }
+
+    pub fn setEnvironmentMap(self: *Settings, allocator: std.mem.Allocator, name: []const u8) !void {
+        if (std.mem.eql(u8, self.environment_map, name)) return;
+        if (!std.mem.eql(u8, self.environment_map, "default")) allocator.free(self.environment_map);
+        if (std.mem.eql(u8, name, "default")) {
+            self.environment_map = "default";
+        } else {
+            self.environment_map = try allocator.dupe(u8, name);
         }
     }
 
