@@ -24,6 +24,7 @@ fn makeVertex(x: f32, y: f32, z: f32) Vertex {
         .tile_id = 0,
         .skylight = 15,
         .blocklight = 15,
+        .ao = 1.0,
     };
 }
 

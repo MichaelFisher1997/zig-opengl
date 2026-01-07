@@ -349,7 +349,8 @@ pub const TextureAtlas = struct {
         }
 
         // Create textures using RHI with NEAREST filtering for sharp pixel art, but with mipmaps for performance
-        const diffuse_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+        // Use SRGB format for diffuse/albedo - GPU will automatically convert to linear during sampling
+        const diffuse_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba_srgb, .{
             .min_filter = .nearest_mipmap_linear,
             .mag_filter = .nearest,
             .generate_mipmaps = true,
@@ -359,13 +360,14 @@ pub const TextureAtlas = struct {
         var roughness_texture: ?Texture = null;
 
         if (has_pbr) {
+            // Normal maps must stay as linear (UNORM) - they contain direction data, not colors
             normal_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
                 .min_filter = .linear_mipmap_linear,
                 .mag_filter = .linear,
                 .generate_mipmaps = true,
             }, normal_pixels.?);
 
-            // This atlas contains packed Roughness (R) and Displacement (G)
+            // Roughness/displacement are linear data, not colors - use UNORM
             roughness_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
                 .min_filter = .linear_mipmap_linear,
                 .mag_filter = .linear,

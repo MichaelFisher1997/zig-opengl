@@ -11,6 +11,7 @@ layout(location = 7) in vec3 vFragPosWorld;
 layout(location = 8) in float vViewDepth;
 layout(location = 9) in vec3 vTangent;
 layout(location = 10) in vec3 vBitangent;
+layout(location = 11) in float vAO;
 
 layout(location = 0) out vec4 FragColor;
 
@@ -23,7 +24,7 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
     vec4 params; // x = time, y = fog_density, z = fog_enabled, w = sun_intensity
     vec4 lighting; // x = ambient, y = use_texture, z = pbr_enabled, w = cloud_shadow_strength
     vec4 cloud_params; // x = cloud_height, y = shadow_samples, z = shadow_blend, w = cloud_shadows
-    vec4 pbr_params; // x = pbr_quality
+    vec4 pbr_params; // x = pbr_quality, y = exposure, z = saturation, w = unused
 } global;
 
 // Cloud shadow noise functions
@@ -190,15 +191,92 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// ACES Filmic Tone Mapping (attempt 1 from Unreal Engine fit by Stephen Hill)
-// Better saturation and contrast preservation than Reinhard
-vec3 ACESFilm(vec3 x) {
-    float a = 2.51;
-    float b = 0.03;
-    float c = 2.43;
-    float d = 0.59;
-    float e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+// AgX Tone Mapping (from Blender 4.0+)
+// Superior color preservation compared to ACES - doesn't desaturate highlights
+// Reference: https://github.com/sobotka/AgX
+
+// AgX Log2 encoding for HDR input
+vec3 agxDefaultContrastApprox(vec3 x) {
+    vec3 x2 = x * x;
+    vec3 x4 = x2 * x2;
+    return + 15.5     * x4 * x2
+           - 40.14    * x4 * x
+           + 31.96    * x4
+           - 6.868    * x2 * x
+           + 0.4298   * x2
+           + 0.1191   * x
+           - 0.00232;
+}
+
+vec3 agx(vec3 val) {
+    const mat3 agx_mat = mat3(
+        0.842479062253094, 0.0423282422610123, 0.0423756549057051,
+        0.0784335999999992, 0.878468636469772, 0.0784336,
+        0.0792237451477643, 0.0791661274605434, 0.879142973793104
+    );
+    
+    const float min_ev = -12.47393;
+    const float max_ev = 4.026069;
+    
+    // Input transform (sRGB to AgX working space)
+    val = agx_mat * val;
+    
+    // Log2 encoding
+    val = clamp(log2(val), min_ev, max_ev);
+    val = (val - min_ev) / (max_ev - min_ev);
+    
+    // Apply sigmoid contrast curve
+    val = agxDefaultContrastApprox(val);
+    
+    return val;
+}
+
+vec3 agxEotf(vec3 val) {
+    const mat3 agx_mat_inv = mat3(
+        1.19687900512017, -0.0528968517574562, -0.0529716355144438,
+        -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
+        -0.0990297440797205, -0.0989611768448433, 1.15107367264116
+    );
+    
+    // Inverse input transform
+    val = agx_mat_inv * val;
+    
+    // sRGB IEC 61966-2-1 2.2 Exponent Reference EOTF Display
+    return pow(val, vec3(2.2));
+}
+
+// Optional: Add punch/saturation to AgX output
+vec3 agxLook(vec3 val, float saturation, float contrast) {
+    float luma = dot(val, vec3(0.2126, 0.7152, 0.0722));
+    
+    // Saturation adjustment
+    val = luma + saturation * (val - luma);
+    
+    // Contrast adjustment around mid-gray
+    val = 0.5 + contrast * (val - 0.5);
+    
+    return val;
+}
+
+// Complete AgX pipeline with optional look adjustment
+vec3 agxToneMap(vec3 color, float exposure, float saturation) {
+    // Apply exposure
+    color *= exposure;
+    
+    // Ensure no negative values
+    color = max(color, vec3(0.0));
+    
+    // AgX transform
+    color = agx(color);
+    
+    // Apply look (subtle saturation boost to counter any desaturation)
+    color = agxLook(color, saturation, 1.0);
+    
+    // Inverse EOTF (linearize for display)
+    color = agxEotf(color);
+    
+    // Clamp output
+    return clamp(color, 0.0, 1.0);
 }
 
 vec2 SampleSphericalMap(vec3 v) {
@@ -289,13 +367,9 @@ void main() {
         vec4 texColor = texture(uTexture, uv);
         if (texColor.a < 0.1) discard;
 
-        // Default: Treat texture as sRGB (legacy mode)
+        // Albedo is already in linear space (VK_FORMAT_R8G8B8A8_SRGB does hardware decode)
+        // vColor is also in linear space (vertex colors)
         vec3 albedo = texColor.rgb * vColor;
-        
-        // PBR requires Linear inputs
-        if (global.lighting.z > 0.5) {
-            albedo = pow(albedo, vec3(2.2));
-        }
 
         // PBR lighting - Only calculate if maps are present and it's enabled
         if (global.lighting.z > 0.5 && global.pbr_params.x > 0.5) {
@@ -346,7 +420,8 @@ void main() {
                 float blockLight = vBlockLight;
                 // IBL intensity 0.8 - more visible effect from HDRI
                 // Clamp envColor to prevent HDR values from blowing out
-                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + vec3(blockLight));
+                // Apply AO to ambient lighting (darkens corners and crevices)
+                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + vec3(blockLight)) * vAO;
                 
                 color = ambientColor + Lo;
             } else {
@@ -360,7 +435,8 @@ void main() {
                 
                 // IBL ambient with intensity 0.8 for non-PBR blocks
                 float skyLight = vSkyLight * global.lighting.x;
-                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + vec3(blockLight));
+                // Apply AO to ambient lighting
+                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + vec3(blockLight)) * vAO;
                 
                 // Direct lighting
                 vec3 sunColor = vec3(1.0, 0.98, 0.95) * global.params.w;
@@ -377,7 +453,8 @@ void main() {
             lightLevel = max(lightLevel, global.lighting.x * 0.5);
             lightLevel = clamp(lightLevel, 0.0, 1.0);
             
-            color = albedo * lightLevel;
+            // Apply AO to legacy lighting
+            color = albedo * lightLevel * vAO;
         }
     } else {
         // Vertex color only mode
@@ -388,7 +465,8 @@ void main() {
         lightLevel = max(lightLevel, global.lighting.x * 0.5);
         lightLevel = clamp(lightLevel, 0.0, 1.0);
         
-        color = vColor * lightLevel;
+        // Apply AO to vertex color mode
+        color = vColor * lightLevel * vAO;
     }
 
     // Fog
@@ -398,12 +476,18 @@ void main() {
         color = mix(color, global.fog_color.rgb, fogFactor);
     }
 
-    // Tone mapping (ACES Filmic - better saturation than Reinhard)
+    // Tone mapping (AgX - superior color preservation from Blender 4.0+)
     if (global.lighting.z > 0.5) {
-        // Exposure adjustment (0.8 = slightly darker to avoid clipping)
-        color *= 0.8;
-        color = ACESFilm(color);
-        // Gamma correction
+        // Use exposure and saturation from uniforms (pbr_params.y and pbr_params.z)
+        float exposure = global.pbr_params.y;
+        float saturation = global.pbr_params.z;
+        
+        // Ensure valid defaults if uniforms are zero
+        if (exposure <= 0.0) exposure = 1.0;
+        if (saturation <= 0.0) saturation = 1.1;
+        
+        color = agxToneMap(color, exposure, saturation);
+        // Gamma correction (AgX outputs linear, we need sRGB for display)
         color = pow(color, vec3(1.0 / 2.2));
     }
 

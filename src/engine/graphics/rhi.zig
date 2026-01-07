@@ -39,6 +39,7 @@ pub const BufferUsage = enum {
 pub const TextureFormat = enum {
     rgb,
     rgba,
+    rgba_srgb, // sRGB format - hardware gamma decoding
     red,
     depth,
     rgba32f,
@@ -76,6 +77,7 @@ pub const Vertex = extern struct {
     tile_id: f32,
     skylight: f32,
     blocklight: f32,
+    ao: f32, // Ambient occlusion (0.0 = fully occluded, 1.0 = no occlusion)
 };
 
 pub const DrawMode = enum {
@@ -133,6 +135,9 @@ pub const CloudParams = struct {
     shadow_blend: bool = true,
     cloud_shadows: bool = true,
     pbr_quality: u8 = 2,
+    // Tone mapping parameters
+    exposure: f32 = 1.0, // Default neutral exposure
+    saturation: f32 = 1.1, // Slight saturation boost to counter AgX desaturation
 };
 
 /// RGBA color for UI rendering

@@ -41,7 +41,7 @@ const GlobalUniforms = extern struct {
     params: [4]f32, // x = time, y = fog_density, z = fog_enabled, w = sun_intensity
     lighting: [4]f32, // x = ambient, y = use_texture, z = pbr_enabled, w = cloud_shadow_strength
     cloud_params: [4]f32, // x = cloud_height, y = shadow_samples, z = shadow_blend, w = cloud_shadows
-    pbr_params: [4]f32, // x = pbr_quality, yzw = padding
+    pbr_params: [4]f32, // x = pbr_quality, y = exposure, z = saturation, w = unused
 };
 
 /// Shadow cascade uniforms for CSM. Bound to descriptor set 0, binding 2.
@@ -768,7 +768,7 @@ fn createMainPipelines(ctx: *VulkanContext) !void {
             .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT, .module = frag_module, .pName = "main" },
         };
         const binding_description = c.VkVertexInputBindingDescription{ .binding = 0, .stride = @sizeOf(rhi.Vertex), .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX };
-        var attribute_descriptions: [7]c.VkVertexInputAttributeDescription = undefined;
+        var attribute_descriptions: [8]c.VkVertexInputAttributeDescription = undefined;
         attribute_descriptions[0] = .{ .binding = 0, .location = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 };
         attribute_descriptions[1] = .{ .binding = 0, .location = 1, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 3 * 4 };
         attribute_descriptions[2] = .{ .binding = 0, .location = 2, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 6 * 4 };
@@ -776,11 +776,12 @@ fn createMainPipelines(ctx: *VulkanContext) !void {
         attribute_descriptions[4] = .{ .binding = 0, .location = 4, .format = c.VK_FORMAT_R32_SFLOAT, .offset = 11 * 4 };
         attribute_descriptions[5] = .{ .binding = 0, .location = 5, .format = c.VK_FORMAT_R32_SFLOAT, .offset = 12 * 4 };
         attribute_descriptions[6] = .{ .binding = 0, .location = 6, .format = c.VK_FORMAT_R32_SFLOAT, .offset = 13 * 4 };
+        attribute_descriptions[7] = .{ .binding = 0, .location = 7, .format = c.VK_FORMAT_R32_SFLOAT, .offset = 14 * 4 }; // AO
         var vertex_input_info = std.mem.zeroes(c.VkPipelineVertexInputStateCreateInfo);
         vertex_input_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertex_input_info.vertexBindingDescriptionCount = 1;
         vertex_input_info.pVertexBindingDescriptions = &binding_description;
-        vertex_input_info.vertexAttributeDescriptionCount = 7;
+        vertex_input_info.vertexAttributeDescriptionCount = 8;
         vertex_input_info.pVertexAttributeDescriptions = &attribute_descriptions[0];
         var pipeline_info = std.mem.zeroes(c.VkGraphicsPipelineCreateInfo);
         pipeline_info.sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -2609,7 +2610,7 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
         .params = .{ time_val, fog_density, if (fog_enabled) 1.0 else 0.0, sun_intensity },
         .lighting = .{ ambient, if (use_texture) 1.0 else 0.0, if (cloud_params.pbr_enabled) 1.0 else 0.0, 0.15 },
         .cloud_params = .{ cloud_params.cloud_height, @floatFromInt(cloud_params.shadow_samples), if (cloud_params.shadow_blend) 1.0 else 0.0, if (cloud_params.cloud_shadows) 1.0 else 0.0 },
-        .pbr_params = .{ @floatFromInt(cloud_params.pbr_quality), 0, 0, 0 },
+        .pbr_params = .{ @floatFromInt(cloud_params.pbr_quality), cloud_params.exposure, cloud_params.saturation, 0 },
     };
 
     if (ctx.global_ubos_mapped[ctx.current_sync_frame]) |map_ptr| {
@@ -2750,6 +2751,7 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
     // Map TextureFormat to VkFormat
     const vk_format: c.VkFormat = switch (format) {
         .rgba => c.VK_FORMAT_R8G8B8A8_UNORM,
+        .rgba_srgb => c.VK_FORMAT_R8G8B8A8_SRGB, // Hardware sRGB->Linear decode
         .rgb => c.VK_FORMAT_R8G8B8_UNORM,
         .red => c.VK_FORMAT_R8_UNORM,
         .depth => c.VK_FORMAT_D32_SFLOAT,

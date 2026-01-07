@@ -7,6 +7,7 @@ layout(location = 3) in vec2 aTexCoord;
 layout(location = 4) in float aTileID;
 layout(location = 5) in float aSkyLight;
 layout(location = 6) in float aBlockLight;
+layout(location = 7) in float aAO;
 
 layout(location = 0) out vec3 vColor;
 layout(location = 1) flat out vec3 vNormal;
@@ -19,6 +20,7 @@ layout(location = 7) out vec3 vFragPosWorld;
 layout(location = 8) out float vViewDepth;
 layout(location = 9) out vec3 vTangent;
 layout(location = 10) out vec3 vBitangent;
+layout(location = 11) out float vAO;
 
 layout(set = 0, binding = 0) uniform GlobalUniforms {
     mat4 view_proj;
@@ -60,6 +62,7 @@ void main() {
     
     vFragPosWorld = worldPos.xyz;
     vViewDepth = clipPos.w;
+    vAO = aAO;
 
     // Compute tangent and bitangent from the normal for TBN matrix
     // This works for axis-aligned block faces
