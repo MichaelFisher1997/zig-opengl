@@ -27,6 +27,7 @@ pub const RenderGraph = struct {
 
     pub fn init(allocator: std.mem.Allocator) RenderGraph {
         _ = allocator;
+        // NOTE: G-Pass/SSAO re-enabled after viewport/scissor fix
         const default_passes = &[_]RenderPass{
             .shadow_cascade_0,
             .shadow_cascade_1,
