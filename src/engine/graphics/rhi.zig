@@ -67,6 +67,7 @@ pub const TextureConfig = struct {
     wrap_s: WrapMode = .repeat,
     wrap_t: WrapMode = .repeat,
     generate_mipmaps: bool = true,
+    is_render_target: bool = false, // Set to true if texture will be used as color/depth attachment
 };
 
 pub const Vertex = extern struct {

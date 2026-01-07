@@ -25,6 +25,7 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
     vec4 lighting; // x = ambient, y = use_texture, z = pbr_enabled, w = cloud_shadow_strength
     vec4 cloud_params; // x = cloud_height, y = shadow_samples, z = shadow_blend, w = cloud_shadows
     vec4 pbr_params; // x = pbr_quality, y = exposure, z = saturation, w = unused
+    vec4 viewport_size; // xy = width/height
 } global;
 
 // Cloud shadow noise functions
@@ -74,6 +75,7 @@ layout(set = 0, binding = 6) uniform sampler2D uNormalMap;       // Normal map (
 layout(set = 0, binding = 7) uniform sampler2D uRoughnessMap;    // Roughness map
 layout(set = 0, binding = 8) uniform sampler2D uDisplacementMap; // Displacement map (unused for now)
 layout(set = 0, binding = 9) uniform sampler2D uEnvMap;          // Environment Map (EXR)
+layout(set = 0, binding = 10) uniform sampler2D uSSAOMap;       // SSAO Map
 
 layout(set = 0, binding = 2) uniform ShadowUniforms {
     mat4 light_space_matrices[3];
@@ -82,6 +84,7 @@ layout(set = 0, binding = 2) uniform ShadowUniforms {
 } shadows;
 
 layout(set = 0, binding = 3) uniform sampler2DArrayShadow uShadowMaps;
+layout(set = 0, binding = 4) uniform sampler2DArray uShadowMapsRegular;
 
 layout(push_constant) uniform ModelUniforms {
     mat4 view_proj;
@@ -98,6 +101,39 @@ float shadowHash(vec3 p) {
     return fract((p.x + p.y) * p.z);
 }
 
+float findBlocker(vec2 uv, float zReceiver, int layer) {
+    float blockerDepthSum = 0.0;
+    int numBlockers = 0;
+    float searchRadius = 0.002; // Adjust based on scene scale
+    
+    for (int i = -2; i <= 2; i++) {
+        for (int j = -2; j <= 2; j++) {
+            vec2 offset = vec2(i, j) * searchRadius;
+            float depth = texture(uShadowMapsRegular, vec3(uv + offset, float(layer))).r;
+            if (depth < zReceiver) {
+                blockerDepthSum += depth;
+                numBlockers++;
+            }
+        }
+    }
+    
+    if (numBlockers == 0) return -1.0;
+    return blockerDepthSum / float(numBlockers);
+}
+
+float PCF_Filtered(vec2 uv, float zReceiver, float filterRadius, int layer) {
+    float shadow = 0.0;
+    float bias = 0.0005; // Simplified bias for PCSS
+    
+    for (int i = -2; i <= 2; i++) {
+        for (int j = -2; j <= 2; j++) {
+            vec2 offset = vec2(i, j) * filterRadius;
+            shadow += texture(uShadowMaps, vec4(uv + offset, float(layer), zReceiver + bias));
+        }
+    }
+    return shadow / 25.0;
+}
+
 float calculateShadow(vec3 fragPosWorld, float nDotL, int layer) {
     vec4 fragPosLightSpace = shadows.light_space_matrices[layer] * vec4(fragPosWorld, 1.0);
     vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
@@ -109,44 +145,16 @@ float calculateShadow(vec3 fragPosWorld, float nDotL, int layer) {
         projCoords.z > 1.0 || projCoords.z < 0.0) return 0.0;
 
     float currentDepth = projCoords.z;
+    
+    // PCSS logic
+    float avgBlockerDepth = findBlocker(projCoords.xy, currentDepth, layer);
+    if (avgBlockerDepth == -1.0) return 0.0; // No blockers
+    
+    float penumbraSize = (currentDepth - avgBlockerDepth) / avgBlockerDepth;
+    float filterRadius = penumbraSize * 0.01; // Adjust multiplier for softness
+    filterRadius = clamp(filterRadius, 0.0005, 0.005); // Min/max blur
 
-    // Adjusted bias for hardware PCF
-    float bias = max(0.0005 * (1.0 - nDotL), 0.0001);
-    if (layer == 1) bias *= 2.0;
-    if (layer == 2) bias *= 4.0;
-
-    float shadow = 0.0;
-    vec2 texelSize = 1.0 / vec2(textureSize(uShadowMaps, 0));
-
-    const int MAX_SAMPLES = 16;
-    int sampleCount = int(global.cloud_params.y);
-    if (sampleCount > MAX_SAMPLES) sampleCount = MAX_SAMPLES;
-    if (sampleCount < 1) sampleCount = 1;
-
-    // For low sample counts (<=4), use simple grid PCF without rotation
-    // This avoids Moire patterns from rotated sparse sampling
-    if (sampleCount <= 4) {
-        // Simple 2x2 grid PCF - clean and fast
-        for (int x = -1; x <= 1; x += 2) {
-            for (int y = -1; y <= 1; y += 2) {
-                vec2 offset = vec2(float(x), float(y)) * texelSize * 0.5;
-                vec4 shadowCoord = vec4(projCoords.xy + offset, float(layer), currentDepth + bias);
-                shadow += texture(uShadowMaps, shadowCoord);
-            }
-        }
-        return 1.0 - (shadow / 4.0);
-    }
-
-    // Stable 3x3 Box PCF for higher quality (removes rotation noise/moire)
-    float shadowSum = 0.0;
-    for (int x = -1; x <= 1; ++x) {
-        for (int y = -1; y <= 1; ++y) {
-            vec2 offset = vec2(float(x), float(y)) * texelSize;
-            vec4 shadowCoord = vec4(projCoords.xy + offset, float(layer), currentDepth + bias);
-            shadowSum += texture(uShadowMaps, shadowCoord);
-        }
-    }
-    return 1.0 - (shadowSum / 9.0);
+    return 1.0 - PCF_Filtered(projCoords.xy, currentDepth, filterRadius, layer);
 }
 
 // PBR functions
@@ -358,11 +366,14 @@ void main() {
 
     // Circular masking for LODs (Issue #119: Seamless transition)
     if (vTileID < 0 && model_data.mask_radius > 0.0) {
-        float horizontalDist = length(vFragPosWorld.xz);
+        float horizontalDist = length(vFragPosWorld.xz - global.cam_pos.xz);
         if (horizontalDist < model_data.mask_radius * 16.0) discard;
     }
 
-    vec3 color;
+    // SSAO Sampling
+    vec2 screenUV = gl_FragCoord.xy / global.viewport_size.xy;
+    float ssao = texture(uSSAOMap, screenUV).r;
+    
     if (global.lighting.y > 0.5 && vTileID >= 0) {
         vec4 texColor = texture(uTexture, uv);
         if (texColor.a < 0.1) discard;
@@ -421,7 +432,8 @@ void main() {
                 // IBL intensity 0.8 - more visible effect from HDRI
                 // Clamp envColor to prevent HDR values from blowing out
                 // Apply AO to ambient lighting (darkens corners and crevices)
-                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + blockLight) * vAO;
+                // Combine baked Voxel AO with dynamic Screen-Space AO
+                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + blockLight) * vAO * ssao;
                 
                 color = ambientColor + Lo;
             } else {
@@ -436,7 +448,7 @@ void main() {
                 // IBL ambient with intensity 0.8 for non-PBR blocks
                 float skyLight = vSkyLight * global.lighting.x;
                 // Apply AO to ambient lighting
-                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + blockLight) * vAO;
+                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + blockLight) * vAO * ssao;
                 
                 // Direct lighting
                 vec3 sunColor = vec3(1.0, 0.98, 0.95) * global.params.w;
@@ -454,7 +466,7 @@ void main() {
             lightLevel = clamp(lightLevel, 0.0, 1.0);
             
             // Apply AO to legacy lighting
-            color = albedo * lightLevel * vAO;
+            color = albedo * lightLevel * vAO * ssao;
         }
     } else {
         // Vertex color only mode
@@ -466,7 +478,7 @@ void main() {
         lightLevel = clamp(lightLevel, 0.0, 1.0);
         
         // Apply AO to vertex color mode
-        color = vColor * lightLevel * vAO;
+        color = vColor * lightLevel * vAO * ssao;
     }
 
     // Fog
