@@ -436,12 +436,12 @@ void main() {
                 vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
                 
                 float NdotL = max(dot(N, L), 0.0);
-                vec3 sunColor = vec3(1.0, 0.98, 0.95) * global.params.w;
+                vec3 sunColor = pow(vec3(1.0, 0.98, 0.95), vec3(2.2)) * global.params.w;
                 vec3 Lo = (kD * albedo / PI + specular) * sunColor * NdotL * (1.0 - totalShadow);
                 
                 // Ambient lighting (IBL)
                 vec2 envUV = SampleSphericalMap(normalize(N));
-                vec3 envColor = texture(uEnvMap, envUV).rgb;
+                vec3 envColor = textureLod(uEnvMap, envUV, 8.0).rgb; // Sample high mip level for diffuse irradiance
                 
                 float skyLight = vSkyLight * global.lighting.x;
                 vec3 blockLight = vBlockLight;
@@ -459,7 +459,7 @@ void main() {
                 
                 // Sample IBL for ambient (even for non-PBR blocks)
                 vec2 envUV = SampleSphericalMap(normalize(N));
-                vec3 envColor = texture(uEnvMap, envUV).rgb;
+                vec3 envColor = textureLod(uEnvMap, envUV, 8.0).rgb;
                 
                 // IBL ambient with intensity 0.8 for non-PBR blocks
                 float skyLight = vSkyLight * global.lighting.x;
@@ -467,7 +467,7 @@ void main() {
                 vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + blockLight) * ao * ssao;
                 
                 // Direct lighting
-                vec3 sunColor = vec3(1.0, 0.98, 0.95) * global.params.w;
+                vec3 sunColor = pow(vec3(1.0, 0.98, 0.95), vec3(2.2)) * global.params.w;
                 vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
                 
                 color = ambientColor + directColor;
@@ -504,15 +504,13 @@ void main() {
         color = mix(color, global.fog_color.rgb, fogFactor);
     }
 
-    // Tone mapping (ACES Filmic - better saturation than Reinhard)
+    // Tone mapping (AgX - much better color preservation/desaturation)
     if (global.lighting.z > 0.5) {
-        // Exposure adjustment (0.8 = slightly darker to avoid clipping)
-        color *= 0.8;
-        color = ACESFilm(color);
+        color = agxToneMap(color, global.pbr_params.y, global.pbr_params.z);
     }
 
-    // Gamma correction for display
-    color = pow(color, vec3(1.0 / 2.2));
+    // Gamma correction handled by hardware (VK_FORMAT_B8G8R8A8_SRGB)
+    // Removed to avoid double gamma correction.
 
     FragColor = vec4(color, 1.0);
 }

@@ -83,4 +83,12 @@ pub const Vec3 = struct {
     pub fn toArray(self: Vec3) [3]f32 {
         return .{ self.x, self.y, self.z };
     }
+
+    pub fn toLinear(self: Vec3) Vec3 {
+        return .{
+            .x = std.math.pow(f32, self.x, 2.2),
+            .y = std.math.pow(f32, self.y, 2.2),
+            .z = std.math.pow(f32, self.z, 2.2),
+        };
+    }
 };

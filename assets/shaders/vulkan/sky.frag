@@ -67,14 +67,14 @@ void main() {
 
     float sunDot = dot(dir, normalize(pc.sun_dir.xyz));
     float sunDisc = smoothstep(0.9995, 0.9999, sunDot);
-    vec3 sunColor = vec3(1.0, 0.95, 0.8);
+    vec3 sunColor = pow(vec3(1.0, 0.95, 0.8), vec3(2.2));
 
     float sunGlow = pow(max(sunDot, 0.0), 8.0) * 0.5;
     sunGlow += pow(max(sunDot, 0.0), 64.0) * 0.3;
 
     float moonDot = dot(dir, -normalize(pc.sun_dir.xyz));
     float moonDisc = smoothstep(0.9990, 0.9995, moonDot);
-    vec3 moonColor = vec3(0.9, 0.9, 1.0);
+    vec3 moonColor = pow(vec3(0.9, 0.9, 1.0), vec3(2.2));
 
     float starIntensity = 0.0;
     if (pc.params.z < 0.3 && dir.y > 0.0) {
@@ -87,7 +87,7 @@ void main() {
     // Clouds are now rendered via dedicated cloud pipeline
     // (removed duplicate cloud rendering from sky shader)
 
-    finalColor += sunGlow * pc.params.z * vec3(1.0, 0.8, 0.4);
+    finalColor += sunGlow * pc.params.z * pow(vec3(1.0, 0.8, 0.4), vec3(2.2));
     finalColor += sunDisc * sunColor * pc.params.z;
     finalColor += moonDisc * moonColor * pc.params.w * 3.0;
     finalColor += vec3(starIntensity);

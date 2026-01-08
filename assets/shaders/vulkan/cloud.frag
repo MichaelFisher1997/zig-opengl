@@ -62,7 +62,7 @@ void main() {
     float threshold = 1.0 - uCloudCoverage;
     if (cloudValue < threshold) discard;
 
-    vec3 nightTint = vec3(0.1, 0.12, 0.2);
+    vec3 nightTint = pow(vec3(0.1, 0.12, 0.2), vec3(2.2));
     vec3 dayColor = uBaseColor;
     vec3 cloudColor = mix(nightTint, dayColor, uSunIntensity);
     float lightFactor = clamp(uSunDir.y, 0.0, 1.0);

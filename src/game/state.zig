@@ -32,6 +32,8 @@ pub const Settings = struct {
     // PBR Settings
     pbr_enabled: bool = true,
     pbr_quality: u8 = 2, // 0=Off, 1=Low (no normal maps), 2=Full
+    exposure: f32 = 1.0,
+    saturation: f32 = 1.1,
 
     // Shadow Settings
     shadow_pcf_samples: u8 = 12, // 4, 8, 12, 16
@@ -114,20 +116,22 @@ pub const Settings = struct {
         anisotropic_filtering: u8,
         max_texture_resolution: u32,
         cloud_shadows_enabled: bool,
+        exposure: f32,
+        saturation: f32,
     };
 
     pub const GRAPHICS_PRESETS = [_]PresetConfig{
         // LOW: Prioritize performance
-        .{ .preset = .low, .shadow_quality = 0, .shadow_pcf_samples = 4, .shadow_cascade_blend = false, .pbr_enabled = false, .pbr_quality = 0, .msaa_samples = 1, .anisotropic_filtering = 1, .max_texture_resolution = 64, .cloud_shadows_enabled = false },
+        .{ .preset = .low, .shadow_quality = 0, .shadow_pcf_samples = 4, .shadow_cascade_blend = false, .pbr_enabled = false, .pbr_quality = 0, .msaa_samples = 1, .anisotropic_filtering = 1, .max_texture_resolution = 64, .cloud_shadows_enabled = false, .exposure = 1.0, .saturation = 1.0 },
 
         // MEDIUM: Balanced
-        .{ .preset = .medium, .shadow_quality = 1, .shadow_pcf_samples = 8, .shadow_cascade_blend = false, .pbr_enabled = true, .pbr_quality = 1, .msaa_samples = 2, .anisotropic_filtering = 4, .max_texture_resolution = 128, .cloud_shadows_enabled = true },
+        .{ .preset = .medium, .shadow_quality = 1, .shadow_pcf_samples = 8, .shadow_cascade_blend = false, .pbr_enabled = true, .pbr_quality = 1, .msaa_samples = 2, .anisotropic_filtering = 4, .max_texture_resolution = 128, .cloud_shadows_enabled = true, .exposure = 1.0, .saturation = 1.1 },
 
         // HIGH: Quality focus (target for RX 5700 XT)
-        .{ .preset = .high, .shadow_quality = 2, .shadow_pcf_samples = 12, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 4, .anisotropic_filtering = 8, .max_texture_resolution = 256, .cloud_shadows_enabled = true },
+        .{ .preset = .high, .shadow_quality = 2, .shadow_pcf_samples = 12, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 4, .anisotropic_filtering = 8, .max_texture_resolution = 256, .cloud_shadows_enabled = true, .exposure = 1.0, .saturation = 1.1 },
 
         // ULTRA: Maximum quality
-        .{ .preset = .ultra, .shadow_quality = 3, .shadow_pcf_samples = 16, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 8, .anisotropic_filtering = 16, .max_texture_resolution = 512, .cloud_shadows_enabled = true },
+        .{ .preset = .ultra, .shadow_quality = 3, .shadow_pcf_samples = 16, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 8, .anisotropic_filtering = 16, .max_texture_resolution = 512, .cloud_shadows_enabled = true, .exposure = 1.0, .saturation = 1.2 },
     };
 
     pub fn applyPreset(self: *Settings, preset_idx: usize) void {
@@ -142,6 +146,8 @@ pub const Settings = struct {
         self.anisotropic_filtering = preset.anisotropic_filtering;
         self.max_texture_resolution = preset.max_texture_resolution;
         self.cloud_shadows_enabled = preset.cloud_shadows_enabled;
+        self.exposure = preset.exposure;
+        self.saturation = preset.saturation;
     }
 
     pub fn getPresetIndex(self: *const Settings) usize {
@@ -154,7 +160,9 @@ pub const Settings = struct {
                 self.msaa_samples == preset.msaa_samples and
                 self.anisotropic_filtering == preset.anisotropic_filtering and
                 self.max_texture_resolution == preset.max_texture_resolution and
-                self.cloud_shadows_enabled == preset.cloud_shadows_enabled)
+                self.cloud_shadows_enabled == preset.cloud_shadows_enabled and
+                self.exposure == preset.exposure and
+                self.saturation == preset.saturation)
             {
                 return i;
             }

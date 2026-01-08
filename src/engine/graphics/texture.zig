@@ -29,11 +29,11 @@ pub const Texture = struct {
     pub fn initFloat(instance: rhi.RHI, width: u32, height: u32, data: []const f32) Texture {
         const bytes = std.mem.sliceAsBytes(data);
         const handle = instance.createTexture(width, height, .rgba32f, .{
-            .min_filter = .linear,
+            .min_filter = .linear_mipmap_linear,
             .mag_filter = .linear,
             .wrap_s = .clamp_to_edge,
             .wrap_t = .clamp_to_edge,
-            .generate_mipmaps = false, // No mipmaps for now for env map
+            .generate_mipmaps = true,
         }, bytes);
         return .{
             .handle = handle,

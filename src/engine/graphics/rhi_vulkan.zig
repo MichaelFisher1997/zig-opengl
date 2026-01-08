@@ -2053,9 +2053,18 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
 
     var surface_format = formats[0];
     for (formats) |f| {
-        if (f.format == c.VK_FORMAT_B8G8R8A8_UNORM and f.colorSpace == c.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+        if (f.format == c.VK_FORMAT_B8G8R8A8_SRGB and f.colorSpace == c.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             surface_format = f;
             break;
+        }
+    }
+    // Fallback to UNORM if SRGB is not available (though SRGB is standard for B8G8R8A8)
+    if (surface_format.format != c.VK_FORMAT_B8G8R8A8_SRGB) {
+        for (formats) |f| {
+            if (f.format == c.VK_FORMAT_B8G8R8A8_UNORM and f.colorSpace == c.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                surface_format = f;
+                break;
+            }
         }
     }
     ctx.swapchain_format = surface_format.format;

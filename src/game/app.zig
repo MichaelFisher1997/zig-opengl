@@ -136,14 +136,14 @@ const AtmosphereState = struct {
         const DUSK_START: f32 = 0.70;
         const DUSK_END: f32 = 0.80;
 
-        const day_sky = Vec3.init(0.4, 0.65, 1.0);
-        const day_horizon = Vec3.init(0.7, 0.8, 0.95);
-        const night_sky = Vec3.init(0.02, 0.02, 0.08);
-        const night_horizon = Vec3.init(0.05, 0.05, 0.12);
-        const dawn_sky = Vec3.init(0.4, 0.4, 0.6);
-        const dawn_horizon = Vec3.init(1.0, 0.5, 0.3);
-        const dusk_sky = Vec3.init(0.35, 0.25, 0.5);
-        const dusk_horizon = Vec3.init(1.0, 0.4, 0.2);
+        const day_sky = Vec3.init(0.4, 0.65, 1.0).toLinear();
+        const day_horizon = Vec3.init(0.7, 0.8, 0.95).toLinear();
+        const night_sky = Vec3.init(0.02, 0.02, 0.08).toLinear();
+        const night_horizon = Vec3.init(0.05, 0.05, 0.12).toLinear();
+        const dawn_sky = Vec3.init(0.4, 0.4, 0.6).toLinear();
+        const dawn_horizon = Vec3.init(1.0, 0.5, 0.3).toLinear();
+        const dusk_sky = Vec3.init(0.35, 0.25, 0.5).toLinear();
+        const dusk_horizon = Vec3.init(1.0, 0.4, 0.2).toLinear();
 
         if (t < DAWN_START) {
             self.sky_color = night_sky;
@@ -589,7 +589,7 @@ pub const App = struct {
             }
         } else if (self.input.mouse_captured) self.input.setMouseCapture(self.window_manager.window, false);
 
-        const clear_color = if (in_world or in_pause) self.atmosphere.fog_color else Vec3.init(0.07, 0.08, 0.1);
+        const clear_color = if (in_world or in_pause) self.atmosphere.fog_color else Vec3.init(0.07, 0.08, 0.1).toLinear();
         self.rhi.setClearColor(clear_color);
         self.rhi.beginFrame();
 
@@ -631,6 +631,8 @@ pub const App = struct {
                         .shadow_blend = self.settings.shadow_cascade_blend,
                         .cloud_shadows = self.settings.cloud_shadows_enabled,
                         .pbr_quality = self.settings.pbr_quality,
+                        .exposure = self.settings.exposure,
+                        .saturation = self.settings.saturation,
                     };
                 };
 
