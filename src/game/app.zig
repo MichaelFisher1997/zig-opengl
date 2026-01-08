@@ -634,8 +634,16 @@ pub const App = struct {
                     };
                 };
 
+                const atlas_handles = rhi_pkg.TextureAtlasHandles{
+                    .diffuse = self.atlas.texture.handle,
+                    .normal = if (self.atlas.normal_texture) |t| t.handle else 0,
+                    .roughness = if (self.atlas.roughness_texture) |t| t.handle else 0,
+                    .displacement = if (self.atlas.displacement_texture) |t| t.handle else 0,
+                    .env = if (self.env_map) |t| t.handle else 0,
+                };
+
                 self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
-                self.render_graph.execute(self.rhi, active_world, &self.camera, aspect, sky_params, cloud_params, self.shader, self.atlas.texture.handle, self.settings.shadow_distance, self.settings.getShadowResolution());
+                self.render_graph.execute(self.rhi, active_world, &self.camera, aspect, sky_params, cloud_params, self.shader, atlas_handles, self.settings.shadow_distance, self.settings.getShadowResolution());
 
                 if (self.player) |p| {
                     if (p.target_block) |target| self.block_outline.draw(target.x, target.y, target.z, self.camera.position);

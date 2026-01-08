@@ -236,6 +236,9 @@ const VulkanContext = struct {
     current_roughness_texture: rhi.TextureHandle,
     current_displacement_texture: rhi.TextureHandle,
     current_env_texture: rhi.TextureHandle,
+    dummy_texture: rhi.TextureHandle,
+    dummy_normal_texture: rhi.TextureHandle,
+    dummy_roughness_texture: rhi.TextureHandle,
     bound_texture: rhi.TextureHandle,
     bound_normal_texture: rhi.TextureHandle,
     bound_roughness_texture: rhi.TextureHandle,
@@ -1643,8 +1646,8 @@ fn createMainPipelines(ctx: *VulkanContext) !void {
         attribute_descriptions[3] = .{ .binding = 0, .location = 3, .format = c.VK_FORMAT_R32G32_SFLOAT, .offset = 9 * 4 };
         attribute_descriptions[4] = .{ .binding = 0, .location = 4, .format = c.VK_FORMAT_R32_SFLOAT, .offset = 11 * 4 };
         attribute_descriptions[5] = .{ .binding = 0, .location = 5, .format = c.VK_FORMAT_R32_SFLOAT, .offset = 12 * 4 };
-        attribute_descriptions[6] = .{ .binding = 0, .location = 6, .format = c.VK_FORMAT_R32_SFLOAT, .offset = 13 * 4 };
-        attribute_descriptions[7] = .{ .binding = 0, .location = 7, .format = c.VK_FORMAT_R32_SFLOAT, .offset = 14 * 4 }; // AO
+        attribute_descriptions[6] = .{ .binding = 0, .location = 6, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 13 * 4 };
+        attribute_descriptions[7] = .{ .binding = 0, .location = 7, .format = c.VK_FORMAT_R32_SFLOAT, .offset = 16 * 4 }; // AO
         var vertex_input_info = std.mem.zeroes(c.VkPipelineVertexInputStateCreateInfo);
         vertex_input_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertex_input_info.vertexBindingDescriptionCount = 1;
@@ -2169,11 +2172,14 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
         .{ .binding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT },
         .{ .binding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
         .{ .binding = 2, .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
-        .{ .binding = 3, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Shadow Array
+        .{ .binding = 3, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Shadow Array (comparison)
+        .{ .binding = 4, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Shadow Array (regular for PCSS)
+        .{ .binding = 5, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Unused dummy to avoid gap
         .{ .binding = 6, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Normal
         .{ .binding = 7, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Roughness
         .{ .binding = 8, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Disp
         .{ .binding = 9, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // Env Map
+        .{ .binding = 10, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT }, // SSAO Map
     };
     var layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
     layout_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -2578,6 +2584,26 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
 
         c.vkCmdPipelineBarrier(init_cmd, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &dummy_barrier);
 
+        // Transition SSAO blur image to SHADER_READ_ONLY_OPTIMAL (needed even when SSAO passes are disabled)
+        if (ctx.ssao_blur_image != null) {
+            var ssao_blur_barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
+            ssao_blur_barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            ssao_blur_barrier.oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
+            ssao_blur_barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            ssao_blur_barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+            ssao_blur_barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+            ssao_blur_barrier.image = ctx.ssao_blur_image;
+            ssao_blur_barrier.subresourceRange.aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT;
+            ssao_blur_barrier.subresourceRange.baseMipLevel = 0;
+            ssao_blur_barrier.subresourceRange.levelCount = 1;
+            ssao_blur_barrier.subresourceRange.baseArrayLayer = 0;
+            ssao_blur_barrier.subresourceRange.layerCount = 1;
+            ssao_blur_barrier.srcAccessMask = 0;
+            ssao_blur_barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+
+            c.vkCmdPipelineBarrier(init_cmd, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &ssao_blur_barrier);
+        }
+
         try checkVk(c.vkEndCommandBuffer(init_cmd));
 
         var submit_info = std.mem.zeroes(c.VkSubmitInfo);
@@ -2598,116 +2624,172 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
         std.log.info("Shadow images transitioned to SHADER_READ_ONLY_OPTIMAL", .{});
     }
 
-    // 16. Create Dummy Texture for Descriptor set validity
+    // 16. Create Dummy Textures for Descriptor set validity
     const white_pixel = [_]u8{ 255, 255, 255, 255 };
     const dummy_handle = createTexture(ctx_ptr, 1, 1, .rgba, .{}, &white_pixel);
+
+    // Truly neutral normal map dummy: (128, 128, 255, 0)
+    // Alpha 0 = PBR Off flag for our shader
+    const normal_neutral = [_]u8{ 128, 128, 255, 0 };
+    const dummy_normal_handle = createTexture(ctx_ptr, 1, 1, .rgba, .{}, &normal_neutral);
+
+    // Roughness dummy: 1.0 roughness (Max), 0.0 displacement
+    const roughness_neutral = [_]u8{ 255, 0, 0, 255 };
+    const dummy_roughness_handle = createTexture(ctx_ptr, 1, 1, .rgba, .{}, &roughness_neutral);
+
+    ctx.dummy_texture = dummy_handle;
+    ctx.dummy_normal_texture = dummy_normal_handle;
+    ctx.dummy_roughness_texture = dummy_roughness_handle;
+
     ctx.current_texture = dummy_handle;
-    ctx.current_normal_texture = dummy_handle;
-    ctx.current_roughness_texture = dummy_handle;
-    ctx.current_displacement_texture = dummy_handle;
+    ctx.current_normal_texture = dummy_normal_handle;
+    ctx.current_roughness_texture = dummy_roughness_handle;
+    ctx.current_displacement_texture = dummy_roughness_handle;
     ctx.current_env_texture = dummy_handle;
 
     // 17. Initialize ALL descriptor bindings with valid resources to prevent undefined behavior
     // Descriptor sets were only partially written during allocation (bindings 0, 2 for UBOs)
-    // We MUST write texture bindings 1, 3, 6, 7, 8 before any draw calls
+    // We MUST write texture bindings 1, 3, 4, 5, 6, 7, 8, 9, 10 before any draw calls
     {
         ctx.mutex.lock();
-        const dummy_tex = ctx.textures.get(dummy_handle);
+        const dummy_tex = ctx.textures.get(dummy_handle).?;
+        const dummy_normal = ctx.textures.get(dummy_normal_handle).?;
+        const dummy_rough = ctx.textures.get(dummy_roughness_handle).?;
         ctx.mutex.unlock();
 
-        if (dummy_tex) |tex| {
-            for (0..MAX_FRAMES_IN_FLIGHT) |frame_idx| {
-                var image_infos: [6]c.VkDescriptorImageInfo = undefined;
-                var writes: [6]c.VkWriteDescriptorSet = undefined;
+        for (0..MAX_FRAMES_IN_FLIGHT) |frame_idx| {
+            var image_infos: [9]c.VkDescriptorImageInfo = undefined;
+            var writes: [9]c.VkWriteDescriptorSet = undefined;
 
-                // Binding 1: Main texture atlas (dummy)
-                image_infos[0] = .{
-                    .sampler = tex.sampler,
-                    .imageView = tex.view,
-                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-                writes[0] = std.mem.zeroes(c.VkWriteDescriptorSet);
-                writes[0].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[0].dstSet = ctx.descriptor_sets[frame_idx];
-                writes[0].dstBinding = 1;
-                writes[0].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[0].descriptorCount = 1;
-                writes[0].pImageInfo = &image_infos[0];
+            // Binding 1: Main texture atlas (dummy)
+            image_infos[0] = .{
+                .sampler = dummy_tex.sampler,
+                .imageView = dummy_tex.view,
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+            writes[0] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[0].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[0].dstSet = ctx.descriptor_sets[frame_idx];
+            writes[0].dstBinding = 1;
+            writes[0].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[0].descriptorCount = 1;
+            writes[0].pImageInfo = &image_infos[0];
 
-                // Binding 3: Shadow array (using proper shadow view)
-                image_infos[1] = .{
-                    .sampler = ctx.shadow_sampler,
-                    .imageView = ctx.shadow_image_view,
-                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-                writes[1] = std.mem.zeroes(c.VkWriteDescriptorSet);
-                writes[1].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[1].dstSet = ctx.descriptor_sets[frame_idx];
-                writes[1].dstBinding = 3;
-                writes[1].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[1].descriptorCount = 1;
-                writes[1].pImageInfo = &image_infos[1];
+            // Binding 3: Shadow array (comparison sampler for PCF)
+            image_infos[1] = .{
+                .sampler = ctx.shadow_sampler,
+                .imageView = ctx.shadow_image_view,
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+            writes[1] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[1].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[1].dstSet = ctx.descriptor_sets[frame_idx];
+            writes[1].dstBinding = 3;
+            writes[1].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[1].descriptorCount = 1;
+            writes[1].pImageInfo = &image_infos[1];
 
-                // Binding 6: Normal map (dummy)
-                image_infos[2] = .{
-                    .sampler = tex.sampler,
-                    .imageView = tex.view,
-                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-                writes[2] = std.mem.zeroes(c.VkWriteDescriptorSet);
-                writes[2].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[2].dstSet = ctx.descriptor_sets[frame_idx];
-                writes[2].dstBinding = 6;
-                writes[2].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[2].descriptorCount = 1;
-                writes[2].pImageInfo = &image_infos[2];
+            // Binding 4: Shadow array (regular sampler for PCSS blocker search)
+            image_infos[2] = .{
+                .sampler = ctx.ssao_sampler, // Use nearest sampler (no comparison)
+                .imageView = ctx.shadow_image_view,
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+            writes[2] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[2].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[2].dstSet = ctx.descriptor_sets[frame_idx];
+            writes[2].dstBinding = 4;
+            writes[2].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[2].descriptorCount = 1;
+            writes[2].pImageInfo = &image_infos[2];
 
-                // Binding 7: Roughness map (dummy)
-                image_infos[3] = .{
-                    .sampler = tex.sampler,
-                    .imageView = tex.view,
-                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-                writes[3] = std.mem.zeroes(c.VkWriteDescriptorSet);
-                writes[3].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[3].dstSet = ctx.descriptor_sets[frame_idx];
-                writes[3].dstBinding = 7;
-                writes[3].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[3].descriptorCount = 1;
-                writes[3].pImageInfo = &image_infos[3];
+            // Binding 6: Normal map (dummy neutral)
+            image_infos[3] = .{
+                .sampler = dummy_normal.sampler,
+                .imageView = dummy_normal.view,
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+            writes[3] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[3].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[3].dstSet = ctx.descriptor_sets[frame_idx];
+            writes[3].dstBinding = 6;
+            writes[3].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[3].descriptorCount = 1;
+            writes[3].pImageInfo = &image_infos[3];
 
-                // Binding 8: Displacement map (dummy)
-                image_infos[4] = .{
-                    .sampler = tex.sampler,
-                    .imageView = tex.view,
-                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-                writes[4] = std.mem.zeroes(c.VkWriteDescriptorSet);
-                writes[4].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[4].dstSet = ctx.descriptor_sets[frame_idx];
-                writes[4].dstBinding = 8;
-                writes[4].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[4].descriptorCount = 1;
-                writes[4].pImageInfo = &image_infos[4];
+            // Binding 7: Roughness map (dummy neutral)
+            image_infos[4] = .{
+                .sampler = dummy_rough.sampler,
+                .imageView = dummy_rough.view,
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+            writes[4] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[4].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[4].dstSet = ctx.descriptor_sets[frame_idx];
+            writes[4].dstBinding = 7;
+            writes[4].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[4].descriptorCount = 1;
+            writes[4].pImageInfo = &image_infos[4];
 
-                // Binding 9: Environment Map (dummy)
-                image_infos[5] = .{
-                    .sampler = tex.sampler,
-                    .imageView = tex.view,
-                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-                writes[5] = std.mem.zeroes(c.VkWriteDescriptorSet);
-                writes[5].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[5].dstSet = ctx.descriptor_sets[frame_idx];
-                writes[5].dstBinding = 9;
-                writes[5].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[5].descriptorCount = 1;
-                writes[5].pImageInfo = &image_infos[5];
+            // Binding 8: Displacement map (dummy neutral)
+            image_infos[5] = .{
+                .sampler = dummy_rough.sampler,
+                .imageView = dummy_rough.view,
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+            writes[5] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[5].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[5].dstSet = ctx.descriptor_sets[frame_idx];
+            writes[5].dstBinding = 8;
+            writes[5].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[5].descriptorCount = 1;
+            writes[5].pImageInfo = &image_infos[5];
 
-                c.vkUpdateDescriptorSets(ctx.vk_device, 6, &writes[0], 0, null);
-            }
-            std.log.info("All descriptor bindings initialized with valid resources", .{});
+            // Binding 9: Environment Map (dummy)
+            image_infos[6] = .{
+                .sampler = dummy_tex.sampler,
+                .imageView = dummy_tex.view,
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+            writes[6] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[6].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[6].dstSet = ctx.descriptor_sets[frame_idx];
+            writes[6].dstBinding = 9;
+            writes[6].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[6].descriptorCount = 1;
+            writes[6].pImageInfo = &image_infos[6];
+
+            // Binding 10: SSAO Map (blur output)
+            image_infos[7] = .{
+                .sampler = ctx.ssao_sampler,
+                .imageView = ctx.ssao_blur_view,
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+            writes[7] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[7].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[7].dstSet = ctx.descriptor_sets[frame_idx];
+            writes[7].dstBinding = 10;
+            writes[7].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[7].descriptorCount = 1;
+            writes[7].pImageInfo = &image_infos[7];
+
+            // Binding 5: Gap filler
+            image_infos[8] = .{
+                .sampler = dummy_tex.sampler,
+                .imageView = dummy_tex.view,
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+            writes[8] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[8].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[8].dstSet = ctx.descriptor_sets[frame_idx];
+            writes[8].dstBinding = 5;
+            writes[8].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[8].descriptorCount = 1;
+            writes[8].pImageInfo = &image_infos[8];
+
+            c.vkUpdateDescriptorSets(ctx.vk_device, 9, &writes[0], 0, null);
         }
+        std.log.info("All descriptor bindings initialized with valid resources", .{});
     }
 
     std.log.info("Vulkan initialized successfully!", .{});
@@ -3217,7 +3299,7 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
         var image_infos: [10]c.VkDescriptorImageInfo = undefined;
         var info_count: u32 = 0;
 
-        const dummy_tex_entry = ctx.textures.get(1); // Default dummy
+        const dummy_tex_entry = ctx.textures.get(ctx.dummy_texture);
 
         const atlas_slots = [_]struct { handle: rhi.TextureHandle, binding: u32 }{
             .{ .handle = cur_tex, .binding = 1 },
@@ -4135,13 +4217,21 @@ fn bindTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, slot: u32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
+    const resolved = if (handle == 0) switch (slot) {
+        6 => ctx.dummy_normal_texture,
+        7, 8 => ctx.dummy_roughness_texture,
+        9 => ctx.dummy_texture,
+        0, 1 => ctx.dummy_texture,
+        else => ctx.dummy_texture,
+    } else handle;
+
     switch (slot) {
-        0, 1 => ctx.current_texture = handle,
-        6 => ctx.current_normal_texture = handle,
-        7 => ctx.current_roughness_texture = handle,
-        8 => ctx.current_displacement_texture = handle,
-        9 => ctx.current_env_texture = handle,
-        else => ctx.current_texture = handle,
+        0, 1 => ctx.current_texture = resolved,
+        6 => ctx.current_normal_texture = resolved,
+        7 => ctx.current_roughness_texture = resolved,
+        8 => ctx.current_displacement_texture = resolved,
+        9 => ctx.current_env_texture = resolved,
+        else => ctx.current_texture = resolved,
     }
 }
 
@@ -4934,6 +5024,13 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.textures = std.AutoHashMap(rhi.TextureHandle, TextureResource).init(allocator);
     ctx.next_texture_handle = 1;
     ctx.current_texture = 0;
+    ctx.current_normal_texture = 0;
+    ctx.current_roughness_texture = 0;
+    ctx.current_displacement_texture = 0;
+    ctx.current_env_texture = 0;
+    ctx.dummy_texture = 0;
+    ctx.dummy_normal_texture = 0;
+    ctx.dummy_roughness_texture = 0;
     ctx.mutex = .{};
     ctx.swapchain_images = .empty;
     ctx.swapchain_image_views = .empty;
@@ -4955,6 +5052,10 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.shadow_pipeline_bound = false;
     ctx.descriptors_updated = false;
     ctx.bound_texture = 0;
+    ctx.bound_normal_texture = 0;
+    ctx.bound_roughness_texture = 0;
+    ctx.bound_displacement_texture = 0;
+    ctx.bound_env_texture = 0;
     ctx.current_mask_radius = 0;
 
     // Rendering options

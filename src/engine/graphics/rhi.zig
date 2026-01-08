@@ -70,6 +70,14 @@ pub const TextureConfig = struct {
     is_render_target: bool = false, // Set to true if texture will be used as color/depth attachment
 };
 
+pub const TextureAtlasHandles = struct {
+    diffuse: TextureHandle,
+    normal: TextureHandle,
+    roughness: TextureHandle,
+    displacement: TextureHandle,
+    env: TextureHandle,
+};
+
 pub const Vertex = extern struct {
     pos: [3]f32,
     color: [3]f32,

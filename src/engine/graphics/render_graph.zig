@@ -27,7 +27,7 @@ pub const RenderGraph = struct {
 
     pub fn init(allocator: std.mem.Allocator) RenderGraph {
         _ = allocator;
-        // NOTE: G-Pass/SSAO re-enabled after viewport/scissor fix
+        // NOTE: G-Pass/SSAO re-enabled
         const default_passes = &[_]RenderPass{
             .shadow_cascade_0,
             .shadow_cascade_1,
@@ -53,7 +53,7 @@ pub const RenderGraph = struct {
         sky_params: rhi_pkg.SkyParams,
         cloud_params: rhi_pkg.CloudParams,
         main_shader: rhi_pkg.ShaderHandle,
-        atlas_handle: rhi_pkg.TextureHandle,
+        atlas: rhi_pkg.TextureAtlasHandles,
         shadow_distance: f32,
         shadow_resolution: u32,
     ) void {
@@ -69,7 +69,7 @@ pub const RenderGraph = struct {
                     }
                 },
             }
-            self.executePass(pass, rhi, world, camera, aspect, sky_params, cloud_params, main_shader, atlas_handle, shadow_distance, shadow_resolution);
+            self.executePass(pass, rhi, world, camera, aspect, sky_params, cloud_params, main_shader, atlas, shadow_distance, shadow_resolution);
         }
     }
 
@@ -83,7 +83,7 @@ pub const RenderGraph = struct {
         sky_params: rhi_pkg.SkyParams,
         cloud_params: rhi_pkg.CloudParams,
         main_shader: rhi_pkg.ShaderHandle,
-        atlas_handle: rhi_pkg.TextureHandle,
+        atlas: rhi_pkg.TextureAtlasHandles,
         shadow_distance: f32,
         shadow_resolution: u32,
     ) void {
@@ -92,10 +92,10 @@ pub const RenderGraph = struct {
             .shadow_cascade_0 => RenderGraph.executeShadowPass(0, rhi, world, camera, aspect, sky_params.sun_dir, shadow_distance, shadow_resolution),
             .shadow_cascade_1 => RenderGraph.executeShadowPass(1, rhi, world, camera, aspect, sky_params.sun_dir, shadow_distance, shadow_resolution),
             .shadow_cascade_2 => RenderGraph.executeShadowPass(2, rhi, world, camera, aspect, sky_params.sun_dir, shadow_distance, shadow_resolution),
-            .g_pass => RenderGraph.executeGPass(rhi, world, camera, aspect),
+            .g_pass => RenderGraph.executeGPass(rhi, world, camera, aspect, atlas),
             .ssao => RenderGraph.executeSSAOPass(rhi, camera, aspect),
             .ssao_blur => RenderGraph.executeSSAOBlurPass(rhi),
-            .main_opaque => RenderGraph.executeMainPass(rhi, world, camera, aspect, main_shader, atlas_handle),
+            .main_opaque => RenderGraph.executeMainPass(rhi, world, camera, aspect, main_shader, atlas),
             .main_transparent => {},
             .sky => RenderGraph.executeSkyPass(rhi, camera, aspect, sky_params),
             .clouds => RenderGraph.executeCloudsPass(rhi, camera, aspect, cloud_params),
@@ -104,8 +104,9 @@ pub const RenderGraph = struct {
         }
     }
 
-    fn executeGPass(rhi: RHI, world: *World, camera: *Camera, aspect: f32) void {
+    fn executeGPass(rhi: RHI, world: *World, camera: *Camera, aspect: f32, atlas: rhi_pkg.TextureAtlasHandles) void {
         rhi.beginGPass();
+        rhi.bindTexture(atlas.diffuse, 1);
         const view_proj = Mat4.perspectiveReverseZ(camera.fov, aspect, camera.near, camera.far).multiply(camera.getViewMatrixOriginCentered());
         world.render(view_proj, camera.position);
         rhi.endGPass();
@@ -156,9 +157,13 @@ pub const RenderGraph = struct {
         rhi.endShadowPass();
     }
 
-    fn executeMainPass(rhi: RHI, world: *World, camera: *Camera, aspect: f32, shader: rhi_pkg.ShaderHandle, atlas_handle: rhi_pkg.TextureHandle) void {
+    fn executeMainPass(rhi: RHI, world: *World, camera: *Camera, aspect: f32, shader: rhi_pkg.ShaderHandle, atlas: rhi_pkg.TextureAtlasHandles) void {
         rhi.bindShader(shader);
-        rhi.bindTexture(atlas_handle, 1);
+        rhi.bindTexture(atlas.diffuse, 1);
+        rhi.bindTexture(atlas.normal, 6);
+        rhi.bindTexture(atlas.roughness, 7);
+        rhi.bindTexture(atlas.displacement, 8);
+        rhi.bindTexture(atlas.env, 9);
         // rhi.beginMainPass() is now called in execute() to prevent clearing sky
         const view_proj = Mat4.perspectiveReverseZ(camera.fov, aspect, camera.near, camera.far).multiply(camera.getViewMatrixOriginCentered());
         world.render(view_proj, camera.position);

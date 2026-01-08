@@ -287,6 +287,16 @@ vec3 agxToneMap(vec3 color, float exposure, float saturation) {
     return clamp(color, 0.0, 1.0);
 }
 
+// ACES Filmic Tone Mapping
+vec3 ACESFilm(vec3 x) {
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
 vec2 SampleSphericalMap(vec3 v) {
     // Clamp the normal to avoid precision issues at poles
     vec3 n = normalize(v);
@@ -301,6 +311,9 @@ vec2 SampleSphericalMap(vec3 v) {
 }
 
 void main() {
+    // Output color - must be declared at function scope
+    vec3 color;
+    
     // Calculate UV coordinates in atlas
     vec2 atlasSize = vec2(16.0, 16.0);
     vec2 tileSize = 1.0 / atlasSize;
@@ -370,9 +383,12 @@ void main() {
         if (horizontalDist < model_data.mask_radius * 16.0) discard;
     }
 
-    // SSAO Sampling
+    // SSAO Sampling (reduced strength)
     vec2 screenUV = gl_FragCoord.xy / global.viewport_size.xy;
-    float ssao = texture(uSSAOMap, screenUV).r;
+    float ssao = mix(1.0, texture(uSSAOMap, screenUV).r, 0.35);
+    
+    // Soften voxel AO effect (50% strength) to prevent overly dark faces
+    float ao = mix(1.0, vAO, 0.5);
     
     if (global.lighting.y > 0.5 && vTileID >= 0) {
         vec4 texColor = texture(uTexture, uv);
@@ -433,7 +449,7 @@ void main() {
                 // Clamp envColor to prevent HDR values from blowing out
                 // Apply AO to ambient lighting (darkens corners and crevices)
                 // Combine baked Voxel AO with dynamic Screen-Space AO
-                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + blockLight) * vAO * ssao;
+                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + blockLight) * ao * ssao;
                 
                 color = ambientColor + Lo;
             } else {
@@ -448,7 +464,7 @@ void main() {
                 // IBL ambient with intensity 0.8 for non-PBR blocks
                 float skyLight = vSkyLight * global.lighting.x;
                 // Apply AO to ambient lighting
-                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + blockLight) * vAO * ssao;
+                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + blockLight) * ao * ssao;
                 
                 // Direct lighting
                 vec3 sunColor = vec3(1.0, 0.98, 0.95) * global.params.w;
@@ -466,7 +482,7 @@ void main() {
             lightLevel = clamp(lightLevel, 0.0, 1.0);
             
             // Apply AO to legacy lighting
-            color = albedo * lightLevel * vAO * ssao;
+            color = albedo * lightLevel * ao * ssao;
         }
     } else {
         // Vertex color only mode
@@ -478,7 +494,7 @@ void main() {
         lightLevel = clamp(lightLevel, 0.0, 1.0);
         
         // Apply AO to vertex color mode
-        color = vColor * lightLevel * vAO * ssao;
+        color = vColor * lightLevel * ao * ssao;
     }
 
     // Fog
@@ -488,20 +504,15 @@ void main() {
         color = mix(color, global.fog_color.rgb, fogFactor);
     }
 
-    // Tone mapping (AgX - superior color preservation from Blender 4.0+)
+    // Tone mapping (ACES Filmic - better saturation than Reinhard)
     if (global.lighting.z > 0.5) {
-        // Use exposure and saturation from uniforms (pbr_params.y and pbr_params.z)
-        float exposure = global.pbr_params.y;
-        float saturation = global.pbr_params.z;
-        
-        // Ensure valid defaults if uniforms are zero
-        if (exposure <= 0.0) exposure = 1.0;
-        if (saturation <= 0.0) saturation = 1.1;
-        
-        color = agxToneMap(color, exposure, saturation);
-        // Gamma correction (AgX outputs linear, we need sRGB for display)
-        color = pow(color, vec3(1.0 / 2.2));
+        // Exposure adjustment (0.8 = slightly darker to avoid clipping)
+        color *= 0.8;
+        color = ACESFilm(color);
     }
+
+    // Gamma correction for display
+    color = pow(color, vec3(1.0 / 2.2));
 
     FragColor = vec4(color, 1.0);
 }
