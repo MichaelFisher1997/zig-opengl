@@ -1591,8 +1591,8 @@ fn createMainPipelines(ctx: *VulkanContext) !void {
     var rasterizer = std.mem.zeroes(c.VkPipelineRasterizationStateCreateInfo);
     rasterizer.sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.lineWidth = 1.0;
-    rasterizer.cullMode = c.VK_CULL_MODE_NONE;
-    rasterizer.frontFace = c.VK_FRONT_FACE_CLOCKWISE;
+    rasterizer.cullMode = c.VK_CULL_MODE_BACK_BIT;
+    rasterizer.frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE;
 
     var multisampling = std.mem.zeroes(c.VkPipelineMultisampleStateCreateInfo);
     multisampling.sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -1673,8 +1673,9 @@ fn createMainPipelines(ctx: *VulkanContext) !void {
         pipeline_info.subpass = 0;
         try checkVk(c.vkCreateGraphicsPipelines(ctx.vk_device, null, 1, &pipeline_info, null, &ctx.pipeline));
 
-        // Wireframe
+        // Wireframe (No culling)
         var wireframe_rasterizer = rasterizer;
+        wireframe_rasterizer.cullMode = c.VK_CULL_MODE_NONE;
         wireframe_rasterizer.polygonMode = c.VK_POLYGON_MODE_LINE;
         pipeline_info.pRasterizationState = &wireframe_rasterizer;
         try checkVk(c.vkCreateGraphicsPipelines(ctx.vk_device, null, 1, &pipeline_info, null, &ctx.wireframe_pipeline));
@@ -1682,6 +1683,7 @@ fn createMainPipelines(ctx: *VulkanContext) !void {
 
     // Sky
     {
+        rasterizer.cullMode = c.VK_CULL_MODE_NONE;
         const vert_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/sky.vert.spv", ctx.allocator, @enumFromInt(1024 * 1024));
         defer ctx.allocator.free(vert_code);
         const frag_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/sky.frag.spv", ctx.allocator, @enumFromInt(1024 * 1024));
@@ -1965,6 +1967,8 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
                 }
             }
         }
+    } else {
+        std.log.info("Running in optimized mode (validation layers disabled)", .{});
     }
     try checkVk(c.vkCreateInstance(&create_info, null, &ctx.instance));
 
@@ -2385,7 +2389,7 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
         shadow_rs_info.polygonMode = c.VK_POLYGON_MODE_FILL;
         shadow_rs_info.lineWidth = 1.0;
         shadow_rs_info.cullMode = c.VK_CULL_MODE_BACK_BIT;
-        shadow_rs_info.frontFace = c.VK_FRONT_FACE_CLOCKWISE;
+        shadow_rs_info.frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE;
         shadow_rs_info.depthBiasEnable = c.VK_TRUE;
         var shadow_ms_info = std.mem.zeroes(c.VkPipelineMultisampleStateCreateInfo);
         shadow_ms_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -3731,7 +3735,7 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
         .params = .{ time_val, fog_density, if (fog_enabled) 1.0 else 0.0, sun_intensity },
         .lighting = .{ ambient, if (use_texture) 1.0 else 0.0, if (cloud_params.pbr_enabled) 1.0 else 0.0, 0.15 },
         .cloud_params = .{ cloud_params.cloud_height, @floatFromInt(cloud_params.shadow_samples), if (cloud_params.shadow_blend) 1.0 else 0.0, if (cloud_params.cloud_shadows) 1.0 else 0.0 },
-        .pbr_params = .{ @floatFromInt(cloud_params.pbr_quality), cloud_params.exposure, cloud_params.saturation, 0 },
+        .pbr_params = .{ @floatFromInt(cloud_params.pbr_quality), cloud_params.exposure, cloud_params.saturation, if (cloud_params.ssao_enabled) 1.0 else 0.0 },
         .volumetric_params = .{ if (cloud_params.volumetric_enabled) 1.0 else 0.0, cloud_params.volumetric_density, @floatFromInt(cloud_params.volumetric_steps), cloud_params.volumetric_scattering },
         .viewport_size = .{ @floatFromInt(ctx.swapchain_extent.width), @floatFromInt(ctx.swapchain_extent.height), 0, 0 },
     };

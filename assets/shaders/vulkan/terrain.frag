@@ -106,10 +106,10 @@ float shadowHash(vec3 p) {
 float findBlocker(vec2 uv, float zReceiver, int layer) {
     float blockerDepthSum = 0.0;
     int numBlockers = 0;
-    float searchRadius = 0.002; // Adjust based on scene scale
+    float searchRadius = 0.001;
     
-    for (int i = -2; i <= 2; i++) {
-        for (int j = -2; j <= 2; j++) {
+    for (int i = -1; i <= 1; i++) {
+        for (int j = -1; j <= 1; j++) {
             vec2 offset = vec2(i, j) * searchRadius;
             float depth = texture(uShadowMapsRegular, vec3(uv + offset, float(layer))).r;
             if (depth < zReceiver) {
@@ -125,15 +125,15 @@ float findBlocker(vec2 uv, float zReceiver, int layer) {
 
 float PCF_Filtered(vec2 uv, float zReceiver, float filterRadius, int layer) {
     float shadow = 0.0;
-    float bias = 0.0005; // Simplified bias for PCSS
+    float bias = 0.0004;
     
-    for (int i = -2; i <= 2; i++) {
-        for (int j = -2; j <= 2; j++) {
+    for (int i = -1; i <= 1; i++) {
+        for (int j = -1; j <= 1; j++) {
             vec2 offset = vec2(i, j) * filterRadius;
             shadow += texture(uShadowMaps, vec4(uv + offset, float(layer), zReceiver + bias));
         }
     }
-    return shadow / 25.0;
+    return shadow / 9.0;
 }
 
 float calculateShadow(vec3 fragPosWorld, float nDotL, int layer) {
@@ -147,8 +147,25 @@ float calculateShadow(vec3 fragPosWorld, float nDotL, int layer) {
         projCoords.z > 1.0 || projCoords.z < 0.0) return 0.0;
 
     float currentDepth = projCoords.z;
+    float bias = 0.0004;
+
+    // Performance Optimization: Skip PCSS on low sample counts
+    if (global.cloud_params.y < 5.0) {
+        if (global.cloud_params.y < 2.0) {
+            // Ultra-low: 1-tap hard shadow
+            return 1.0 - texture(uShadowMaps, vec4(projCoords.xy, float(layer), currentDepth + bias));
+        }
+        // Low: 4-tap 2x2 PCF
+        float shadow = 0.0;
+        float radius = 0.001;
+        shadow += texture(uShadowMaps, vec4(projCoords.xy + vec2(-radius, -radius), float(layer), currentDepth + bias));
+        shadow += texture(uShadowMaps, vec4(projCoords.xy + vec2(radius, -radius), float(layer), currentDepth + bias));
+        shadow += texture(uShadowMaps, vec4(projCoords.xy + vec2(-radius, radius), float(layer), currentDepth + bias));
+        shadow += texture(uShadowMaps, vec4(projCoords.xy + vec2(radius, radius), float(layer), currentDepth + bias));
+        return 1.0 - (shadow * 0.25);
+    }
     
-    // PCSS logic
+    // High-quality PCSS logic
     float avgBlockerDepth = findBlocker(projCoords.xy, currentDepth, layer);
     if (avgBlockerDepth == -1.0) return 0.0; // No blockers
     
@@ -193,7 +210,7 @@ vec4 calculateVolumetric(vec3 rayStart, vec3 rayEnd, float dither) {
     rayDir /= totalDist;
     
     float maxDist = min(totalDist, 180.0); 
-    int steps = int(global.volumetric_params.z);
+    int steps = 16; 
     float stepSize = maxDist / float(steps);
     
     float cosTheta = dot(rayDir, normalize(global.sun_dir.xyz));
@@ -223,6 +240,9 @@ vec4 calculateVolumetric(vec3 rayStart, vec3 rayEnd, float dither) {
             
             accumulatedScattering += stepScattering * transmittance;
             transmittance *= exp(-density * stepSize);
+            
+            // Optimization: Early exit if fully occluded
+            if (transmittance < 0.01) break;
         }
     }
     
@@ -331,7 +351,7 @@ vec3 agxLook(vec3 val, float saturation, float contrast) {
     val = luma + saturation * (val - luma);
     
     // Contrast adjustment around mid-gray
-    val = 0.5 + contrast * (val - 0.5);
+    val = 0.5 + (0.5 + contrast * 0.5) * (val - 0.5);
     
     return val;
 }
@@ -347,8 +367,8 @@ vec3 agxToneMap(vec3 color, float exposure, float saturation) {
     // AgX transform
     color = agx(color);
     
-    // Apply look (subtle saturation boost to counter any desaturation)
-    color = agxLook(color, saturation, 1.0);
+    // Apply look (saturation boost and contrast boost to combat washed out appearance)
+    color = agxLook(color, saturation, 1.2);
     
     // Inverse EOTF (linearize for display)
     color = agxEotf(color);
@@ -455,7 +475,7 @@ void main() {
 
     // SSAO Sampling (reduced strength)
     vec2 screenUV = gl_FragCoord.xy / global.viewport_size.xy;
-    float ssao = mix(1.0, texture(uSSAOMap, screenUV).r, 0.35);
+    float ssao = mix(1.0, texture(uSSAOMap, screenUV).r, global.pbr_params.w);
     
     // Soften voxel AO effect (50% strength) to prevent overly dark faces
     float ao = mix(1.0, vAO, 0.5);
@@ -506,8 +526,7 @@ void main() {
                 vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
                 
                 float NdotL = max(dot(N, L), 0.0);
-                // Boost sun brightness for clearer day lighting
-                vec3 sunColor = pow(vec3(1.0, 0.98, 0.95), vec3(2.2)) * global.params.w * 1.5;
+                vec3 sunColor = global.sun_color.rgb * global.params.w;
                 vec3 Lo = (kD * albedo / PI + specular) * sunColor * NdotL * (1.0 - totalShadow);
                 
                 // Ambient lighting (IBL)
@@ -521,7 +540,7 @@ void main() {
                 // Apply AO to ambient lighting (darkens corners and crevices)
                 // Combine baked Voxel AO with dynamic Screen-Space AO
                 // Boost ambient sky light to prevent dark shadows
-                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 1.2 + blockLight) * ao * ssao;
+                vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight + blockLight) * ao * ssao;
                 
                 color = ambientColor + Lo;
             } else {
@@ -539,7 +558,7 @@ void main() {
                 vec3 ambientColor = albedo * (min(envColor, vec3(3.0)) * skyLight * 0.8 + blockLight) * ao * ssao;
                 
                 // Direct lighting
-                vec3 sunColor = pow(vec3(1.0, 0.98, 0.95), vec3(2.2)) * global.params.w;
+                vec3 sunColor = global.sun_color.rgb * global.params.w;
                 vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
                 
                 color = ambientColor + directColor;

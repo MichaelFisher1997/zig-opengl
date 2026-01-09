@@ -64,7 +64,7 @@ pub const LODSimplifiedData = struct {
     /// Width/depth of the data grid (depends on LOD level)
     width: u32,
     /// Heightmap values (one per grid cell)
-    heightmap: []i16,
+    heightmap: []f32,
     /// Biome IDs (one per grid cell)
     biomes: []BiomeId,
     /// Top surface block type (one per grid cell)
@@ -103,7 +103,7 @@ pub const LODSimplifiedData = struct {
 
         return LODSimplifiedData{
             .width = grid_size,
-            .heightmap = try allocator.alloc(i16, count),
+            .heightmap = try allocator.alloc(f32, count),
             .biomes = try allocator.alloc(BiomeId, count),
             .top_blocks = try allocator.alloc(BlockType, count),
             .colors = try allocator.alloc(u32, count),
@@ -120,13 +120,13 @@ pub const LODSimplifiedData = struct {
     }
 
     /// Get heightmap value at grid position
-    pub fn getHeight(self: *const LODSimplifiedData, gx: u32, gz: u32) i16 {
+    pub fn getHeight(self: *const LODSimplifiedData, gx: u32, gz: u32) f32 {
         if (gx >= self.width or gz >= self.width) return 0;
         return self.heightmap[gz * self.width + gx];
     }
 
     /// Set heightmap value at grid position
-    pub fn setHeight(self: *LODSimplifiedData, gx: u32, gz: u32, height: i16) void {
+    pub fn setHeight(self: *LODSimplifiedData, gx: u32, gz: u32, height: f32) void {
         if (gx >= self.width or gz >= self.width) return;
         self.heightmap[gz * self.width + gx] = height;
     }

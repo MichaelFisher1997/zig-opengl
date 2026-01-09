@@ -315,33 +315,50 @@ pub const ChunkMesh = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        // Upload merged solid buffer
+        // Handle solid pass
         if (self.pending_solid) |v| {
+            // Always free existing allocation first to reduce peak usage
             if (self.solid_allocation) |alloc| {
                 allocator.free(alloc);
                 self.solid_allocation = null;
             }
-            self.solid_allocation = allocator.allocate(v) catch |err| {
-                std.log.err("Failed to allocate chunk mesh vertices (will retry): {}", .{err});
-                return;
-            };
+
+            if (v.len > 0) {
+                self.solid_allocation = allocator.allocate(v) catch |err| {
+                    std.log.err("Failed to allocate chunk mesh vertices (will retry): {}", .{err});
+                    return;
+                };
+            }
             self.allocator.free(v);
             self.pending_solid = null;
             self.ready = true;
+        } else if (self.solid_allocation != null) {
+            // Chunk became empty in solid pass, free the old allocation
+            allocator.free(self.solid_allocation.?);
+            self.solid_allocation = null;
+            self.ready = true;
         }
 
-        // Upload merged fluid buffer
+        // Handle fluid pass
         if (self.pending_fluid) |v| {
             if (self.fluid_allocation) |alloc| {
                 allocator.free(alloc);
                 self.fluid_allocation = null;
             }
-            self.fluid_allocation = allocator.allocate(v) catch |err| {
-                std.log.err("Failed to allocate chunk fluid vertices (will retry): {}", .{err});
-                return;
-            };
+
+            if (v.len > 0) {
+                self.fluid_allocation = allocator.allocate(v) catch |err| {
+                    std.log.err("Failed to allocate chunk fluid vertices (will retry): {}", .{err});
+                    return;
+                };
+            }
             self.allocator.free(v);
             self.pending_fluid = null;
+            self.ready = true;
+        } else if (self.fluid_allocation != null) {
+            // Chunk became empty in fluid pass, free the old allocation
+            allocator.free(self.fluid_allocation.?);
+            self.fluid_allocation = null;
             self.ready = true;
         }
     }

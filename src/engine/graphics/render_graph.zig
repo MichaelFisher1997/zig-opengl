@@ -56,12 +56,17 @@ pub const RenderGraph = struct {
         atlas: rhi_pkg.TextureAtlasHandles,
         shadow_distance: f32,
         shadow_resolution: u32,
+        ssao_enabled: bool,
     ) void {
         var main_pass_started = false;
         for (self.passes) |pass| {
+            // Skip SSAO passes if disabled. Also skip g_pass as it's only used for SSAO.
+            if (!ssao_enabled and (pass == .ssao or pass == .ssao_blur or pass == .g_pass)) continue;
+
             // Start main render pass (clears buffer) only once before the first non-shadow pass
             switch (pass) {
                 .shadow_cascade_0, .shadow_cascade_1, .shadow_cascade_2 => {},
+                .ssao, .ssao_blur => {}, // SSAO passes don't start the main pass
                 else => {
                     if (!main_pass_started) {
                         rhi.beginMainPass();

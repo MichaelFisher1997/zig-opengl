@@ -125,7 +125,7 @@ const AtmosphereState = struct {
         }
 
         self.moon_intensity = (1.0 - self.sun_intensity) * 0.15;
-        const day_ambient: f32 = 0.70;
+        const day_ambient: f32 = 0.45;
         const night_ambient: f32 = 0.15;
         self.ambient_intensity = std.math.lerp(night_ambient, day_ambient, self.sun_intensity);
     }
@@ -431,12 +431,15 @@ pub const App = struct {
         if (self.pending_new_world_seed) |seed| {
             self.pending_new_world_seed = null;
             const lod_config = LODConfig{
-                .lod0_radius = self.settings.render_distance,
+                .lod0_radius = @min(self.settings.render_distance, 16), // Cap high-detail chunks to 16 radius (256 blocks)
                 .lod1_radius = 40,
                 .lod2_radius = 80,
                 .lod3_radius = 160,
             };
             if (self.settings.lod_enabled) {
+                // Determine max render distance based on config
+                // If render distance is huge (e.g. 50), effective distance for World is clamped by lod0_radius due to my prev fix
+                // But World itself needs the full render distance to pass to fog/sky rendering if used there
                 self.world = World.initWithLOD(self.allocator, self.settings.render_distance, seed, self.rhi, lod_config) catch |err| {
                     log.log.err("Failed to create world with LOD: {}", .{err});
                     self.app_state = .home;
@@ -650,6 +653,7 @@ pub const App = struct {
                         .volumetric_density = self.settings.volumetric_density,
                         .volumetric_steps = self.settings.volumetric_steps,
                         .volumetric_scattering = self.settings.volumetric_scattering,
+                        .ssao_enabled = self.settings.ssao_enabled,
                     };
                 };
 
@@ -662,7 +666,7 @@ pub const App = struct {
                 };
 
                 self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.sun_color, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
-                self.render_graph.execute(self.rhi, active_world, &self.camera, aspect, sky_params, cloud_params, self.shader, atlas_handles, self.settings.shadow_distance, self.settings.getShadowResolution());
+                self.render_graph.execute(self.rhi, active_world, &self.camera, aspect, sky_params, cloud_params, self.shader, atlas_handles, self.settings.shadow_distance, self.settings.getShadowResolution(), self.settings.ssao_enabled);
 
                 if (self.player) |p| {
                     if (p.target_block) |target| self.block_outline.draw(target.x, target.y, target.z, self.camera.position);

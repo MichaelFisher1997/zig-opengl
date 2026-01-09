@@ -386,6 +386,11 @@ pub const LODManager = struct {
         while (rz <= player_rz + region_radius) : (rz += 1) {
             var rx = player_rx - region_radius;
             while (rx <= player_rx + region_radius) : (rx += 1) {
+                // Check circular distance to avoid thrashing corner chunks
+                const dx = rx - player_rx;
+                const dz = rz - player_rz;
+                if (dx * dx + dz * dz > region_radius * region_radius) continue;
+
                 const key = LODRegionKey{ .rx = rx, .rz = rz, .lod = lod };
 
                 // Check if region exists and what state it's in
@@ -412,10 +417,11 @@ pub const LODManager = struct {
                     self.next_job_token += 1;
 
                     // Calculate velocity-weighted priority
-                    const dx = rx - player_rx;
-                    const dz = rz - player_rz;
+                    // (dx, dz calculated above)
                     const dist_sq = dx * dx + dz * dz;
-                    var priority = dist_sq;
+                    // Scale priority to match chunk-distance units used by meshing jobs (which are prioritized by chunk dist)
+                    // This ensures generation doesn't starve meshing
+                    var priority = dist_sq * scale * scale;
                     if (has_velocity) {
                         const fdx: f32 = @floatFromInt(dx);
                         const fdz: f32 = @floatFromInt(dz);
@@ -424,7 +430,7 @@ pub const LODManager = struct {
                             const dot = (fdx * vel_dx + fdz * vel_dz) / dist;
                             // Ahead = lower priority number, behind = higher
                             const weight = 1.0 - dot * 0.5;
-                            priority = @intFromFloat(@as(f32, @floatFromInt(dist_sq)) * weight);
+                            priority = @intFromFloat(@as(f32, @floatFromInt(priority)) * weight);
                         }
                     }
 

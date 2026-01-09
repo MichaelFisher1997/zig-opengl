@@ -78,7 +78,7 @@ vec4 calculateVolumetric(vec3 rayStart, vec3 rayDir, float dither) {
     // if (cosSun < 0.0) return vec4(0.0, 0.0, 0.0, 1.0);
     
     float maxDist = 180.0; 
-    int steps = int(global.volumetric_params.z);
+    int steps = 16; 
     float stepSize = maxDist / float(steps);
     
     float phase = henyeyGreenstein(global.volumetric_params.w, cosSun);
@@ -103,6 +103,9 @@ vec4 calculateVolumetric(vec3 rayStart, vec3 rayDir, float dither) {
             
             accumulatedScattering += stepScattering * transmittance;
             transmittance *= exp(-density * stepSize);
+            
+            // Optimization: Early exit if fully occluded
+            if (transmittance < 0.01) break;
         }
     }
     
@@ -162,7 +165,8 @@ void main() {
 
     float sunDot = dot(dir, normalize(pc.sun_dir.xyz));
     float sunDisc = smoothstep(0.9995, 0.9999, sunDot);
-    vec3 sunColor = pow(vec3(1.0, 0.95, 0.8), vec3(2.2));
+    // Use uniform sun color instead of hardcoded value
+    vec3 sunColor = global.sun_color.rgb;
 
     float sunGlow = pow(max(sunDot, 0.0), 8.0) * 0.5;
     sunGlow += pow(max(sunDot, 0.0), 64.0) * 0.3;

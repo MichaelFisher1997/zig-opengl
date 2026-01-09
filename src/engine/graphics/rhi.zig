@@ -139,7 +139,7 @@ pub const CloudParams = struct {
     wind_offset_x: f32 = 0.0,
     wind_offset_z: f32 = 0.0,
     base_color: Vec3 = Vec3.init(1.0, 1.0, 1.0),
-    pbr_enabled: bool = false,
+    pbr_enabled: bool = true,
     shadow_samples: u8 = 12,
     shadow_blend: bool = true,
     cloud_shadows: bool = true,
@@ -147,11 +147,12 @@ pub const CloudParams = struct {
     // Volumetric lighting parameters (Phase 4)
     volumetric_enabled: bool = true,
     volumetric_density: f32 = 0.05,
-    volumetric_steps: u32 = 24,
+    volumetric_steps: u32 = 16,
     volumetric_scattering: f32 = 0.8,
     // Tone mapping parameters
-    exposure: f32 = 1.0,
-    saturation: f32 = 1.1,
+    exposure: f32 = 0.9,
+    saturation: f32 = 1.3,
+    ssao_enabled: bool = true,
 };
 
 /// RGBA color for UI rendering

@@ -102,6 +102,26 @@ pub const ConfiguredNoise = struct {
         return val * self.params.scale + self.params.offset;
     }
 
+    /// Sample 2D noise with limited octaves (for LODs)
+    pub fn get2DOctaves(self: *const ConfiguredNoise, x: f32, z: f32, max_octaves: u16) f32 {
+        const freq = self.params.getFrequency2D();
+        const effective_octaves = @min(self.params.octaves, max_octaves);
+        var val = self.noise.fbm2D(
+            x,
+            z,
+            effective_octaves,
+            self.params.lacunarity,
+            self.params.persist,
+            freq,
+        );
+
+        if (self.params.flags.absvalue) {
+            val = @abs(val);
+        }
+
+        return val * self.params.scale + self.params.offset;
+    }
+
     /// Sample 3D noise at world coordinates with anisotropic spread
     /// Returns: offset + scale * fbm3D(x, y, z)
     pub fn get3D(self: *const ConfiguredNoise, x: f32, y: f32, z: f32) f32 {
@@ -133,6 +153,30 @@ pub const ConfiguredNoise = struct {
         }
 
         return val * self.params.scale + self.params.offset;
+    }
+
+    /// Sample 2D noise normalized to 0-1 range with limited octaves
+    pub fn get2DNormalizedOctaves(self: *const ConfiguredNoise, x: f32, z: f32, max_octaves: u16) f32 {
+        const freq = self.params.getFrequency2D();
+        const effective_octaves = @min(self.params.octaves, max_octaves);
+        var val = self.noise.fbm2D(
+            x,
+            z,
+            effective_octaves,
+            self.params.lacunarity,
+            self.params.persist,
+            freq,
+        );
+
+        if (self.params.flags.absvalue) {
+            val = @abs(val);
+            // absvalue range is 0 to ~1
+            return clamp01(val * self.params.scale + self.params.offset);
+        }
+
+        // Normal range is -1 to 1, normalize to 0-1
+        val = (val + 1.0) * 0.5;
+        return clamp01(val * self.params.scale + self.params.offset);
     }
 
     /// Sample 2D noise normalized to 0-1 range

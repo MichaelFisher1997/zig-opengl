@@ -43,7 +43,7 @@ void main() {
     mat3 TBN = mat3(tangent, bitangent, normal);
 
     float occlusion = 0.0;
-    for (int i = 0; i < 64; i++) {
+    for (int i = 0; i < 16; i++) {
         // Get sample position in view space
         vec3 samplePos = TBN * params.samples[i].xyz;
         samplePos = fragPos + samplePos * params.radius;
@@ -62,5 +62,5 @@ void main() {
         occlusion += (sampleDepth >= samplePos.z + params.bias ? 1.0 : 0.0) * rangeCheck;
     }
 
-    outAO = 1.0 - (occlusion / 64.0);
+    outAO = 1.0 - (occlusion / 16.0);
 }

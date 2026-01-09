@@ -124,17 +124,20 @@ pub const HandRenderer = struct {
         const v2 = Vertex{ .pos = p2, .color = color, .normal = normal, .uv = .{ 1, 1 }, .tile_id = @floatFromInt(tile), .skylight = 1.0, .blocklight = .{ 1.0, 1.0, 1.0 }, .ao = 1.0 };
         const v3 = Vertex{ .pos = p3, .color = color, .normal = normal, .uv = .{ 0, 1 }, .tile_id = @floatFromInt(tile), .skylight = 1.0, .blocklight = .{ 1.0, 1.0, 1.0 }, .ao = 1.0 };
 
+        // Triangle 1: 0 -> 2 -> 1 (CCW)
         verts[idx.*] = v0;
+        idx.* += 1;
+        verts[idx.*] = v2;
         idx.* += 1;
         verts[idx.*] = v1;
         idx.* += 1;
-        verts[idx.*] = v2;
-        idx.* += 1;
+
+        // Triangle 2: 0 -> 3 -> 2 (CCW)
         verts[idx.*] = v0;
         idx.* += 1;
-        verts[idx.*] = v2;
-        idx.* += 1;
         verts[idx.*] = v3;
+        idx.* += 1;
+        verts[idx.*] = v2;
         idx.* += 1;
     }
 

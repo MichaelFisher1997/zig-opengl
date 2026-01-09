@@ -32,8 +32,8 @@ pub const Settings = struct {
     // PBR Settings
     pbr_enabled: bool = true,
     pbr_quality: u8 = 2, // 0=Off, 1=Low (no normal maps), 2=Full
-    exposure: f32 = 1.0,
-    saturation: f32 = 1.1,
+    exposure: f32 = 0.9,
+    saturation: f32 = 1.3,
 
     // Shadow Settings
     shadow_pcf_samples: u8 = 12, // 4, 8, 12, 16
@@ -45,8 +45,9 @@ pub const Settings = struct {
     // Volumetric Lighting Settings (Phase 4)
     volumetric_lighting_enabled: bool = true,
     volumetric_density: f32 = 0.05, // Fog density
-    volumetric_steps: u32 = 24, // Raymarching steps
+    volumetric_steps: u32 = 16, // Raymarching steps
     volumetric_scattering: f32 = 0.8, // Mie scattering anisotropy (G)
+    ssao_enabled: bool = true,
 
     // Texture Settings
     max_texture_resolution: u32 = 512, // 16, 32, 64, 128, 256, 512
@@ -128,20 +129,22 @@ pub const Settings = struct {
         volumetric_density: f32,
         volumetric_steps: u32,
         volumetric_scattering: f32,
+        ssao_enabled: bool,
+        render_distance: i32,
     };
 
     pub const GRAPHICS_PRESETS = [_]PresetConfig{
         // LOW: Prioritize performance
-        .{ .preset = .low, .shadow_quality = 0, .shadow_pcf_samples = 4, .shadow_cascade_blend = false, .pbr_enabled = false, .pbr_quality = 0, .msaa_samples = 1, .anisotropic_filtering = 1, .max_texture_resolution = 64, .cloud_shadows_enabled = false, .exposure = 1.0, .saturation = 1.0, .volumetric_lighting_enabled = false, .volumetric_density = 0.0, .volumetric_steps = 4, .volumetric_scattering = 0.5 },
+        .{ .preset = .low, .shadow_quality = 0, .shadow_pcf_samples = 4, .shadow_cascade_blend = false, .pbr_enabled = false, .pbr_quality = 0, .msaa_samples = 1, .anisotropic_filtering = 1, .max_texture_resolution = 64, .cloud_shadows_enabled = false, .exposure = 0.9, .saturation = 1.3, .volumetric_lighting_enabled = false, .volumetric_density = 0.0, .volumetric_steps = 4, .volumetric_scattering = 0.5, .ssao_enabled = false, .render_distance = 6 },
 
         // MEDIUM: Balanced
-        .{ .preset = .medium, .shadow_quality = 1, .shadow_pcf_samples = 8, .shadow_cascade_blend = false, .pbr_enabled = true, .pbr_quality = 1, .msaa_samples = 2, .anisotropic_filtering = 4, .max_texture_resolution = 128, .cloud_shadows_enabled = true, .exposure = 1.0, .saturation = 1.0, .volumetric_lighting_enabled = true, .volumetric_density = 0.00005, .volumetric_steps = 6, .volumetric_scattering = 0.7 },
+        .{ .preset = .medium, .shadow_quality = 1, .shadow_pcf_samples = 8, .shadow_cascade_blend = false, .pbr_enabled = true, .pbr_quality = 1, .msaa_samples = 2, .anisotropic_filtering = 4, .max_texture_resolution = 128, .cloud_shadows_enabled = true, .exposure = 0.9, .saturation = 1.3, .volumetric_lighting_enabled = true, .volumetric_density = 0.00005, .volumetric_steps = 8, .volumetric_scattering = 0.7, .ssao_enabled = true, .render_distance = 12 },
 
         // HIGH: Quality focus
-        .{ .preset = .high, .shadow_quality = 2, .shadow_pcf_samples = 12, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 4, .anisotropic_filtering = 8, .max_texture_resolution = 256, .cloud_shadows_enabled = true, .exposure = 1.0, .saturation = 1.0, .volumetric_lighting_enabled = true, .volumetric_density = 0.0001, .volumetric_steps = 8, .volumetric_scattering = 0.75 },
+        .{ .preset = .high, .shadow_quality = 2, .shadow_pcf_samples = 12, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 4, .anisotropic_filtering = 8, .max_texture_resolution = 256, .cloud_shadows_enabled = true, .exposure = 0.9, .saturation = 1.3, .volumetric_lighting_enabled = true, .volumetric_density = 0.0001, .volumetric_steps = 12, .volumetric_scattering = 0.75, .ssao_enabled = true, .render_distance = 18 },
 
         // ULTRA: Maximum quality
-        .{ .preset = .ultra, .shadow_quality = 3, .shadow_pcf_samples = 16, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 4, .anisotropic_filtering = 16, .max_texture_resolution = 512, .cloud_shadows_enabled = true, .exposure = 1.0, .saturation = 1.0, .volumetric_lighting_enabled = true, .volumetric_density = 0.0002, .volumetric_steps = 12, .volumetric_scattering = 0.8 },
+        .{ .preset = .ultra, .shadow_quality = 3, .shadow_pcf_samples = 16, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 4, .anisotropic_filtering = 16, .max_texture_resolution = 512, .cloud_shadows_enabled = true, .exposure = 0.9, .saturation = 1.3, .volumetric_lighting_enabled = true, .volumetric_density = 0.0002, .volumetric_steps = 16, .volumetric_scattering = 0.8, .ssao_enabled = true, .render_distance = 28 },
     };
 
     pub fn applyPreset(self: *Settings, preset_idx: usize) void {
@@ -162,6 +165,8 @@ pub const Settings = struct {
         self.volumetric_density = config.volumetric_density;
         self.volumetric_steps = config.volumetric_steps;
         self.volumetric_scattering = config.volumetric_scattering;
+        self.ssao_enabled = config.ssao_enabled;
+        self.render_distance = config.render_distance;
     }
 
     pub fn getPresetIndex(self: *const Settings) usize {
@@ -176,7 +181,8 @@ pub const Settings = struct {
                 self.max_texture_resolution == preset.max_texture_resolution and
                 self.cloud_shadows_enabled == preset.cloud_shadows_enabled and
                 self.exposure == preset.exposure and
-                self.saturation == preset.saturation)
+                self.saturation == preset.saturation and
+                self.render_distance == preset.render_distance)
             {
                 return i;
             }
