@@ -105,19 +105,19 @@ pub const LODMesh = struct {
                 // Add skirts at edges
                 const skirt_depth: f32 = size * 4.0;
                 if (gx == 0) {
-                    const avg_h: f32 = @floatFromInt(@divTrunc(h00 + h01, 2));
+                    const avg_h = (h00 + h01) * 0.5;
                     try addSideFaceQuad(self.allocator, &vertices, wx, avg_h, wz, size, avg_h - skirt_depth, unpackR(c00) * 0.6, unpackG(c00) * 0.6, unpackB(c00) * 0.6, .west);
                 }
                 if (gx == data.width - 1) {
-                    const avg_h: f32 = @floatFromInt(@divTrunc(h10 + h11, 2));
+                    const avg_h = (h10 + h11) * 0.5;
                     try addSideFaceQuad(self.allocator, &vertices, wx, avg_h, wz, size, avg_h - skirt_depth, unpackR(c10) * 0.6, unpackG(c10) * 0.6, unpackB(c10) * 0.6, .east);
                 }
                 if (gz == 0) {
-                    const avg_h: f32 = @floatFromInt(@divTrunc(h00 + h10, 2));
+                    const avg_h = (h00 + h10) * 0.5;
                     try addSideFaceQuad(self.allocator, &vertices, wx, avg_h, wz, size, avg_h - skirt_depth, unpackR(c00) * 0.7, unpackG(c00) * 0.7, unpackB(c00) * 0.7, .north);
                 }
                 if (gz == data.width - 1) {
-                    const avg_h: f32 = @floatFromInt(@divTrunc(h01 + h11, 2));
+                    const avg_h = (h01 + h11) * 0.5;
                     try addSideFaceQuad(self.allocator, &vertices, wx, avg_h, wz, size, avg_h - skirt_depth, unpackR(c01) * 0.7, unpackG(c01) * 0.7, unpackB(c01) * 0.7, .south);
                 }
             }
@@ -141,7 +141,7 @@ pub const LODMesh = struct {
     /// Build mesh from full chunk heightmap data
     pub fn buildFromHeightmap(
         self: *LODMesh,
-        heightmap: []const i16,
+        heightmap: []const f32,
         biomes: []const BiomeId,
         width: u32,
         _: i32,
@@ -283,24 +283,28 @@ fn addSmoothQuad(
     x: f32,
     z: f32,
     size: f32,
-    h00: i16,
-    h10: i16,
-    h01: i16,
-    h11: i16,
+    h00: f32,
+    h10: f32,
+    h01: f32,
+    h11: f32,
     c00: u32,
     c10: u32,
     c01: u32,
     c11: u32,
 ) !void {
-    const y00: f32 = @floatFromInt(h00);
-    const y10: f32 = @floatFromInt(h10);
-    const y01: f32 = @floatFromInt(h01);
-    const y11: f32 = @floatFromInt(h11);
+    const y00 = h00;
+    const y10 = h10;
+    const y01 = h01;
+    const y11 = h11;
 
     // Calculate normals from height differences
     const normal = [3]f32{ 0, 1, 0 };
 
-    // Triangle 1: (0,0), (1,0), (1,1)
+    // Triangle 1: (0,0), (1,1), (0,1) - CCW for Up Normal (Original Points: 0(00), 1(10), 2(11), 3(01))
+    // 0->2->3 is (0,0)->(1,1)->(0,1). This generates Up normal.
+    // However, we want to maintain the split structure (0-1-2 and 0-2-3 splits diagonal).
+    // Original Tri 1: 0, 1, 2. (0,0)->(1,0)->(1,1). CW (Down).
+    // Reversed: 0, 2, 1. (0,0)->(1,1)->(1,0). CCW (Up).
     try vertices.append(allocator, .{
         .pos = .{ x, y00, z },
         .color = .{ unpackR(c00), unpackG(c00), unpackB(c00) },
@@ -308,7 +312,18 @@ fn addSmoothQuad(
         .uv = .{ 0, 0 },
         .tile_id = -1.0,
         .skylight = 1.0,
-        .blocklight = 0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
+    });
+    try vertices.append(allocator, .{
+        .pos = .{ x + size, y11, z + size },
+        .color = .{ unpackR(c11), unpackG(c11), unpackB(c11) },
+        .normal = normal,
+        .uv = .{ 1, 1 },
+        .tile_id = -1.0,
+        .skylight = 1.0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
     });
     try vertices.append(allocator, .{
         .pos = .{ x + size, y10, z },
@@ -317,19 +332,16 @@ fn addSmoothQuad(
         .uv = .{ 1, 0 },
         .tile_id = -1.0,
         .skylight = 1.0,
-        .blocklight = 0,
-    });
-    try vertices.append(allocator, .{
-        .pos = .{ x + size, y11, z + size },
-        .color = .{ unpackR(c11), unpackG(c11), unpackB(c11) },
-        .normal = normal,
-        .uv = .{ 1, 1 },
-        .tile_id = -1.0,
-        .skylight = 1.0,
-        .blocklight = 0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
     });
 
-    // Triangle 2: (0,0), (1,1), (0,1)
+    // Triangle 2: (0,0), (0,1), (1,1) - CCW for Up Normal
+    // Original Tri 2: 0, 2, 3. (0,0)->(1,1)->(0,1). (Up). Wait, this was already Up?
+    // Let's check Tri 2 again: (0,0)->(1,1)->(0,1).
+    // V1=(1,1). V2=(-1,0). Cross=(0,-1,0). DOWN.
+    // So YES, Tri 2 is also CW (Down).
+    // Reversed: 0, 3, 2. (0,0)->(0,1)->(1,1).
     try vertices.append(allocator, .{
         .pos = .{ x, y00, z },
         .color = .{ unpackR(c00), unpackG(c00), unpackB(c00) },
@@ -337,16 +349,8 @@ fn addSmoothQuad(
         .uv = .{ 0, 0 },
         .tile_id = -1.0,
         .skylight = 1.0,
-        .blocklight = 0,
-    });
-    try vertices.append(allocator, .{
-        .pos = .{ x + size, y11, z + size },
-        .color = .{ unpackR(c11), unpackG(c11), unpackB(c11) },
-        .normal = normal,
-        .uv = .{ 1, 1 },
-        .tile_id = -1.0,
-        .skylight = 1.0,
-        .blocklight = 0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
     });
     try vertices.append(allocator, .{
         .pos = .{ x, y01, z + size },
@@ -355,7 +359,18 @@ fn addSmoothQuad(
         .uv = .{ 0, 1 },
         .tile_id = -1.0,
         .skylight = 1.0,
-        .blocklight = 0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
+    });
+    try vertices.append(allocator, .{
+        .pos = .{ x + size, y11, z + size },
+        .color = .{ unpackR(c11), unpackG(c11), unpackB(c11) },
+        .normal = normal,
+        .uv = .{ 1, 1 },
+        .tile_id = -1.0,
+        .skylight = 1.0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
     });
 }
 
@@ -364,7 +379,7 @@ fn addTopFaceQuad(allocator: std.mem.Allocator, vertices: *std.ArrayListUnmanage
     const normal = [3]f32{ 0, 1, 0 };
     const color = [3]f32{ r, g, b };
 
-    // Triangle 1: (0,0), (1,0), (1,1)
+    // Triangle 1: (0,0), (1,1), (0,1) - CCW for Up Normal
     try vertices.append(allocator, .{
         .pos = .{ x, y, z },
         .color = color,
@@ -372,16 +387,8 @@ fn addTopFaceQuad(allocator: std.mem.Allocator, vertices: *std.ArrayListUnmanage
         .uv = .{ 0, 0 },
         .tile_id = -1.0,
         .skylight = 1.0,
-        .blocklight = 0,
-    });
-    try vertices.append(allocator, .{
-        .pos = .{ x + size, y, z },
-        .color = color,
-        .normal = normal,
-        .uv = .{ 1, 0 },
-        .tile_id = -1.0,
-        .skylight = 1.0,
-        .blocklight = 0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
     });
     try vertices.append(allocator, .{
         .pos = .{ x + size, y, z + size },
@@ -390,27 +397,8 @@ fn addTopFaceQuad(allocator: std.mem.Allocator, vertices: *std.ArrayListUnmanage
         .uv = .{ 1, 1 },
         .tile_id = -1.0,
         .skylight = 1.0,
-        .blocklight = 0,
-    });
-
-    // Triangle 2: (0,0), (1,1), (0,1)
-    try vertices.append(allocator, .{
-        .pos = .{ x, y, z },
-        .color = color,
-        .normal = normal,
-        .uv = .{ 0, 0 },
-        .tile_id = -1.0,
-        .skylight = 1.0,
-        .blocklight = 0,
-    });
-    try vertices.append(allocator, .{
-        .pos = .{ x + size, y, z + size },
-        .color = color,
-        .normal = normal,
-        .uv = .{ 1, 1 },
-        .tile_id = -1.0,
-        .skylight = 1.0,
-        .blocklight = 0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
     });
     try vertices.append(allocator, .{
         .pos = .{ x, y, z + size },
@@ -419,7 +407,42 @@ fn addTopFaceQuad(allocator: std.mem.Allocator, vertices: *std.ArrayListUnmanage
         .uv = .{ 0, 1 },
         .tile_id = -1.0,
         .skylight = 1.0,
-        .blocklight = 0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
+    });
+
+    // Triangle 2: (0,0), (1,0), (1,1) - CCW for Up Normal (Need 0->2->1 order from original points)
+    // Original points: 0(0,0), 1(1,0), 2(1,1). 0->1->2 is CW. 0->2->1 is CCW.
+    // So: (0,0), (1,1), (1,0).
+    try vertices.append(allocator, .{
+        .pos = .{ x, y, z },
+        .color = color,
+        .normal = normal,
+        .uv = .{ 0, 0 },
+        .tile_id = -1.0,
+        .skylight = 1.0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
+    });
+    try vertices.append(allocator, .{
+        .pos = .{ x + size, y, z + size },
+        .color = color,
+        .normal = normal,
+        .uv = .{ 1, 1 },
+        .tile_id = -1.0,
+        .skylight = 1.0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
+    });
+    try vertices.append(allocator, .{
+        .pos = .{ x + size, y, z },
+        .color = color,
+        .normal = normal,
+        .uv = .{ 1, 0 },
+        .tile_id = -1.0,
+        .skylight = 1.0,
+        .blocklight = .{ 0, 0, 0 },
+        .ao = 1.0,
     });
 }
 
@@ -463,14 +486,14 @@ fn addSideFaceQuad(allocator: std.mem.Allocator, vertices: *std.ArrayListUnmanag
     };
 
     // Triangle 1
-    try vertices.append(allocator, .{ .pos = corners[0], .color = color, .normal = normal, .uv = .{ 0, 0 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = 0 });
-    try vertices.append(allocator, .{ .pos = corners[1], .color = color, .normal = normal, .uv = .{ 1, 0 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = 0 });
-    try vertices.append(allocator, .{ .pos = corners[2], .color = color, .normal = normal, .uv = .{ 1, 1 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = 0 });
+    try vertices.append(allocator, .{ .pos = corners[0], .color = color, .normal = normal, .uv = .{ 0, 0 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = .{ 0, 0, 0 }, .ao = 1.0 });
+    try vertices.append(allocator, .{ .pos = corners[1], .color = color, .normal = normal, .uv = .{ 1, 0 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = .{ 0, 0, 0 }, .ao = 1.0 });
+    try vertices.append(allocator, .{ .pos = corners[2], .color = color, .normal = normal, .uv = .{ 1, 1 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = .{ 0, 0, 0 }, .ao = 1.0 });
 
     // Triangle 2
-    try vertices.append(allocator, .{ .pos = corners[0], .color = color, .normal = normal, .uv = .{ 0, 0 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = 0 });
-    try vertices.append(allocator, .{ .pos = corners[2], .color = color, .normal = normal, .uv = .{ 1, 1 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = 0 });
-    try vertices.append(allocator, .{ .pos = corners[3], .color = color, .normal = normal, .uv = .{ 0, 1 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = 0 });
+    try vertices.append(allocator, .{ .pos = corners[0], .color = color, .normal = normal, .uv = .{ 0, 0 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = .{ 0, 0, 0 }, .ao = 1.0 });
+    try vertices.append(allocator, .{ .pos = corners[2], .color = color, .normal = normal, .uv = .{ 1, 1 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = .{ 0, 0, 0 }, .ao = 1.0 });
+    try vertices.append(allocator, .{ .pos = corners[3], .color = color, .normal = normal, .uv = .{ 0, 1 }, .tile_id = -1.0, .skylight = 1.0, .blocklight = .{ 0, 0, 0 }, .ao = 1.0 });
 }
 
 /// LOD Mesh Builder - builds meshes for LOD regions
@@ -485,7 +508,7 @@ pub const LODMeshBuilder = struct {
     pub fn buildLOD1(
         self: *LODMeshBuilder,
         mesh: *LODMesh,
-        heightmaps: [4][]const i16, // NW, NE, SW, SE chunks
+        heightmaps: [4][]const f32, // NW, NE, SW, SE chunks
         biomes: [4][]const BiomeId,
         _: i32,
         _: i32,
@@ -564,7 +587,7 @@ pub const LODMeshBuilder = struct {
     pub fn buildLOD2(
         self: *LODMeshBuilder,
         mesh: *LODMesh,
-        heightmaps: [16][]const i16,
+        heightmaps: [16][]const f32,
         biomes_data: [16][]const BiomeId,
         _: i32,
         _: i32,
@@ -692,9 +715,9 @@ pub const SeamConfig = struct {
 /// Stitch LOD mesh edge to match neighbor LOD level.
 /// This adjusts edge vertices to blend between LOD levels and prevent gaps.
 pub fn stitchEdge(
-    mesh_heightmap: []i16,
+    mesh_heightmap: []f32,
     mesh_width: u32,
-    neighbor_heightmap: []const i16,
+    neighbor_heightmap: []const f32,
     neighbor_width: u32,
     edge: EdgeDir,
     this_lod: LODLevel,
@@ -734,11 +757,8 @@ pub fn stitchEdge(
                     // Interpolate based on distance from edge
                     const t = @as(f32, @floatFromInt(z)) / @as(f32, @floatFromInt(blend_cells));
                     const blend = 1.0 - t; // 1.0 at edge, 0.0 at blend distance
-                    const blended_h: i16 = @intFromFloat(
-                        @as(f32, @floatFromInt(this_h)) * (1.0 - blend * config.blend_factor) +
-                            @as(f32, @floatFromInt(neighbor_h)) * blend * config.blend_factor,
-                    );
-                    mesh_heightmap[idx] = blended_h;
+                    mesh_heightmap[idx] = this_h * (1.0 - blend * config.blend_factor) +
+                        neighbor_h * blend * config.blend_factor;
                 }
             }
         },
@@ -761,11 +781,8 @@ pub fn stitchEdge(
 
                     const t = @as(f32, @floatFromInt(z)) / @as(f32, @floatFromInt(blend_cells));
                     const blend = 1.0 - t;
-                    const blended_h: i16 = @intFromFloat(
-                        @as(f32, @floatFromInt(this_h)) * (1.0 - blend * config.blend_factor) +
-                            @as(f32, @floatFromInt(neighbor_h)) * blend * config.blend_factor,
-                    );
-                    mesh_heightmap[idx] = blended_h;
+                    mesh_heightmap[idx] = this_h * (1.0 - blend * config.blend_factor) +
+                        neighbor_h * blend * config.blend_factor;
                 }
             }
         },
@@ -787,11 +804,8 @@ pub fn stitchEdge(
 
                     const t = @as(f32, @floatFromInt(x)) / @as(f32, @floatFromInt(blend_cells));
                     const blend = 1.0 - t;
-                    const blended_h: i16 = @intFromFloat(
-                        @as(f32, @floatFromInt(this_h)) * (1.0 - blend * config.blend_factor) +
-                            @as(f32, @floatFromInt(neighbor_h)) * blend * config.blend_factor,
-                    );
-                    mesh_heightmap[idx] = blended_h;
+                    mesh_heightmap[idx] = this_h * (1.0 - blend * config.blend_factor) +
+                        neighbor_h * blend * config.blend_factor;
                 }
             }
         },
@@ -814,11 +828,8 @@ pub fn stitchEdge(
 
                     const t = @as(f32, @floatFromInt(x)) / @as(f32, @floatFromInt(blend_cells));
                     const blend = 1.0 - t;
-                    const blended_h: i16 = @intFromFloat(
-                        @as(f32, @floatFromInt(this_h)) * (1.0 - blend * config.blend_factor) +
-                            @as(f32, @floatFromInt(neighbor_h)) * blend * config.blend_factor,
-                    );
-                    mesh_heightmap[idx] = blended_h;
+                    mesh_heightmap[idx] = this_h * (1.0 - blend * config.blend_factor) +
+                        neighbor_h * blend * config.blend_factor;
                 }
             }
         },
@@ -826,8 +837,8 @@ pub fn stitchEdge(
 }
 
 test "stitchEdge basic" {
-    var mesh_hm = [_]i16{ 100, 100, 100, 100, 90, 90, 90, 90, 80, 80, 80, 80, 70, 70, 70, 70 };
-    const neighbor_hm = [_]i16{ 50, 50, 50, 50 };
+    var mesh_hm = [_]f32{ 100, 100, 100, 100, 90, 90, 90, 90, 80, 80, 80, 80, 70, 70, 70, 70 };
+    const neighbor_hm = [_]f32{ 50, 50, 50, 50 };
 
     stitchEdge(
         &mesh_hm,
@@ -843,5 +854,5 @@ test "stitchEdge basic" {
     // First row should be blended toward 50
     try std.testing.expect(mesh_hm[0] < 100);
     // Last row should be unchanged
-    try std.testing.expectEqual(@as(i16, 70), mesh_hm[12]);
+    try std.testing.expectEqual(@as(f32, 70), mesh_hm[12]);
 }

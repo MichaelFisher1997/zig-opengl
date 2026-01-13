@@ -2,16 +2,14 @@
 
 layout(location = 0) in vec3 aPos;
 
-layout(push_constant) uniform ModelUniforms {
-    mat4 view_proj;
+layout(push_constant) uniform ShadowModelUniforms {
+    mat4 light_space_matrix;
     mat4 model;
-    float mask_radius;
-    vec3 padding;
 } pc;
 
 void main() {
     vec4 worldPos = pc.model * vec4(aPos, 1.0);
-    vec4 clipPos = pc.view_proj * worldPos;
+    vec4 clipPos = pc.light_space_matrix * worldPos;
     
     // Shadow maps: NO Y-flip here - keeps texel snapping consistent
     // The shadow map will be "upside down" but sampling is also not flipped,

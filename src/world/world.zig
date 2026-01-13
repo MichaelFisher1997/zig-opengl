@@ -140,7 +140,7 @@ pub const World = struct {
     mesh_queue: *JobQueue,
     gen_pool: *WorkerPool,
     mesh_pool: *WorkerPool,
-    upload_queue: RingBuffer(*ChunkData),
+    upload_queue: RingBuffer(ChunkKey),
     visible_chunks: std.ArrayListUnmanaged(*ChunkData),
     next_job_token: u32,
     last_pc: ChunkPos,
@@ -153,6 +153,16 @@ pub const World = struct {
     lod_enabled: bool,
     vertex_allocator: GlobalVertexAllocator,
 
+    // MDI Resources
+    instance_data: std.ArrayListUnmanaged(rhi_mod.InstanceData),
+    solid_commands: std.ArrayListUnmanaged(rhi_mod.DrawIndirectCommand),
+    fluid_commands: std.ArrayListUnmanaged(rhi_mod.DrawIndirectCommand),
+    instance_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle,
+    indirect_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle,
+    frame_index: usize,
+    mdi_instance_offset: usize,
+    mdi_command_offset: usize,
+
     pub fn init(allocator: std.mem.Allocator, render_distance: i32, seed: u64, rhi: RHI) !*World {
         const world = try allocator.create(World);
 
@@ -164,7 +174,18 @@ pub const World = struct {
 
         const generator = TerrainGenerator.init(seed, allocator);
 
-        const vertex_allocator = try GlobalVertexAllocator.init(allocator, rhi, 4096); // 4096MB megabuffer
+        // Increasing to 6GB (6144MB) to prevent OOM on high render distances (e.g. Ultra with 32+ chunks)
+        // With complex terrain, 4GB can be exceeded.
+        const vertex_allocator = try GlobalVertexAllocator.init(allocator, rhi, 6144);
+
+        // Init MDI buffers (capacity for ~16384 chunks to be safe for high render distances + shadows)
+        const max_chunks = 16384;
+        var instance_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle = undefined;
+        var indirect_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle = undefined;
+        for (0..rhi_mod.MAX_FRAMES_IN_FLIGHT) |i| {
+            instance_buffers[i] = rhi.createBuffer(max_chunks * @sizeOf(rhi_mod.InstanceData), .storage);
+            indirect_buffers[i] = rhi.createBuffer(max_chunks * @sizeOf(rhi_mod.DrawIndirectCommand) * 2, .indirect); // *2 for solid+fluid
+        }
 
         world.* = .{
             .chunks = std.HashMap(ChunkKey, *ChunkData, ChunkKeyContext, 80).init(allocator),
@@ -177,7 +198,7 @@ pub const World = struct {
             .mesh_queue = mesh_queue,
             .gen_pool = undefined,
             .mesh_pool = undefined,
-            .upload_queue = try RingBuffer(*ChunkData).init(allocator, 64),
+            .upload_queue = try RingBuffer(ChunkKey).init(allocator, 256),
             .visible_chunks = .empty,
             .next_job_token = 1,
             .last_pc = .{ .x = 9999, .z = 9999 },
@@ -187,6 +208,14 @@ pub const World = struct {
             .lod_manager = null,
             .lod_enabled = false,
             .vertex_allocator = vertex_allocator,
+            .instance_data = .empty,
+            .solid_commands = .empty,
+            .fluid_commands = .empty,
+            .instance_buffers = instance_buffers,
+            .indirect_buffers = indirect_buffers,
+            .frame_index = 0,
+            .mdi_instance_offset = 0,
+            .mdi_command_offset = 0,
         };
 
         world.gen_pool = try WorkerPool.init(allocator, 4, gen_queue, world, processGenJob);
@@ -235,6 +264,14 @@ pub const World = struct {
         if (self.lod_manager) |lod_mgr| {
             lod_mgr.deinit();
         }
+
+        for (0..rhi_mod.MAX_FRAMES_IN_FLIGHT) |i| {
+            if (self.instance_buffers[i] != 0) self.rhi.destroyBuffer(self.instance_buffers[i]);
+            if (self.indirect_buffers[i] != 0) self.rhi.destroyBuffer(self.indirect_buffers[i]);
+        }
+        self.instance_data.deinit(self.allocator);
+        self.solid_commands.deinit(self.allocator);
+        self.fluid_commands.deinit(self.allocator);
 
         self.vertex_allocator.deinit();
         self.allocator.destroy(self);
@@ -492,7 +529,8 @@ pub const World = struct {
             try self.gen_queue.updatePlayerPos(pc.chunk_x, pc.chunk_z);
             try self.mesh_queue.updatePlayerPos(pc.chunk_x, pc.chunk_z);
 
-            const render_dist = self.render_distance;
+            // Clamp generation distance to LOD0 radius if LOD is active - prevent generating chunks we won't mesh
+            const render_dist = if (self.lod_manager) |mgr| @min(self.render_distance, mgr.config.lod0_radius) else self.render_distance;
 
             var cz = pc.chunk_z - render_dist;
             while (cz <= pc.chunk_z + render_dist) : (cz += 1) {
@@ -533,6 +571,7 @@ pub const World = struct {
         const render_dist = if (self.lod_manager) |mgr| @min(self.render_distance, mgr.config.lod0_radius) else self.render_distance;
 
         while (mesh_iter.next()) |entry| {
+            const key = entry.key_ptr.*;
             const data = entry.value_ptr.*;
             if (data.chunk.state == .generated) {
                 const dx = data.chunk.chunk_x - pc.chunk_x;
@@ -553,7 +592,7 @@ pub const World = struct {
                 }
             } else if (data.chunk.state == .mesh_ready) {
                 data.chunk.state = .uploading;
-                try self.upload_queue.push(data);
+                try self.upload_queue.push(key);
             } else if (data.chunk.state == .renderable and data.chunk.dirty) {
                 data.chunk.dirty = false;
                 data.chunk.state = .generated;
@@ -564,15 +603,22 @@ pub const World = struct {
         const max_uploads: usize = 32;
         var uploads: usize = 0;
         while (!self.upload_queue.isEmpty() and uploads < max_uploads) {
-            const data = self.upload_queue.pop() orelse break;
-            data.mesh.upload(&self.vertex_allocator);
-            if (data.chunk.state == .uploading) {
-                data.chunk.state = .renderable;
+            const key = self.upload_queue.pop() orelse break;
+            if (self.chunks.get(key)) |data| {
+                if (data.chunk.state != .uploading) continue;
+
+                data.mesh.upload(&self.vertex_allocator);
+                if (data.mesh.ready) {
+                    data.chunk.state = .renderable;
+                } else {
+                    // Allocation failed (OOM), reset state so it can be retried or unloaded
+                    data.chunk.state = .mesh_ready;
+                }
+                uploads += 1;
             }
-            uploads += 1;
         }
 
-        const render_dist_unload = self.render_distance;
+        const render_dist_unload = if (self.lod_manager) |mgr| @min(self.render_distance, mgr.config.lod0_radius) else self.render_distance;
         const unload_dist_sq = (render_dist_unload + CHUNK_UNLOAD_BUFFER) * (render_dist_unload + CHUNK_UNLOAD_BUFFER);
         self.chunks_mutex.lock();
         var to_remove = std.ArrayListUnmanaged(ChunkKey).empty;
@@ -586,7 +632,6 @@ pub const World = struct {
             const dz = key.z - pc.chunk_z;
             if (dx * dx + dz * dz > unload_dist_sq) {
                 if (data.chunk.state != .generating and data.chunk.state != .meshing and
-                    data.chunk.state != .mesh_ready and data.chunk.state != .uploading and
                     !data.chunk.isPinned())
                 {
                     try to_remove.append(self.allocator, key);
@@ -660,66 +705,70 @@ pub const World = struct {
 
         for (self.visible_chunks.items) |data| {
             self.last_render_stats.chunks_rendered += 1;
-            if (data.mesh.solid_allocation) |alloc| self.last_render_stats.vertices_rendered += alloc.count;
-            if (data.mesh.fluid_allocation) |alloc| self.last_render_stats.vertices_rendered += alloc.count;
-
             const chunk_world_x: f32 = @floatFromInt(data.chunk.chunk_x * CHUNK_SIZE_X);
             const chunk_world_z: f32 = @floatFromInt(data.chunk.chunk_z * CHUNK_SIZE_Z);
             const rel_x = chunk_world_x - camera_pos.x;
             const rel_z = chunk_world_z - camera_pos.z;
             const rel_y = -camera_pos.y;
-
             const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
+
             self.rhi.setModelMatrix(model, 0);
-            data.mesh.draw(self.rhi, .solid);
+
+            if (data.mesh.solid_allocation) |alloc| {
+                self.last_render_stats.vertices_rendered += alloc.count;
+                self.rhi.drawOffset(self.vertex_allocator.buffer, alloc.count, .triangles, alloc.offset);
+            }
+            if (data.mesh.fluid_allocation) |alloc| {
+                self.last_render_stats.vertices_rendered += alloc.count;
+                self.rhi.drawOffset(self.vertex_allocator.buffer, alloc.count, .triangles, alloc.offset);
+            }
         }
 
-        for (self.visible_chunks.items) |data| {
-            const chunk_world_x: f32 = @floatFromInt(data.chunk.chunk_x * CHUNK_SIZE_X);
-            const chunk_world_z: f32 = @floatFromInt(data.chunk.chunk_z * CHUNK_SIZE_Z);
-            const rel_x = chunk_world_x - camera_pos.x;
-            const rel_z = chunk_world_z - camera_pos.z;
-            const rel_y = -camera_pos.y;
-
-            const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
-            self.rhi.setModelMatrix(model, 0);
-            data.mesh.draw(self.rhi, .fluid);
-        }
+        self.mdi_instance_offset = 0;
+        self.mdi_command_offset = 0;
     }
 
     pub fn renderShadowPass(self: *World, light_space_matrix: Mat4, camera_pos: Vec3) void {
         // Build frustum from the light's orthographic projection matrix
-        // This culls chunks that are outside the shadow cascade's view
         const shadow_frustum = Frustum.fromViewProj(light_space_matrix);
 
         self.chunks_mutex.lockShared();
         defer self.chunks_mutex.unlockShared();
 
-        var iter = self.chunks.iterator();
-        while (iter.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const data = entry.value_ptr.*;
+        const frustum = shadow_frustum;
+        const pc = worldToChunk(@intFromFloat(camera_pos.x), @intFromFloat(camera_pos.z));
 
-            if (data.chunk.state == .renderable or data.mesh.solid_allocation != null or data.mesh.fluid_allocation != null) {
-                const chunk_world_x: f32 = @floatFromInt(key.x * CHUNK_SIZE_X);
-                const chunk_world_z: f32 = @floatFromInt(key.z * CHUNK_SIZE_Z);
+        const render_dist = if (self.lod_manager) |mgr| @min(self.render_distance, mgr.config.lod0_radius) else self.render_distance;
 
-                // Frustum culling against the shadow cascade's orthographic projection
-                // Use intersectsChunkRelative with camera_pos for consistent coordinate system
-                if (!shadow_frustum.intersectsChunkRelative(key.x, key.z, camera_pos.x, camera_pos.y, camera_pos.z)) {
-                    continue;
+        var cz = pc.chunk_z - render_dist;
+        while (cz <= pc.chunk_z + render_dist) : (cz += 1) {
+            var cx = pc.chunk_x - render_dist;
+            while (cx <= pc.chunk_x + render_dist) : (cx += 1) {
+                if (self.chunks.get(.{ .x = cx, .z = cz })) |data| {
+                    if (data.chunk.state == .renderable or data.mesh.solid_allocation != null or data.mesh.fluid_allocation != null) {
+                        const chunk_world_x: f32 = @floatFromInt(data.chunk.chunk_x * CHUNK_SIZE_X);
+                        const chunk_world_z: f32 = @floatFromInt(data.chunk.chunk_z * CHUNK_SIZE_Z);
+
+                        if (!frustum.intersectsChunkRelative(cx, cz, camera_pos.x, camera_pos.y, camera_pos.z)) {
+                            continue;
+                        }
+
+                        const rel_x = chunk_world_x - camera_pos.x;
+                        const rel_z = chunk_world_z - camera_pos.z;
+                        const rel_y = -camera_pos.y;
+                        const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
+
+                        if (data.mesh.solid_allocation) |alloc| {
+                            self.rhi.setModelMatrix(model, 0);
+                            self.rhi.drawOffset(self.vertex_allocator.buffer, alloc.count, .triangles, alloc.offset);
+                        }
+                    }
                 }
-
-                const rel_x = chunk_world_x - camera_pos.x;
-                const rel_z = chunk_world_z - camera_pos.z;
-                const rel_y = -camera_pos.y;
-
-                const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
-                self.rhi.setModelMatrix(model, 0);
-
-                data.mesh.draw(self.rhi, .solid);
             }
         }
+
+        self.mdi_instance_offset = 0;
+        self.mdi_command_offset = 0;
     }
 
     pub fn getRenderStats(self: *const World) RenderStats {

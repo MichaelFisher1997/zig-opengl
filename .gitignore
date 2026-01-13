@@ -16,3 +16,7 @@ result
 .DS_Store
 *.spv
 wiki/
+*.exr
+*.hdr
+# Exclude large 4k source textures
+*_4k.*

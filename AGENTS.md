@@ -42,6 +42,12 @@ nix develop --command zig fmt src/
 nix develop --command zig build check
 ```
 
+### Asset Processing
+```bash
+# Process PBR textures (Standardize 4k sources to 512px PNGs)
+./scripts/process_textures.sh assets/textures/<pack_name> 512
+```
+
 ---
 
 ## Project Structure
@@ -144,7 +150,8 @@ const log = @import("../engine/core/log.zig");
 1. Add entry to `BlockType` enum in `src/world/block.zig`
 2. Register properties (`isSolid`, `isTransparent`, `getLightEmission`, `getColor`)
 3. Add textures to `src/engine/graphics/texture_atlas.zig`
-4. Update `src/world/chunk_mesh.zig` for special face/transparency logic
+4. Standardize PBR textures using `./scripts/process_textures.sh`
+5. Update `src/world/chunk_mesh.zig` for special face/transparency logic
 
 ### Modifying Shaders
 1. GLSL sources in `assets/shaders/` (Vulkan shaders in `vulkan/` subdirectory)
@@ -164,6 +171,7 @@ const log = @import("../engine/core/log.zig");
 - [ ] Run `zig build test` to verify unit tests and shader validation
 - [ ] Check `zig build -Doptimize=ReleaseFast` for performance-critical changes
 - [ ] Run `zig fmt src/` before committing
+- [ ] Run `./scripts/process_textures.sh` for any new texture assets
 
 ### Code Quality
 - Write self-documenting code; use comments only to explain *why*

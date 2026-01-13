@@ -221,24 +221,24 @@ const Params = struct {
 };
 
 pub const TerrainGenerator = struct {
-    warp_noise_x: Noise,
-    warp_noise_z: Noise,
-    continentalness_noise: Noise,
-    erosion_noise: Noise,
-    peaks_noise: Noise,
-    temperature_noise: Noise,
-    humidity_noise: Noise,
-    temperature_local_noise: Noise,
-    humidity_local_noise: Noise,
-    detail_noise: Noise,
-    coast_jitter_noise: Noise,
-    seabed_noise: Noise,
-    river_noise: Noise,
-    beach_exposure_noise: Noise,
+    warp_noise_x: ConfiguredNoise,
+    warp_noise_z: ConfiguredNoise,
+    continentalness_noise: ConfiguredNoise,
+    erosion_noise: ConfiguredNoise,
+    peaks_noise: ConfiguredNoise,
+    temperature_noise: ConfiguredNoise,
+    humidity_noise: ConfiguredNoise,
+    temperature_local_noise: ConfiguredNoise,
+    humidity_local_noise: ConfiguredNoise,
+    detail_noise: ConfiguredNoise,
+    coast_jitter_noise: ConfiguredNoise,
+    seabed_noise: ConfiguredNoise,
+    river_noise: ConfiguredNoise,
+    beach_exposure_noise: ConfiguredNoise,
     cave_system: CaveSystem,
-    filler_depth_noise: Noise,
-    mountain_lift_noise: Noise,
-    ridge_noise: Noise,
+    filler_depth_noise: ConfiguredNoise,
+    mountain_lift_noise: ConfiguredNoise,
+    ridge_noise: ConfiguredNoise,
     params: Params,
     allocator: std.mem.Allocator,
 
@@ -263,27 +263,26 @@ pub const TerrainGenerator = struct {
     pub const CACHE_RECENTER_THRESHOLD: i32 = 512;
 
     pub fn init(seed: u64, allocator: std.mem.Allocator) TerrainGenerator {
-        var prng = std.Random.DefaultPrng.init(seed);
-        const random = prng.random();
+        const p = Params{};
         return .{
-            .warp_noise_x = Noise.init(random.int(u64)),
-            .warp_noise_z = Noise.init(random.int(u64)),
-            .continentalness_noise = Noise.init(random.int(u64)),
-            .erosion_noise = Noise.init(random.int(u64)),
-            .peaks_noise = Noise.init(random.int(u64)),
-            .temperature_noise = Noise.init(random.int(u64)),
-            .humidity_noise = Noise.init(random.int(u64)),
-            .temperature_local_noise = Noise.init(random.int(u64)),
-            .humidity_local_noise = Noise.init(random.int(u64)),
-            .detail_noise = Noise.init(random.int(u64)),
-            .coast_jitter_noise = Noise.init(random.int(u64)),
-            .seabed_noise = Noise.init(random.int(u64)),
-            .river_noise = Noise.init(random.int(u64)),
-            .beach_exposure_noise = Noise.init(random.int(u64)),
+            .warp_noise_x = ConfiguredNoise.init(makeNoiseParams(seed, 10, 200, p.warp_amplitude, 0, 3, 0.5)),
+            .warp_noise_z = ConfiguredNoise.init(makeNoiseParams(seed, 11, 200, p.warp_amplitude, 0, 3, 0.5)),
+            .continentalness_noise = ConfiguredNoise.init(makeNoiseParams(seed, 20, 1500, 1.0, 0, 4, 0.5)),
+            .erosion_noise = ConfiguredNoise.init(makeNoiseParams(seed, 30, 400, 1.0, 0, 4, 0.5)),
+            .peaks_noise = ConfiguredNoise.init(makeNoiseParams(seed, 40, 300, 1.0, 0, 5, 0.5)),
+            .temperature_noise = ConfiguredNoise.init(makeNoiseParams(seed, 50, 2000, 1.0, 0, 3, 0.5)),
+            .humidity_noise = ConfiguredNoise.init(makeNoiseParams(seed, 60, 2000, 1.0, 0, 3, 0.5)),
+            .temperature_local_noise = ConfiguredNoise.init(makeNoiseParams(seed, 70, 200, 1.0, 0, 3, 0.5)),
+            .humidity_local_noise = ConfiguredNoise.init(makeNoiseParams(seed, 80, 200, 1.0, 0, 3, 0.5)),
+            .detail_noise = ConfiguredNoise.init(makeNoiseParams(seed, 90, 32, p.detail_amp, 0, 3, 0.5)),
+            .coast_jitter_noise = ConfiguredNoise.init(makeNoiseParams(seed, 100, 150, 0.03, 0, 2, 0.5)),
+            .seabed_noise = ConfiguredNoise.init(makeNoiseParams(seed, 110, 100, p.seabed_amp, 0, 2, 0.5)),
+            .river_noise = ConfiguredNoise.init(makeNoiseParams(seed, 120, 800, 1.0, 0, 4, 0.5)),
+            .beach_exposure_noise = ConfiguredNoise.init(makeNoiseParams(seed, 130, 100, 1.0, 0, 3, 0.5)),
             .cave_system = CaveSystem.init(seed),
-            .filler_depth_noise = Noise.init(random.int(u64)),
-            .mountain_lift_noise = Noise.init(random.int(u64)),
-            .ridge_noise = Noise.init(random.int(u64)),
+            .filler_depth_noise = ConfiguredNoise.init(makeNoiseParams(seed, 140, 64, 1.0, 0, 3, 0.5)),
+            .mountain_lift_noise = ConfiguredNoise.init(makeNoiseParams(seed, 150, 400, 1.0, 0, 3, 0.5)),
+            .ridge_noise = ConfiguredNoise.init(makeNoiseParams(seed, 160, 400, 1.0, 0, 5, 0.5)),
             .params = .{},
             .allocator = allocator,
             .classification_cache = ClassificationCache.init(),
@@ -315,12 +314,12 @@ pub const TerrainGenerator = struct {
 
     /// Get region info for a specific world position
     pub fn getRegionInfo(self: *const TerrainGenerator, world_x: i32, world_z: i32) RegionInfo {
-        return region_pkg.getRegion(self.continentalness_noise.seed, world_x, world_z);
+        return region_pkg.getRegion(self.continentalness_noise.params.seed, world_x, world_z);
     }
 
     /// Get region mood for a specific world position (Issue #110)
     pub fn getMood(self: *const TerrainGenerator, world_x: i32, world_z: i32) RegionMood {
-        const region = region_pkg.getRegion(self.continentalness_noise.seed, world_x, world_z);
+        const region = region_pkg.getRegion(self.continentalness_noise.params.seed, world_x, world_z);
         return region.mood;
     }
 
@@ -336,25 +335,24 @@ pub const TerrainGenerator = struct {
     pub fn getColumnInfo(self: *const TerrainGenerator, wx: f32, wz: f32) ColumnInfo {
         const p = self.params;
         const sea: f32 = @floatFromInt(p.sea_level);
-        const warp = self.computeWarp(wx, wz);
+        const warp = self.computeWarp(wx, wz, 0);
         const xw = wx + warp.x;
         const zw = wz + warp.z;
-        const c = self.getContinentalness(xw, zw);
-        const e = self.getErosion(xw, zw);
-        const pv = self.getPeaksValleys(xw, zw);
-        const coast_jitter = self.coast_jitter_noise.fbm2D(xw, zw, 2, 2.0, 0.5, p.coast_jitter_scale) * 0.03;
+        const c = self.getContinentalness(xw, zw, 0);
+        const e = self.getErosion(xw, zw, 0);
+        const pv = self.getPeaksValleys(xw, zw, 0);
+        const coast_jitter = self.coast_jitter_noise.get2DOctaves(xw, zw, 2);
         const c_jittered = clamp01(c + coast_jitter);
-        const river_mask = self.getRiverMask(xw, zw);
+        const river_mask = self.getRiverMask(xw, zw, 0);
         // computeHeight now handles ocean vs land decision internally
-        const region = region_pkg.getRegion(self.continentalness_noise.seed, @as(i32, @intFromFloat(wx)), @as(i32, @intFromFloat(wz)));
-        const terrain_height = self.computeHeight(c_jittered, e, pv, xw, zw, river_mask, region);
-        const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered);
+        const region = region_pkg.getRegion(self.continentalness_noise.params.seed, @as(i32, @intFromFloat(wx)), @as(i32, @intFromFloat(wz)));
+        const terrain_height = self.computeHeight(c_jittered, e, pv, xw, zw, river_mask, region, 0); // Full detail for physics
+        const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered, 0);
         const terrain_height_i: i32 = @intFromFloat(terrain_height);
-        const is_ocean = terrain_height < sea;
         const altitude_offset: f32 = @max(0, terrain_height - sea);
-        var temperature = self.getTemperature(xw, zw);
+        var temperature = self.getTemperature(xw, zw, 0);
         temperature = clamp01(temperature - (altitude_offset / 512.0) * p.temp_lapse);
-        const humidity = self.getHumidity(xw, zw);
+        const humidity = self.getHumidity(xw, zw, 0);
         const climate = biome_mod.computeClimateParams(temperature, humidity, terrain_height_i, c_jittered, e, p.sea_level, CHUNK_SIZE_Y);
 
         const slope: i32 = 1;
@@ -369,7 +367,7 @@ pub const TerrainGenerator = struct {
         return .{
             .height = terrain_height_i,
             .biome = biome_id,
-            .is_ocean = is_ocean,
+            .is_ocean = c_jittered < p.ocean_threshold,
             .temperature = temperature,
             .humidity = humidity,
             .continentalness = c_jittered,
@@ -437,27 +435,27 @@ pub const TerrainGenerator = struct {
                 const idx = local_x + local_z * CHUNK_SIZE_X;
                 const wx: f32 = @floatFromInt(world_x + @as(i32, @intCast(local_x)));
                 const wz: f32 = @floatFromInt(world_z + @as(i32, @intCast(local_z)));
-                const warp = self.computeWarp(wx, wz);
+                const warp = self.computeWarp(wx, wz, 0);
                 const xw = wx + warp.x;
                 const zw = wz + warp.z;
-                const c = self.getContinentalness(xw, zw);
-                const e_val = self.getErosion(xw, zw);
-                const pv = self.getPeaksValleys(xw, zw);
-                const coast_jitter = self.coast_jitter_noise.fbm2D(xw, zw, 2, 2.0, 0.5, p.coast_jitter_scale) * 0.03;
+                const c = self.getContinentalness(xw, zw, 0);
+                const e_val = self.getErosion(xw, zw, 0);
+                const pv = self.getPeaksValleys(xw, zw, 0);
+                const coast_jitter = self.coast_jitter_noise.get2DOctaves(xw, zw, 2);
                 const c_jittered = clamp01(c + coast_jitter);
                 erosion_values[idx] = e_val;
-                const river_mask = self.getRiverMask(xw, zw);
+                const river_mask = self.getRiverMask(xw, zw, 0);
                 // Get Region Info (Mood + Role)
-                const region = region_pkg.getRegion(self.continentalness_noise.seed, @as(i32, @intFromFloat(wx)), @as(i32, @intFromFloat(wz)));
+                const region = region_pkg.getRegion(self.continentalness_noise.params.seed, @as(i32, @intFromFloat(wx)), @as(i32, @intFromFloat(wz)));
 
                 // computeHeight now handles ocean vs land decision internally
-                const terrain_height = self.computeHeight(c_jittered, e_val, pv, xw, zw, river_mask, region);
-                const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered);
+                const terrain_height = self.computeHeight(c_jittered, e_val, pv, xw, zw, river_mask, region, 0); // LOD0
+                const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered, 0);
                 const terrain_height_i: i32 = @intFromFloat(terrain_height);
                 const altitude_offset: f32 = @max(0, terrain_height - sea);
-                var temperature = self.getTemperature(xw, zw);
+                var temperature = self.getTemperature(xw, zw, 0);
                 temperature = clamp01(temperature - (altitude_offset / 512.0) * p.temp_lapse);
-                const humidity = self.getHumidity(xw, zw);
+                const humidity = self.getHumidity(xw, zw, 0);
                 debug_temperatures[idx] = temperature;
                 debug_humidities[idx] = humidity;
                 debug_continentalness[idx] = c_jittered;
@@ -613,7 +611,7 @@ pub const TerrainGenerator = struct {
                 const idx = local_x + local_z * CHUNK_SIZE_X;
                 const wx: f32 = @floatFromInt(world_x + @as(i32, @intCast(local_x)));
                 const wz: f32 = @floatFromInt(world_z + @as(i32, @intCast(local_z)));
-                exposure_values[idx] = self.beach_exposure_noise.fbm2DNormalized(wx, wz, 2, 2.0, 0.5, 1.0 / 200.0);
+                exposure_values[idx] = self.beach_exposure_noise.get2DNormalizedOctaves(wx, wz, 2);
 
                 // Use structural signals instead of distance search
                 const continentalness = continentalness_values[idx];
@@ -670,7 +668,7 @@ pub const TerrainGenerator = struct {
                 const primary_biome_id = biome_ids[idx];
                 const secondary_biome_id = secondary_biome_ids[idx];
                 const blend = biome_blends[idx];
-                const dither = self.detail_noise.perlin2D(wx * 0.02, wz * 0.02) * 0.5 + 0.5;
+                const dither = self.detail_noise.noise.perlin2D(wx * 0.02, wz * 0.02) * 0.5 + 0.5;
                 const use_secondary = dither < blend;
                 const active_biome_id = if (use_secondary) secondary_biome_id else primary_biome_id;
                 const active_biome: Biome = @enumFromInt(@intFromEnum(active_biome_id));
@@ -753,7 +751,7 @@ pub const TerrainGenerator = struct {
                 const primary_biome_id = biome_ids[idx];
                 const secondary_biome_id = secondary_biome_ids[idx];
                 const blend = biome_blends[idx];
-                const dither = self.detail_noise.perlin2D(wx * 0.02, wz * 0.02) * 0.5 + 0.5;
+                const dither = self.detail_noise.noise.perlin2D(wx * 0.02, wz * 0.02) * 0.5 + 0.5;
                 const use_secondary = dither < blend;
                 const active_biome_id = if (use_secondary) secondary_biome_id else primary_biome_id;
                 const active_biome: Biome = @enumFromInt(@intFromEnum(active_biome_id));
@@ -880,6 +878,14 @@ pub const TerrainGenerator = struct {
                 const wx: f32 = @floatFromInt(wx_i);
                 const wz: f32 = @floatFromInt(wz_i);
 
+                // Compute octave reduction from LOD level
+                const reduction: u8 = switch (lod_level) {
+                    .lod0 => 0,
+                    .lod1 => 1,
+                    .lod2 => 2,
+                    .lod3 => 3,
+                };
+
                 // === Issue #119: Try classification cache first ===
                 // If this position was generated at LOD0, use the cached values
                 // to ensure biome/surface consistency across all LOD levels.
@@ -890,62 +896,61 @@ pub const TerrainGenerator = struct {
                     data.colors[idx] = biome_mod.getBiomeColor(cached.biome_id);
 
                     // Still need to compute height (it's always needed for mesh)
-                    // Use full-detail functions for consistency
-                    const warp = self.computeWarp(wx, wz);
+                    // Use reduction to ensure smooth distant terrain even if cached
+                    const warp = self.computeWarp(wx, wz, reduction);
                     const xw = wx + warp.x;
                     const zw = wz + warp.z;
 
-                    const c = self.getContinentalness(xw, zw);
-                    const e_val = self.getErosion(xw, zw);
-                    const pv = self.getPeaksValleys(xw, zw);
-                    const river_mask = self.getRiverMask(xw, zw);
-                    const region_info = region_pkg.getRegion(self.continentalness_noise.seed, wx_i, wz_i);
-                    const coast_jitter = self.coast_jitter_noise.fbm2D(xw, zw, 2, 2.0, 0.5, p.coast_jitter_scale) * 0.03;
+                    const c = self.getContinentalness(xw, zw, reduction);
+                    const e_val = self.getErosion(xw, zw, reduction);
+                    const pv = self.getPeaksValleys(xw, zw, reduction);
+                    const river_mask = self.getRiverMask(xw, zw, reduction);
+                    const region_info = region_pkg.getRegion(self.continentalness_noise.params.seed, wx_i, wz_i);
+
+                    const cj_octaves: u16 = if (2 > reduction) 2 - @as(u16, reduction) else 1;
+                    const coast_jitter = self.coast_jitter_noise.get2DOctaves(xw, zw, cj_octaves);
                     const c_jittered = clamp01(c + coast_jitter);
-                    const terrain_height = self.computeHeight(c_jittered, e_val, pv, xw, zw, river_mask, region_info);
-                    data.heightmap[idx] = @intCast(@as(i32, @intFromFloat(terrain_height)));
+
+                    const terrain_height = self.computeHeight(c_jittered, e_val, pv, xw, zw, river_mask, region_info, reduction);
+                    data.heightmap[idx] = terrain_height;
                 } else {
-                    // === Fallback: Compute from scratch using FULL-DETAIL functions ===
-                    // For chunks not yet visited at LOD0, compute using the same
-                    // functions as LOD0 for perfect semantic consistency (Issue #119 Phase 3).
-                    const warp = self.computeWarp(wx, wz);
+                    // === Fallback: Compute from scratch ===
+                    const warp = self.computeWarp(wx, wz, reduction);
                     const xw = wx + warp.x;
                     const zw = wz + warp.z;
 
-                    const c = self.getContinentalness(xw, zw);
-                    const e_val = self.getErosion(xw, zw);
-                    const pv = self.getPeaksValleys(xw, zw);
-                    const river_mask = self.getRiverMask(xw, zw);
-                    const region_info = region_pkg.getRegion(self.continentalness_noise.seed, wx_i, wz_i);
-                    const coast_jitter = self.coast_jitter_noise.fbm2D(xw, zw, 2, 2.0, 0.5, p.coast_jitter_scale) * 0.03;
+                    const c = self.getContinentalness(xw, zw, reduction);
+                    const e_val = self.getErosion(xw, zw, reduction);
+                    const pv = self.getPeaksValleys(xw, zw, reduction);
+                    const river_mask = self.getRiverMask(xw, zw, reduction);
+                    const region_info = region_pkg.getRegion(self.continentalness_noise.params.seed, wx_i, wz_i);
+
+                    const cj_octaves: u16 = if (2 > reduction) 2 - @as(u16, reduction) else 1;
+                    const coast_jitter = self.coast_jitter_noise.get2DOctaves(xw, zw, cj_octaves);
                     const c_jittered = clamp01(c + coast_jitter);
 
-                    // Use full-detail computeHeight for consistency
-                    const terrain_height = self.computeHeight(c_jittered, e_val, pv, xw, zw, river_mask, region_info);
+                    const terrain_height = self.computeHeight(c_jittered, e_val, pv, xw, zw, river_mask, region_info, reduction);
+                    data.heightmap[idx] = terrain_height;
                     const terrain_height_i: i32 = @intFromFloat(terrain_height);
                     const is_ocean_water = c_jittered < p.ocean_threshold;
 
-                    // Use full-detail biome calculation
+                    // Compute climate and pick biome
                     const altitude_offset: f32 = @max(0, terrain_height - @as(f32, @floatFromInt(p.sea_level)));
-                    var temperature = self.getTemperature(xw, zw);
-                    temperature = clamp01(temperature - (altitude_offset / 512.0) * p.temp_lapse);
-                    const humidity = self.getHumidity(xw, zw);
+                    var temp = self.getTemperature(xw, zw, reduction);
+                    temp = clamp01(temp - (altitude_offset / 512.0) * p.temp_lapse);
+                    const hum = self.getHumidity(xw, zw, reduction);
 
-                    const climate = biome_mod.computeClimateParams(temperature, humidity, terrain_height_i, c_jittered, e_val, p.sea_level, CHUNK_SIZE_Y);
+                    const climate = biome_mod.computeClimateParams(temp, hum, terrain_height_i, c_jittered, e_val, p.sea_level, 256);
 
-                    // Use more robust biome selection matching generate()
-                    const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered);
-                    // Approximation for slope in simplified heightmap (0 for now, same as previous simplified LODs)
-                    const slope: i32 = 0;
+                    const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered, reduction);
                     const structural = biome_mod.StructuralParams{
                         .height = terrain_height_i,
-                        .slope = slope,
+                        .slope = 0,
                         .continentalness = c_jittered,
                         .ridge_mask = ridge_mask,
                     };
-                    const biome_id = biome_mod.selectBiomeWithConstraintsAndRiver(climate, structural, river_mask);
 
-                    data.heightmap[idx] = @intCast(terrain_height_i);
+                    const biome_id = biome_mod.selectBiomeWithConstraintsAndRiver(climate, structural, river_mask);
                     data.biomes[idx] = biome_id;
                     data.top_blocks[idx] = self.getSurfaceBlock(biome_id, is_ocean_water);
                     data.colors[idx] = biome_mod.getBiomeColor(biome_id);
@@ -987,15 +992,17 @@ pub const TerrainGenerator = struct {
         self.generate(chunk, stop_flag);
     }
 
-    fn computeWarp(self: *const TerrainGenerator, x: f32, z: f32) struct { x: f32, z: f32 } {
-        const p = self.params;
-        const offset_x = self.warp_noise_x.fbm2D(x, z, 3, 2.0, 0.5, p.warp_scale) * p.warp_amplitude;
-        const offset_z = self.warp_noise_z.fbm2D(x, z, 3, 2.0, 0.5, p.warp_scale) * p.warp_amplitude;
+    fn computeWarp(self: *const TerrainGenerator, x: f32, z: f32, reduction: u8) struct { x: f32, z: f32 } {
+        const octaves: u16 = if (3 > reduction) 3 - @as(u16, reduction) else 1;
+        const offset_x = self.warp_noise_x.get2DOctaves(x, z, octaves);
+        const offset_z = self.warp_noise_z.get2DOctaves(x, z, octaves);
         return .{ .x = offset_x, .z = offset_z };
     }
 
-    fn getContinentalness(self: *const TerrainGenerator, x: f32, z: f32) f32 {
-        const val = self.continentalness_noise.fbm2D(x, z, 4, 2.0, 0.5, self.params.continental_scale);
+    fn getContinentalness(self: *const TerrainGenerator, x: f32, z: f32, reduction: u8) f32 {
+        // Slow octave reduction for structure
+        const octaves: u16 = if (4 > (reduction / 2)) 4 - @as(u16, (reduction / 2)) else 2;
+        const val = self.continentalness_noise.get2DOctaves(x, z, octaves);
         return (val + 1.0) * 0.5;
     }
 
@@ -1018,28 +1025,39 @@ pub const TerrainGenerator = struct {
         }
     }
 
-    fn getErosion(self: *const TerrainGenerator, x: f32, z: f32) f32 {
-        const val = self.erosion_noise.fbm2D(x, z, 4, 2.0, 0.5, self.params.erosion_scale);
+    fn getErosion(self: *const TerrainGenerator, x: f32, z: f32, reduction: u8) f32 {
+        const octaves: u16 = if (4 > (reduction / 2)) 4 - @as(u16, (reduction / 2)) else 2;
+        const val = self.erosion_noise.get2DOctaves(x, z, octaves);
         return (val + 1.0) * 0.5;
     }
 
-    fn getPeaksValleys(self: *const TerrainGenerator, x: f32, z: f32) f32 {
-        return self.peaks_noise.ridged2D(x, z, 5, 2.0, 0.5, self.params.peaks_scale);
+    fn getPeaksValleys(self: *const TerrainGenerator, x: f32, z: f32, reduction: u8) f32 {
+        // Ridged noise also needs reduction
+        const octaves: u16 = if (5 > reduction) 5 - @as(u16, reduction) else 1;
+        // Peaks noise is not configurednoise in original code? Wait, it is now.
+        // But ridged2D isn't in ConfiguredNoise.
+        // I should add ridged2D to ConfiguredNoise or use noise directly.
+        // For now, use noise directly but with reduced octaves.
+        return self.peaks_noise.noise.ridged2D(x, z, octaves, 2.0, 0.5, self.params.peaks_scale);
     }
 
-    fn getTemperature(self: *const TerrainGenerator, x: f32, z: f32) f32 {
+    fn getTemperature(self: *const TerrainGenerator, x: f32, z: f32, reduction: u8) f32 {
         const p = self.params;
-        const macro = self.temperature_noise.fbm2DNormalized(x, z, 3, 2.0, 0.5, p.temperature_macro_scale);
-        const local = self.temperature_local_noise.fbm2DNormalized(x, z, 2, 2.0, 0.5, p.temperature_local_scale);
+        const macro_octaves: u16 = if (3 > (reduction / 2)) 3 - @as(u16, (reduction / 2)) else 2;
+        const local_octaves: u16 = if (2 > reduction) 2 - @as(u16, reduction) else 1;
+        const macro = self.temperature_noise.get2DNormalizedOctaves(x, z, macro_octaves);
+        const local = self.temperature_local_noise.get2DNormalizedOctaves(x, z, local_octaves);
         var t = p.climate_macro_weight * macro + (1.0 - p.climate_macro_weight) * local;
         t = (t - 0.5) * 2.2 + 0.5;
         return clamp01(t);
     }
 
-    fn getHumidity(self: *const TerrainGenerator, x: f32, z: f32) f32 {
+    fn getHumidity(self: *const TerrainGenerator, x: f32, z: f32, reduction: u8) f32 {
         const p = self.params;
-        const macro = self.humidity_noise.fbm2DNormalized(x, z, 3, 2.0, 0.5, p.humidity_macro_scale);
-        const local = self.humidity_local_noise.fbm2DNormalized(x, z, 2, 2.0, 0.5, p.humidity_local_scale);
+        const macro_octaves: u16 = if (3 > (reduction / 2)) 3 - @as(u16, (reduction / 2)) else 2;
+        const local_octaves: u16 = if (2 > reduction) 2 - @as(u16, reduction) else 1;
+        const macro = self.humidity_noise.get2DNormalizedOctaves(x, z, macro_octaves);
+        const local = self.humidity_local_noise.get2DNormalizedOctaves(x, z, local_octaves);
         var h = p.climate_macro_weight * macro + (1.0 - p.climate_macro_weight) * local;
         h = (h - 0.5) * 2.2 + 0.5;
         return clamp01(h);
@@ -1053,10 +1071,11 @@ pub const TerrainGenerator = struct {
         return inland * peak_factor * rugged_factor;
     }
 
-    fn getRidgeFactor(self: *const TerrainGenerator, x: f32, z: f32, c: f32) f32 {
+    fn getRidgeFactor(self: *const TerrainGenerator, x: f32, z: f32, c: f32, reduction: u8) f32 {
         const p = self.params;
         const inland_factor = smoothstep(p.ridge_inland_min, p.ridge_inland_max, c);
-        const ridge_val = self.ridge_noise.ridged2D(x, z, 5, 2.0, 0.5, p.ridge_scale);
+        const octaves: u32 = if (5 > reduction) 5 - reduction else 1;
+        const ridge_val = self.ridge_noise.noise.ridged2D(x, z, octaves, 2.0, 0.5, p.ridge_scale);
         const sparsity_mask = smoothstep(p.ridge_sparsity - 0.15, p.ridge_sparsity + 0.15, ridge_val);
         return inland_factor * sparsity_mask * ridge_val;
     }
@@ -1096,7 +1115,7 @@ pub const TerrainGenerator = struct {
     /// The KEY change: Ocean is decided by continentalness ALONE.
     /// Land uses blended terrain layers for varied terrain character.
     /// Region constraints suppress/exaggerate features per role.
-    fn computeHeight(self: *const TerrainGenerator, c: f32, e: f32, pv: f32, x: f32, z: f32, river_mask: f32, region: RegionInfo) f32 {
+    fn computeHeight(self: *const TerrainGenerator, c: f32, e: f32, pv: f32, x: f32, z: f32, river_mask: f32, region: RegionInfo, reduction: u8) f32 {
         const p = self.params;
         const sea: f32 = @floatFromInt(p.sea_level);
 
@@ -1114,7 +1133,8 @@ pub const TerrainGenerator = struct {
             const shallow_ocean_depth = sea - 12.0;
 
             // Very minimal seabed variation - oceans should be BORING
-            const seabed_detail = self.seabed_noise.fbm2D(x, z, 2, 2.0, 0.5, p.seabed_scale) * p.seabed_amp;
+            const sb_octaves: u32 = if (2 > reduction) 2 - reduction else 1;
+            const seabed_detail = self.seabed_noise.get2DOctaves(x, z, @intCast(sb_octaves));
 
             return std.math.lerp(deep_ocean_depth, shallow_ocean_depth, ocean_depth_factor) + seabed_detail;
         }
@@ -1123,7 +1143,7 @@ pub const TerrainGenerator = struct {
         // STEP 2: PATH SYSTEM (Priority Override)
         // Movement paths override region suppression locally
         // ============================================================
-        const path_info = region_pkg.getPathInfo(self.continentalness_noise.seed, @as(i32, @intFromFloat(x)), @as(i32, @intFromFloat(z)), region);
+        const path_info = region_pkg.getPathInfo(self.continentalness_noise.params.seed, @as(i32, @intFromFloat(x)), @as(i32, @intFromFloat(z)), region);
         var path_depth: f32 = 0.0;
         var slope_suppress: f32 = 0.0;
 
@@ -1152,10 +1172,11 @@ pub const TerrainGenerator = struct {
         // This creates varied terrain where different areas have
         // noticeably different character (rolling vs flat vs hilly)
         // ============================================================
-        const base_height = self.terrain_base.get2D(x, z);
-        const alt_height = self.terrain_alt.get2D(x, z);
-        const select = self.height_select.get2D(x, z);
-        const persist = self.terrain_persist.get2D(x, z);
+        // Distant terrain uses reduced octaves to prevent aliasing (grainy look)
+        const base_height = self.terrain_base.get2DOctaves(x, z, self.terrain_base.params.octaves -| reduction);
+        const alt_height = self.terrain_alt.get2DOctaves(x, z, self.terrain_alt.params.octaves -| reduction);
+        const select = self.height_select.get2DOctaves(x, z, self.height_select.params.octaves -| reduction);
+        const persist = self.terrain_persist.get2DOctaves(x, z, self.terrain_persist.params.octaves -| reduction);
 
         // Apply persistence variation to both heights
         const base_modulated = base_height * persist;
@@ -1182,12 +1203,12 @@ pub const TerrainGenerator = struct {
         // ============================================================
         if (region_pkg.allowHeightDrama(region) and c > p.continental_inland_low_max) {
             const m_mask = self.getMountainMask(pv, e, c);
-            const lift_scale: f32 = 1.0 / 1000.0;
-            const lift_noise = (self.mountain_lift_noise.fbm2D(x, z, 3, 2.0, 0.5, lift_scale) + 1.0) * 0.5;
+            const lift_octaves: u32 = if (3 > reduction) 3 - reduction else 1;
+            const lift_noise = (self.mountain_lift_noise.get2DOctaves(x, z, @intCast(lift_octaves)) + 1.0) * 0.5;
             const mount_lift = (m_mask * lift_noise * p.mount_amp) / (1.0 + (m_mask * lift_noise * p.mount_amp) / p.mount_cap);
             height += mount_lift * mood_mult;
 
-            const ridge_val = self.getRidgeFactor(x, z, c);
+            const ridge_val = self.getRidgeFactor(x, z, c, reduction);
             height += ridge_val * p.ridge_amp * mood_mult;
         }
 
@@ -1201,7 +1222,11 @@ pub const TerrainGenerator = struct {
         // Small-scale detail (every ~32 blocks)
         const elev01 = clamp01((height - sea) / p.highland_range);
         const detail_atten = 1.0 - smoothstep(0.3, 0.85, elev01);
-        const detail = self.detail_noise.fbm2D(x, z, 3, 2.0, 0.5, p.detail_scale) * p.detail_amp;
+
+        // Dampen detail for LODs to prevent graininess
+        const det_octaves: u32 = if (3 > reduction) 3 - reduction else 1;
+        const detail_lod_mult = (1.0 - 0.25 * @as(f32, @floatFromInt(reduction)));
+        const detail = self.detail_noise.get2DOctaves(x, z, @intCast(det_octaves)) * detail_lod_mult;
         height += detail * detail_atten * hills_atten * mood_mult;
 
         // ============================================================
@@ -1229,9 +1254,10 @@ pub const TerrainGenerator = struct {
         return height;
     }
 
-    fn getRiverMask(self: *const TerrainGenerator, x: f32, z: f32) f32 {
+    fn getRiverMask(self: *const TerrainGenerator, x: f32, z: f32, reduction: u8) f32 {
         const p = self.params;
-        const r = self.river_noise.ridged2D(x, z, 4, 2.0, 0.5, p.river_scale);
+        const octaves: u32 = if (4 > reduction) 4 - reduction else 1;
+        const r = self.river_noise.noise.ridged2D(x, z, octaves, 2.0, 0.5, p.river_scale);
         const river_val = 1.0 - r;
         return smoothstep(p.river_min, p.river_max, river_val);
     }
@@ -1305,10 +1331,10 @@ pub const TerrainGenerator = struct {
     /// Ocean = continentalness < ocean_threshold (structure-first definition)
     pub fn isOceanWater(self: *const TerrainGenerator, wx: f32, wz: f32) bool {
         const p = self.params;
-        const warp = self.computeWarp(wx, wz);
+        const warp = self.computeWarp(wx, wz, 0);
         const xw = wx + warp.x;
         const zw = wz + warp.z;
-        const c = self.getContinentalness(xw, zw);
+        const c = self.getContinentalness(xw, zw, 0);
 
         // Ocean is defined by continentalness alone in structure-first approach
         return c < p.ocean_threshold;
@@ -1318,10 +1344,10 @@ pub const TerrainGenerator = struct {
     /// Inland water = underwater BUT continentalness >= ocean_threshold
     pub fn isInlandWater(self: *const TerrainGenerator, wx: f32, wz: f32, height: i32) bool {
         const p = self.params;
-        const warp = self.computeWarp(wx, wz);
+        const warp = self.computeWarp(wx, wz, 0);
         const xw = wx + warp.x;
         const zw = wz + warp.z;
-        const c = self.getContinentalness(xw, zw);
+        const c = self.getContinentalness(xw, zw, 0);
 
         // Inland water: below sea level but in a land zone
         return height < p.sea_level and c >= p.ocean_threshold;
@@ -1383,7 +1409,7 @@ pub const TerrainGenerator = struct {
     }
 
     fn generateOres(self: *const TerrainGenerator, chunk: *Chunk) void {
-        var prng = std.Random.DefaultPrng.init(self.erosion_noise.seed +% @as(u64, @bitCast(@as(i64, chunk.chunk_x))) *% 59381 +% @as(u64, @bitCast(@as(i64, chunk.chunk_z))) *% 28411);
+        var prng = std.Random.DefaultPrng.init(self.erosion_noise.params.seed +% @as(u64, @bitCast(@as(i64, chunk.chunk_x))) *% 59381 +% @as(u64, @bitCast(@as(i64, chunk.chunk_z))) *% 28411);
         const random = prng.random();
         self.placeOreVeins(chunk, .coal_ore, 20, 6, 10, 128, random);
         self.placeOreVeins(chunk, .iron_ore, 10, 4, 5, 64, random);
@@ -1416,13 +1442,13 @@ pub const TerrainGenerator = struct {
     }
 
     pub fn generateFeatures(self: *const TerrainGenerator, chunk: *Chunk) void {
-        var prng = std.Random.DefaultPrng.init(self.continentalness_noise.seed ^ @as(u64, @bitCast(@as(i64, chunk.chunk_x))) ^ (@as(u64, @bitCast(@as(i64, chunk.chunk_z))) << 32));
+        var prng = std.Random.DefaultPrng.init(self.continentalness_noise.params.seed ^ @as(u64, @bitCast(@as(i64, chunk.chunk_x))) ^ (@as(u64, @bitCast(@as(i64, chunk.chunk_z))) << 32));
         const random = prng.random();
 
         // Calculate region info for whole chunk (approx)
         const wx_center = chunk.getWorldX() + 8;
         const wz_center = chunk.getWorldZ() + 8;
-        const region = region_pkg.getRegion(self.continentalness_noise.seed, wx_center, wz_center);
+        const region = region_pkg.getRegion(self.continentalness_noise.params.seed, wx_center, wz_center);
 
         // Region-based vegetation multiplier (Transit=25%, Boundary=15%, Destination=themed)
         const veg_mult = region_pkg.getVegetationMultiplier(region);
@@ -1567,7 +1593,9 @@ pub const TerrainGenerator = struct {
         x: u8,
         y: u16,
         z: u8,
-        level: u4,
+        r: u4,
+        g: u4,
+        b: u4,
     };
 
     pub fn computeBlockLight(self: *const TerrainGenerator, chunk: *Chunk) !void {
@@ -1580,10 +1608,17 @@ pub const TerrainGenerator = struct {
                 var local_x: u32 = 0;
                 while (local_x < CHUNK_SIZE_X) : (local_x += 1) {
                     const block = chunk.getBlock(local_x, y, local_z);
-                    const emission = block.getLightEmission();
-                    if (emission > 0) {
-                        chunk.setBlockLight(local_x, y, local_z, emission);
-                        try queue.append(self.allocator, .{ .x = @intCast(local_x), .y = @intCast(y), .z = @intCast(local_z), .level = emission });
+                    const emission = block.getLightEmissionRGB();
+                    if (emission[0] > 0 or emission[1] > 0 or emission[2] > 0) {
+                        chunk.setBlockLightRGB(local_x, y, local_z, emission[0], emission[1], emission[2]);
+                        try queue.append(self.allocator, .{
+                            .x = @intCast(local_x),
+                            .y = @intCast(y),
+                            .z = @intCast(local_z),
+                            .r = emission[0],
+                            .g = emission[1],
+                            .b = emission[2],
+                        });
                     }
                 }
             }
@@ -1591,7 +1626,6 @@ pub const TerrainGenerator = struct {
         var head: usize = 0;
         while (head < queue.items.len) : (head += 1) {
             const node = queue.items[head];
-            if (node.level <= 1) continue;
             const neighbors = [6][3]i32{ .{ 1, 0, 0 }, .{ -1, 0, 0 }, .{ 0, 1, 0 }, .{ 0, -1, 0 }, .{ 0, 0, 1 }, .{ 0, 0, -1 } };
             for (neighbors) |offset| {
                 const nx = @as(i32, node.x) + offset[0];
@@ -1603,11 +1637,28 @@ pub const TerrainGenerator = struct {
                     const uz: u32 = @intCast(nz);
                     const block = chunk.getBlock(ux, uy, uz);
                     if (!block.isOpaque()) {
-                        const current_level = chunk.getBlockLight(ux, uy, uz);
-                        const next_level = node.level - 1;
-                        if (next_level > current_level) {
-                            chunk.setBlockLight(ux, uy, uz, next_level);
-                            try queue.append(self.allocator, .{ .x = @intCast(nx), .y = @intCast(ny), .z = @intCast(nz), .level = next_level });
+                        const current_light = chunk.getLight(ux, uy, uz);
+                        const current_r = current_light.getBlockLightR();
+                        const current_g = current_light.getBlockLightG();
+                        const current_b = current_light.getBlockLightB();
+
+                        const next_r: u4 = if (node.r > 1) node.r - 1 else 0;
+                        const next_g: u4 = if (node.g > 1) node.g - 1 else 0;
+                        const next_b: u4 = if (node.b > 1) node.b - 1 else 0;
+
+                        if (next_r > current_r or next_g > current_g or next_b > current_b) {
+                            const new_r = @max(next_r, current_r);
+                            const new_g = @max(next_g, current_g);
+                            const new_b = @max(next_b, current_b);
+                            chunk.setBlockLightRGB(ux, uy, uz, new_r, new_g, new_b);
+                            try queue.append(self.allocator, .{
+                                .x = @intCast(nx),
+                                .y = @intCast(ny),
+                                .z = @intCast(nz),
+                                .r = new_r,
+                                .g = new_g,
+                                .b = new_b,
+                            });
                         }
                     }
                 }
@@ -1627,31 +1678,31 @@ pub const TerrainGenerator = struct {
         const wzf: f32 = @floatFromInt(wz);
 
         // Compute warped coordinates
-        const warp = self.computeWarp(wxf, wzf);
+        const warp = self.computeWarp(wxf, wzf, 0); // sampleBiome always uses full detail
         const xw = wxf + warp.x;
         const zw = wzf + warp.z;
 
         // Get structural parameters
-        const c = self.getContinentalness(xw, zw);
-        const e = self.getErosion(xw, zw);
-        const pv = self.getPeaksValleys(xw, zw);
-        const coast_jitter = self.coast_jitter_noise.fbm2D(xw, zw, 2, 2.0, 0.5, p.coast_jitter_scale) * 0.03;
+        const c = self.getContinentalness(xw, zw, 0);
+        const e = self.getErosion(xw, zw, 0);
+        const pv = self.getPeaksValleys(xw, zw, 0);
+        const coast_jitter = self.coast_jitter_noise.get2DOctaves(xw, zw, 2);
         const c_jittered = clamp01(c + coast_jitter);
-        const river_mask = self.getRiverMask(xw, zw);
+        const river_mask = self.getRiverMask(xw, zw, 0);
 
         // Get region for height calculation
-        const region = region_pkg.getRegion(self.continentalness_noise.seed, wx, wz);
+        const region = region_pkg.getRegion(self.continentalness_noise.params.seed, wx, wz);
 
         // Compute height for climate calculation
-        const terrain_height = self.computeHeight(c_jittered, e, pv, xw, zw, river_mask, region);
+        const terrain_height = self.computeHeight(c_jittered, e, pv, xw, zw, river_mask, region, 0);
         const terrain_height_i: i32 = @intFromFloat(terrain_height);
         const sea: f32 = @floatFromInt(p.sea_level);
 
         // Get climate parameters
         const altitude_offset: f32 = @max(0, terrain_height - sea);
-        var temperature = self.getTemperature(xw, zw);
+        var temperature = self.getTemperature(xw, zw, 0);
         temperature = clamp01(temperature - (altitude_offset / 512.0) * p.temp_lapse);
-        const humidity = self.getHumidity(xw, zw);
+        const humidity = self.getHumidity(xw, zw, 0);
 
         // Build climate params
         const climate = biome_mod.computeClimateParams(
@@ -1665,7 +1716,7 @@ pub const TerrainGenerator = struct {
         );
 
         // Structural params (simplified - no slope calculation for sampling)
-        const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered);
+        const ridge_mask = self.getRidgeFactor(xw, zw, c_jittered, 0);
         const structural = biome_mod.StructuralParams{
             .height = terrain_height_i,
             .slope = 1, // Assume low slope for sampling
@@ -1769,8 +1820,8 @@ pub const TerrainGenerator = struct {
                 const continental_zone = self.getContinentalZone(continentalness);
 
                 // Get region info for role
-                const region_info = region_pkg.getRegion(self.continentalness_noise.seed, wx, wz);
-                const path_info = region_pkg.getPathInfo(self.continentalness_noise.seed, wx, wz, region_info);
+                const region_info = region_pkg.getRegion(self.continentalness_noise.params.seed, wx, wz);
+                const path_info = region_pkg.getPathInfo(self.continentalness_noise.params.seed, wx, wz, region_info);
 
                 // Store in cache
                 self.classification_cache.put(wx, wz, .{

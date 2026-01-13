@@ -149,7 +149,7 @@ pub const TextureAtlas = struct {
     }
 
     /// Detect tile size from the first valid texture in the pack
-    fn detectTileSize(pack_manager: ?*resource_pack.ResourcePackManager, allocator: std.mem.Allocator) u32 {
+    fn detectTileSize(pack_manager: ?*resource_pack.ResourcePackManager, allocator: std.mem.Allocator, max_resolution: u32) u32 {
         if (pack_manager) |pm| {
             // Try to load any configured texture from the ACTIVE pack only
             // This ensures we detect the resolution of the custom pack, even if it's incomplete
@@ -174,7 +174,7 @@ pub const TextureAtlas = struct {
                         }
                         // Use the larger dimension and snap to nearest supported size
                         const size = @max(tex.width, tex.height);
-                        return snapToSupportedSize(size);
+                        return @min(snapToSupportedSize(size), max_resolution);
                     }
                 }
             }
@@ -244,9 +244,9 @@ pub const TextureAtlas = struct {
         .{ .index = TILE_DEAD_BUSH, .name = "dead_bush", .block = .dead_bush },
     };
 
-    pub fn init(allocator: std.mem.Allocator, rhi_instance: rhi.RHI, pack_manager: ?*resource_pack.ResourcePackManager) !TextureAtlas {
+    pub fn init(allocator: std.mem.Allocator, rhi_instance: rhi.RHI, pack_manager: ?*resource_pack.ResourcePackManager, max_resolution: u32) !TextureAtlas {
         // Detect tile size from pack textures
-        const tile_size = detectTileSize(pack_manager, allocator);
+        const tile_size = detectTileSize(pack_manager, allocator, max_resolution);
         const atlas_size = tile_size * TILES_PER_ROW;
 
         log.log.info("Texture atlas tile size: {}x{} (atlas: {}x{})", .{ tile_size, tile_size, atlas_size, atlas_size });
@@ -266,13 +266,13 @@ pub const TextureAtlas = struct {
 
         if (has_pbr) {
             normal_pixels = try allocator.alloc(u8, pixel_count);
-            // Default normal: (128, 128, 255, 255)
+            // Default normal: (128, 128, 255, 0) - Alpha 0 means no PBR
             var i: usize = 0;
             while (i < pixel_count) : (i += 4) {
                 normal_pixels.?[i + 0] = 128;
                 normal_pixels.?[i + 1] = 128;
                 normal_pixels.?[i + 2] = 255;
-                normal_pixels.?[i + 3] = 255;
+                normal_pixels.?[i + 3] = 0; // PBR Flag: 0 = Off
             }
 
             roughness_pixels = try allocator.alloc(u8, pixel_count);
@@ -308,6 +308,8 @@ pub const TextureAtlas = struct {
 
                     if (pbr_set.normal) |normal| {
                         copyTextureToTile(normal_pixels.?, config.index, normal.pixels, normal.width, normal.height, tile_size, atlas_size);
+                        // Ensure alpha is set to 255 to flag PBR support for this tile
+                        setTileAlpha(normal_pixels.?, config.index, 255, tile_size, atlas_size);
                         pbr_count += 1;
                     }
 
@@ -347,28 +349,50 @@ pub const TextureAtlas = struct {
         }
 
         // Create textures using RHI with NEAREST filtering for sharp pixel art, but with mipmaps for performance
-        const diffuse_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+        // Use SRGB format for diffuse/albedo - GPU will automatically convert to linear during sampling
+        const diffuse_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba_srgb, .{
             .min_filter = .nearest_mipmap_linear,
             .mag_filter = .nearest,
             .generate_mipmaps = true,
         }, diffuse_pixels);
 
+        if (diffuse_texture.handle == 0) {
+            log.log.err("Failed to create diffuse texture atlas", .{});
+            // diffuse_pixels, normal_pixels, roughness_pixels are freed by defer
+            return error.TextureCreationFailure;
+        }
+
         var normal_texture: ?Texture = null;
         var roughness_texture: ?Texture = null;
 
         if (has_pbr) {
-            normal_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
-                .min_filter = .linear_mipmap_linear,
-                .mag_filter = .linear,
-                .generate_mipmaps = true,
-            }, normal_pixels.?);
+            // Normal maps must stay as linear (UNORM) - they contain direction data, not colors
+            if (normal_pixels) |np| {
+                const tex = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+                    .min_filter = .linear_mipmap_linear,
+                    .mag_filter = .linear,
+                    .generate_mipmaps = true,
+                }, np);
+                if (tex.handle != 0) {
+                    normal_texture = tex;
+                } else {
+                    log.log.warn("Failed to create normal map atlas", .{});
+                }
+            }
 
-            // This atlas contains packed Roughness (R) and Displacement (G)
-            roughness_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
-                .min_filter = .linear_mipmap_linear,
-                .mag_filter = .linear,
-                .generate_mipmaps = true,
-            }, roughness_pixels.?);
+            // Roughness/displacement are linear data, not colors - use UNORM
+            if (roughness_pixels) |rp| {
+                const tex = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+                    .min_filter = .linear_mipmap_linear,
+                    .mag_filter = .linear,
+                    .generate_mipmaps = true,
+                }, rp);
+                if (tex.handle != 0) {
+                    roughness_texture = tex;
+                } else {
+                    log.log.warn("Failed to create roughness map atlas", .{});
+                }
+            }
 
             log.log.info("PBR atlases created: {} textures with {} normal maps", .{ loaded_count, pbr_count });
         }
@@ -460,6 +484,27 @@ pub const TextureAtlas = struct {
                     atlas_pixels[dest_idx + 1] = color[1];
                     atlas_pixels[dest_idx + 2] = color[2];
                     atlas_pixels[dest_idx + 3] = 255;
+                }
+            }
+        }
+    }
+
+    fn setTileAlpha(atlas_pixels: []u8, tile_index: u8, alpha: u8, tile_size: u32, atlas_size: u32) void {
+        const tile_col = tile_index % TILES_PER_ROW;
+        const tile_row = tile_index / TILES_PER_ROW;
+        const start_x = tile_col * tile_size;
+        const start_y = tile_row * tile_size;
+
+        var py: u32 = 0;
+        while (py < tile_size) : (py += 1) {
+            var px: u32 = 0;
+            while (px < tile_size) : (px += 1) {
+                const dest_x = start_x + px;
+                const dest_y = start_y + py;
+                const dest_idx = (dest_y * atlas_size + dest_x) * 4;
+
+                if (dest_idx + 3 < atlas_pixels.len) {
+                    atlas_pixels[dest_idx + 3] = alpha;
                 }
             }
         }

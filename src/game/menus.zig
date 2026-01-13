@@ -58,6 +58,11 @@ pub fn drawHome(ctx: MenuContext, app_state: *AppState, last_state: *AppState, s
         app_state.* = .resource_packs;
     }
     by += btn_height + btn_spacing;
+    if (Widgets.drawButton(ctx.ui, .{ .x = bx, .y = by, .width = bw, .height = btn_height }, "ENVIRONMENT", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        last_state.* = .home;
+        app_state.* = .environment;
+    }
+    by += btn_height + btn_spacing;
     if (Widgets.drawButton(ctx.ui, .{ .x = bx, .y = by, .width = bw, .height = btn_height }, "SETTINGS", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
         last_state.* = .home;
         app_state.* = .settings;
@@ -151,45 +156,13 @@ pub fn drawSettings(ctx: MenuContext, app_state: *AppState, settings: *Settings,
         settings.vsync = !settings.vsync;
         rhi.setVSync(settings.vsync);
     }
-    sy += row_height;
+    sy += row_height + 15.0 * ui_scale;
 
-    // Shadow Quality
-    Font.drawText(ctx.ui, "SHADOW QUALITY", lx, sy, label_scale, Color.white);
-    const sq_label = getShadowQualityLabel(settings.shadow_quality);
-    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, sq_label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-        const num_qualities: u32 = @intCast(Settings.SHADOW_QUALITIES.len);
-        settings.shadow_quality = @mod(settings.shadow_quality + 1, num_qualities);
+    // Advanced Graphics Button
+    if (Widgets.drawButton(ctx.ui, .{ .x = px + (pw - 250.0 * ui_scale) * 0.5, .y = sy, .width = 250.0 * ui_scale, .height = btn_height + 10.0 * ui_scale }, "ADVANCED GRAPHICS...", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        app_state.* = .graphics;
     }
-    sy += row_height;
-
-    // Shadow Distance
-    Font.drawText(ctx.ui, "SHADOW DISTANCE", lx, sy, label_scale, Color.white);
-    Font.drawNumber(ctx.ui, @intFromFloat(settings.shadow_distance), vx + 70.0 * ui_scale, sy, Color.white);
-    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = btn_width, .height = btn_height }, "-", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-        if (settings.shadow_distance > 100.0) settings.shadow_distance -= 100.0;
-    }
-    if (Widgets.drawButton(ctx.ui, .{ .x = vx + 120.0 * ui_scale, .y = sy - 5.0, .width = btn_width, .height = btn_height }, "+", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-        if (settings.shadow_distance < 2500.0) settings.shadow_distance += 100.0;
-    }
-    sy += row_height;
-
-    // Anisotropic Filtering
-    Font.drawText(ctx.ui, "ANISOTROPIC FILTER", lx, sy, label_scale, Color.white);
-    const af_label = getAnisotropyLabel(settings.anisotropic_filtering);
-    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, af_label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-        settings.anisotropic_filtering = cycleAnisotropy(settings.anisotropic_filtering);
-        rhi.setAnisotropicFiltering(settings.anisotropic_filtering);
-    }
-    sy += row_height;
-
-    // MSAA (Vulkan only)
-    Font.drawText(ctx.ui, "ANTI-ALIASING", lx, sy, label_scale, Color.rgba(0.7, 0.7, 0.8, 1.0));
-    const msaa_label = getMSAALabel(settings.msaa_samples);
-    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, msaa_label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-        settings.msaa_samples = cycleMSAA(settings.msaa_samples);
-        rhi.setMSAA(settings.msaa_samples);
-    }
-    sy += row_height;
+    sy += row_height + 15.0 * ui_scale;
 
     // UI Scale
     Font.drawText(ctx.ui, "UI SCALE", lx, sy, label_scale, Color.white);
@@ -292,6 +265,159 @@ fn getShadowQualityLabel(quality_idx: u32) []const u8 {
         return Settings.SHADOW_QUALITIES[quality_idx].label;
     }
     return Settings.SHADOW_QUALITIES[2].label;
+}
+
+fn getPBRQualityLabel(quality: u8) []const u8 {
+    return switch (quality) {
+        0 => "OFF",
+        1 => "LOW",
+        2 => "FULL",
+        else => "UNKNOWN",
+    };
+}
+
+fn getShadowSamplesLabel(samples: u8, buffer: []u8) []const u8 {
+    return std.fmt.bufPrint(buffer, "{} SAMPLES", .{samples}) catch "8 SAMPLES";
+}
+
+fn getTextureResLabel(res: u32, buffer: []u8) []const u8 {
+    return std.fmt.bufPrint(buffer, "{} PX", .{res}) catch "256 PX";
+}
+
+fn getPresetLabel(idx: usize) []const u8 {
+    if (idx >= Settings.GRAPHICS_PRESETS.len) return "CUSTOM";
+    return switch (Settings.GRAPHICS_PRESETS[idx].preset) {
+        .low => "LOW",
+        .medium => "MEDIUM",
+        .high => "HIGH",
+        .ultra => "ULTRA",
+        .custom => "CUSTOM",
+    };
+}
+
+pub fn drawGraphics(ctx: MenuContext, app_state: *AppState, settings: *Settings, last_state: AppState, rhi: RHI) !void {
+    _ = last_state;
+    const mouse_pos = ctx.input.getMousePosition();
+    const mouse_x: f32 = @floatFromInt(mouse_pos.x);
+    const mouse_y: f32 = @floatFromInt(mouse_pos.y);
+    const mouse_clicked = ctx.input.isMouseButtonPressed(.left);
+
+    const auto_scale: f32 = @max(1.0, ctx.screen_h / 720.0);
+    const ui_scale: f32 = auto_scale * settings.ui_scale;
+    const label_scale: f32 = 2.2 * ui_scale;
+    const btn_scale: f32 = 1.8 * ui_scale;
+    const title_scale: f32 = 3.5 * ui_scale;
+    const row_height: f32 = 48.0 * ui_scale;
+    const btn_height: f32 = 34.0 * ui_scale;
+    const toggle_width: f32 = 180.0 * ui_scale;
+
+    const pw: f32 = @min(ctx.screen_w * 0.8, 850.0 * ui_scale);
+    const ph: f32 = @min(ctx.screen_h - 40.0, 850.0 * ui_scale);
+    const px: f32 = (ctx.screen_w - pw) * 0.5;
+    const py: f32 = (ctx.screen_h - ph) * 0.5;
+
+    ctx.ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.12, 0.14, 0.18, 0.95));
+    ctx.ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.28, 0.33, 0.42, 1.0), 2.0 * ui_scale);
+    Font.drawTextCentered(ctx.ui, "GRAPHICS SETTINGS", ctx.screen_w * 0.5, py + 25.0 * ui_scale, title_scale, Color.white);
+
+    var sy: f32 = py + 80.0 * ui_scale;
+    const lx: f32 = px + 40.0 * ui_scale;
+    const vx: f32 = px + pw - 220.0 * ui_scale;
+
+    // Quality Preset
+    Font.drawText(ctx.ui, "OVERALL QUALITY", lx, sy, label_scale, Color.rgba(0.4, 0.8, 1.0, 1.0));
+    const preset_idx = settings.getPresetIndex();
+    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getPresetLabel(preset_idx), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        const next_idx = (preset_idx + 1) % (Settings.GRAPHICS_PRESETS.len + 1);
+        if (next_idx < Settings.GRAPHICS_PRESETS.len) {
+            settings.applyPreset(next_idx);
+            // Apply immediate changes
+            rhi.setAnisotropicFiltering(settings.anisotropic_filtering);
+            rhi.setMSAA(settings.msaa_samples);
+            rhi.setTexturesEnabled(settings.textures_enabled);
+        }
+    }
+    sy += row_height + 10.0 * ui_scale;
+
+    var buf: [32]u8 = undefined;
+
+    // Shadows
+    Font.drawText(ctx.ui, "SHADOW RESOLUTION", lx, sy, label_scale, Color.white);
+    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getShadowQualityLabel(settings.shadow_quality), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        settings.shadow_quality = (settings.shadow_quality + 1) % @as(u32, @intCast(Settings.SHADOW_QUALITIES.len));
+    }
+    sy += row_height;
+
+    Font.drawText(ctx.ui, "SHADOW SOFTNESS", lx, sy, label_scale, Color.white);
+    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getShadowSamplesLabel(settings.shadow_pcf_samples, &buf), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        settings.shadow_pcf_samples = switch (settings.shadow_pcf_samples) {
+            4 => 8,
+            8 => 12,
+            12 => 16,
+            else => 4,
+        };
+    }
+    sy += row_height;
+
+    Font.drawText(ctx.ui, "CASCADE BLENDING", lx, sy, label_scale, Color.white);
+    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, if (settings.shadow_cascade_blend) "ENABLED" else "DISABLED", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        settings.shadow_cascade_blend = !settings.shadow_cascade_blend;
+    }
+    sy += row_height + 10.0 * ui_scale;
+
+    // PBR
+    Font.drawText(ctx.ui, "PBR RENDERING", lx, sy, label_scale, Color.rgba(1.0, 0.8, 0.4, 1.0));
+    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, if (settings.pbr_enabled) "ENABLED" else "DISABLED", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        settings.pbr_enabled = !settings.pbr_enabled;
+    }
+    sy += row_height;
+
+    Font.drawText(ctx.ui, "PBR QUALITY", lx, sy, label_scale, Color.white);
+    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getPBRQualityLabel(settings.pbr_quality), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        settings.pbr_quality = (settings.pbr_quality + 1) % 3;
+    }
+    sy += row_height + 10.0 * ui_scale;
+
+    // Textures
+    Font.drawText(ctx.ui, "MAX TEXTURE RES", lx, sy, label_scale, Color.white);
+    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getTextureResLabel(settings.max_texture_resolution, &buf), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        settings.max_texture_resolution = switch (settings.max_texture_resolution) {
+            16 => 32,
+            32 => 64,
+            64 => 128,
+            128 => 256,
+            256 => 512,
+            else => 16,
+        };
+    }
+    sy += row_height;
+
+    Font.drawText(ctx.ui, "ANISOTROPIC FILTER", lx, sy, label_scale, Color.white);
+    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getAnisotropyLabel(settings.anisotropic_filtering), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        settings.anisotropic_filtering = cycleAnisotropy(settings.anisotropic_filtering);
+        rhi.setAnisotropicFiltering(settings.anisotropic_filtering);
+    }
+    sy += row_height;
+
+    // Misc
+    Font.drawText(ctx.ui, "ANTI-ALIASING (MSAA)", lx, sy, label_scale, Color.white);
+    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getMSAALabel(settings.msaa_samples), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        settings.msaa_samples = cycleMSAA(settings.msaa_samples);
+        rhi.setMSAA(settings.msaa_samples);
+    }
+    sy += row_height;
+
+    Font.drawText(ctx.ui, "CLOUD SHADOWS", lx, sy, label_scale, Color.white);
+    if (Widgets.drawButton(ctx.ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, if (settings.cloud_shadows_enabled) "ENABLED" else "DISABLED", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        settings.cloud_shadows_enabled = !settings.cloud_shadows_enabled;
+    }
+    sy += row_height;
+
+    // Back button
+    if (Widgets.drawButton(ctx.ui, .{ .x = px + (pw - 150.0 * ui_scale) * 0.5, .y = py + ph - 60.0 * ui_scale, .width = 150.0 * ui_scale, .height = 45.0 * ui_scale }, "BACK", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        settings.save(ctx.allocator);
+        app_state.* = .settings;
+    }
 }
 
 pub fn drawSingleplayer(ctx: MenuContext, app_state: *AppState, seed_input: *std.ArrayListUnmanaged(u8), seed_focused: *bool, pending_new_world_seed: *?u64) !void {
@@ -415,6 +541,77 @@ pub fn drawResourcePacks(ctx: MenuContext, app_state: *AppState, settings: *Sett
             try manager.setActivePack(pack.name);
         }
         sy += btn_height + 10.0 * ui_scale;
+    }
+
+    // Back button
+    if (Widgets.drawButton(ctx.ui, .{ .x = px + (pw - 150.0 * ui_scale) * 0.5, .y = py + ph - 70.0 * ui_scale, .width = 150.0 * ui_scale, .height = 50.0 * ui_scale }, "BACK", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        settings.save(ctx.allocator);
+        app_state.* = last_state;
+    }
+}
+
+pub fn drawEnvironment(ctx: MenuContext, app_state: *AppState, settings: *Settings, last_state: AppState) !void {
+    const mouse_pos = ctx.input.getMousePosition();
+    const mouse_x: f32 = @floatFromInt(mouse_pos.x);
+    const mouse_y: f32 = @floatFromInt(mouse_pos.y);
+    const mouse_clicked = ctx.input.isMouseButtonPressed(.left);
+
+    // Scale UI
+    const auto_scale: f32 = @max(1.0, ctx.screen_h / 720.0);
+    const ui_scale: f32 = auto_scale * settings.ui_scale;
+    const title_scale: f32 = 3.5 * ui_scale;
+    const btn_scale: f32 = 2.0 * ui_scale;
+
+    const pw: f32 = @min(ctx.screen_w * 0.75, 750.0 * ui_scale);
+    const ph: f32 = @min(ctx.screen_h - 40.0, 800.0 * ui_scale);
+    const px: f32 = (ctx.screen_w - pw) * 0.5;
+    const py: f32 = (ctx.screen_h - ph) * 0.5;
+
+    // Background
+    ctx.ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.12, 0.14, 0.18, 0.95));
+    ctx.ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.28, 0.33, 0.42, 1.0), 2.0 * ui_scale);
+
+    Font.drawTextCentered(ctx.ui, "ENVIRONMENT MAPS", ctx.screen_w * 0.5, py + 25.0 * ui_scale, title_scale, Color.white);
+
+    var sy: f32 = py + 100.0 * ui_scale;
+    const btn_width: f32 = pw - 100.0 * ui_scale;
+    const btn_height: f32 = 50.0 * ui_scale;
+    const btn_x: f32 = px + 50.0 * ui_scale;
+
+    // Default (None) button
+    const is_default = std.mem.eql(u8, settings.environment_map, "default");
+    const def_label = if (is_default) "None (Default) [SELECTED]" else "None (Default)";
+
+    if (Widgets.drawButton(ctx.ui, .{ .x = btn_x, .y = sy, .width = btn_width, .height = btn_height }, def_label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        try settings.setEnvironmentMap(ctx.allocator, "default");
+    }
+    sy += btn_height + 10.0 * ui_scale;
+
+    // Scan for files
+    var dir = std.fs.cwd().openDir(".", .{ .iterate = true }) catch return;
+    defer dir.close();
+
+    var iterator = dir.iterate();
+    var buf: [128]u8 = undefined;
+
+    while (try iterator.next()) |entry| {
+        if (entry.kind != .file) continue;
+        const is_exr = std.mem.endsWith(u8, entry.name, ".exr");
+        const is_hdr = std.mem.endsWith(u8, entry.name, ".hdr");
+        if (!is_exr and !is_hdr) continue;
+
+        // Skip conversion artifacts if original exists
+        if (is_hdr and std.mem.endsWith(u8, entry.name, ".exr.hdr")) continue;
+
+        const is_selected = std.mem.eql(u8, settings.environment_map, entry.name);
+        const label = try std.fmt.bufPrint(&buf, "{s}{s}", .{ entry.name, if (is_selected) " [SELECTED]" else "" });
+
+        if (Widgets.drawButton(ctx.ui, .{ .x = btn_x, .y = sy, .width = btn_width, .height = btn_height }, label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+            try settings.setEnvironmentMap(ctx.allocator, entry.name);
+        }
+        sy += btn_height + 10.0 * ui_scale;
+
+        if (sy > py + ph - 100.0 * ui_scale) break; // Limit list size
     }
 
     // Back button

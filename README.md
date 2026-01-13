@@ -20,9 +20,11 @@
 ## ✨ Key Features
 
 ### 🎨 Rendering Architecture
-- **Vulkan RHI**: Modern, explicit graphics API for high performance and low CPU overhead.
-- **Cascaded Shadow Maps (CSM)**: 3 cascades for high-fidelity shadows across long distances.
+- **Vulkan RHI**: Modern, explicit graphics API with persistent UBO mapping for high performance.
+- **PBR Rendering**: Physically Based Rendering with Cook-Torrance BRDF for realistic materials.
+- **Cascaded Shadow Maps (CSM)**: 3 cascades with configurable PCF sampling (4-16 samples).
 - **Atmospheric Scattering**: Physically-based day/night cycle with dynamic fog and sky rendering.
+- **Advanced Graphics Menu**: Real-time control over shadow quality, PBR, resolution scaling, and MSAA.
 - **Floating Origin & Reverse-Z**: Industry-standard techniques to eliminate precision jitter and Z-fighting at scale.
 - **Greedy Meshing**: Optimized chunk generation reducing draw call overhead and triangle counts.
 
@@ -72,7 +74,19 @@ This project uses **Nix** for a reproducible development environment.
 - `src/world/`: Voxel-specific logic (Greedy Meshing, World Manager, Chunks).
 - `src/world/worldgen/`: Procedural terrain, noise, and biome systems.
 - `assets/`: GLSL shaders and textures.
+- `scripts/`: Helper scripts for asset processing.
 - `libs/`: (Planned) Extracted standalone math and noise libraries.
+
+## 🖼️ Texture Pipeline
+
+The engine supports HD texture packs with full PBR maps. To standardize high-resolution source imagery (4k JPEGs, EXRs) into engine-ready 512px PNGs, use the provided helper script:
+
+```bash
+# Standardize an entire pack
+./scripts/process_textures.sh assets/textures/pbr-test 512
+```
+
+The script automatically handles resizing and naming conventions for `_diff`, `_nor_gl`, `_rough`, and `_disp` maps.
 
 ## ⚖️ License
 

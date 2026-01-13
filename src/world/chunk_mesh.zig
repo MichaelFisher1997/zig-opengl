@@ -260,9 +260,11 @@ pub const ChunkMesh = struct {
                     if (nxt_opt == null) break;
                     const nxt = nxt_opt.?;
                     if (nxt.block != k.block or nxt.side != k.side) break;
-                    const sky_diff = @as(i8, @intCast(nxt.light.sky_light)) - @as(i8, @intCast(k.light.sky_light));
-                    const block_diff = @as(i8, @intCast(nxt.light.block_light)) - @as(i8, @intCast(k.light.block_light));
-                    if (@abs(sky_diff) > 1 or @abs(block_diff) > 1) break;
+                    const sky_diff = @as(i8, @intCast(nxt.light.getSkyLight())) - @as(i8, @intCast(k.light.getSkyLight()));
+                    const r_diff = @as(i8, @intCast(nxt.light.getBlockLightR())) - @as(i8, @intCast(k.light.getBlockLightR()));
+                    const g_diff = @as(i8, @intCast(nxt.light.getBlockLightG())) - @as(i8, @intCast(k.light.getBlockLightG()));
+                    const b_diff = @as(i8, @intCast(nxt.light.getBlockLightB())) - @as(i8, @intCast(k.light.getBlockLightB()));
+                    if (@abs(sky_diff) > 1 or @abs(r_diff) > 1 or @abs(g_diff) > 1 or @abs(b_diff) > 1) break;
 
                     const diff_r = @abs(nxt.color[0] - k.color[0]);
                     const diff_g = @abs(nxt.color[1] - k.color[1]);
@@ -278,9 +280,11 @@ pub const ChunkMesh = struct {
                         if (nxt_opt == null) break :outer;
                         const nxt = nxt_opt.?;
                         if (nxt.block != k.block or nxt.side != k.side) break :outer;
-                        const sky_diff = @as(i8, @intCast(nxt.light.sky_light)) - @as(i8, @intCast(k.light.sky_light));
-                        const block_diff = @as(i8, @intCast(nxt.light.block_light)) - @as(i8, @intCast(k.light.block_light));
-                        if (@abs(sky_diff) > 1 or @abs(block_diff) > 1) break :outer;
+                        const sky_diff = @as(i8, @intCast(nxt.light.getSkyLight())) - @as(i8, @intCast(k.light.getSkyLight()));
+                        const r_diff = @as(i8, @intCast(nxt.light.getBlockLightR())) - @as(i8, @intCast(k.light.getBlockLightR()));
+                        const g_diff = @as(i8, @intCast(nxt.light.getBlockLightG())) - @as(i8, @intCast(k.light.getBlockLightG()));
+                        const b_diff = @as(i8, @intCast(nxt.light.getBlockLightB())) - @as(i8, @intCast(k.light.getBlockLightB()));
+                        if (@abs(sky_diff) > 1 or @abs(r_diff) > 1 or @abs(g_diff) > 1 or @abs(b_diff) > 1) break :outer;
 
                         const diff_r = @abs(nxt.color[0] - k.color[0]);
                         const diff_g = @abs(nxt.color[1] - k.color[1]);
@@ -291,7 +295,7 @@ pub const ChunkMesh = struct {
                 }
 
                 const target = if (k.block.isTransparent() and k.block != .leaves) fluid_list else solid_list;
-                try addGreedyFace(self.allocator, target, axis, s, su, sv, width, height, k.block, k.side, si, k.light, k.color);
+                try addGreedyFace(self.allocator, target, axis, s, su, sv, width, height, k.block, k.side, si, k.light, k.color, chunk, neighbors);
 
                 var dy: u32 = 0;
                 while (dy < height) : (dy += 1) {
@@ -311,33 +315,50 @@ pub const ChunkMesh = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        // Upload merged solid buffer
+        // Handle solid pass
         if (self.pending_solid) |v| {
+            // Always free existing allocation first to reduce peak usage
             if (self.solid_allocation) |alloc| {
                 allocator.free(alloc);
                 self.solid_allocation = null;
             }
-            self.solid_allocation = allocator.allocate(v) catch |err| {
-                std.log.err("Failed to allocate chunk mesh vertices (will retry): {}", .{err});
-                return;
-            };
+
+            if (v.len > 0) {
+                self.solid_allocation = allocator.allocate(v) catch |err| {
+                    std.log.err("Failed to allocate chunk mesh vertices (will retry): {}", .{err});
+                    return;
+                };
+            }
             self.allocator.free(v);
             self.pending_solid = null;
             self.ready = true;
+        } else if (self.solid_allocation != null) {
+            // Chunk became empty in solid pass, free the old allocation
+            allocator.free(self.solid_allocation.?);
+            self.solid_allocation = null;
+            self.ready = true;
         }
 
-        // Upload merged fluid buffer
+        // Handle fluid pass
         if (self.pending_fluid) |v| {
             if (self.fluid_allocation) |alloc| {
                 allocator.free(alloc);
                 self.fluid_allocation = null;
             }
-            self.fluid_allocation = allocator.allocate(v) catch |err| {
-                std.log.err("Failed to allocate chunk fluid vertices (will retry): {}", .{err});
-                return;
-            };
+
+            if (v.len > 0) {
+                self.fluid_allocation = allocator.allocate(v) catch |err| {
+                    std.log.err("Failed to allocate chunk fluid vertices (will retry): {}", .{err});
+                    return;
+                };
+            }
             self.allocator.free(v);
             self.pending_fluid = null;
+            self.ready = true;
+        } else if (self.fluid_allocation != null) {
+            // Chunk became empty in fluid pass, free the old allocation
+            allocator.free(self.fluid_allocation.?);
+            self.fluid_allocation = null;
             self.ready = true;
         }
     }
@@ -417,7 +438,35 @@ fn getLightCross(chunk: *const Chunk, neighbors: NeighborChunks, x: i32, y: i32,
     return chunk.getLightSafe(x, y, z);
 }
 
-fn addGreedyFace(allocator: std.mem.Allocator, verts: *std.ArrayListUnmanaged(Vertex), axis: Face, s: i32, u: u32, v: u32, w: u32, h: u32, block: BlockType, forward: bool, si: u32, light: PackedLight, tint: [3]f32) !void {
+fn getAOAt(chunk: *const Chunk, neighbors: NeighborChunks, x: i32, y: i32, z: i32) f32 {
+    if (y < 0 or y >= CHUNK_SIZE_Y) return 0;
+
+    const b: BlockType = blk: {
+        if (x < 0) {
+            if (z < 0 or z >= CHUNK_SIZE_Z) break :blk .air; // Lack of diagonal neighbors
+            break :blk if (neighbors.west) |w| w.getBlock(CHUNK_SIZE_X - 1, @intCast(y), @intCast(z)) else .air;
+        } else if (x >= CHUNK_SIZE_X) {
+            if (z < 0 or z >= CHUNK_SIZE_Z) break :blk .air;
+            break :blk if (neighbors.east) |e| e.getBlock(0, @intCast(y), @intCast(z)) else .air;
+        } else if (z < 0) {
+            // x is already checked to be [0, CHUNK_SIZE_X-1]
+            break :blk if (neighbors.north) |n| n.getBlock(@intCast(x), @intCast(y), CHUNK_SIZE_Z - 1) else .air;
+        } else if (z >= CHUNK_SIZE_Z) {
+            break :blk if (neighbors.south) |s| s.getBlock(@intCast(x), @intCast(y), 0) else .air;
+        } else {
+            break :blk chunk.getBlock(@intCast(x), @intCast(y), @intCast(z));
+        }
+    };
+
+    return if (b.isSolid() and !b.isTransparent()) 1.0 else 0.0;
+}
+
+fn calculateVertexAO(s1: f32, s2: f32, c: f32) f32 {
+    if (s1 > 0.5 and s2 > 0.5) return 0.4;
+    return 1.0 - (s1 + s2 + c) * 0.2;
+}
+
+fn addGreedyFace(allocator: std.mem.Allocator, verts: *std.ArrayListUnmanaged(Vertex), axis: Face, s: i32, u: u32, v: u32, w: u32, h: u32, block: BlockType, forward: bool, si: u32, light: PackedLight, tint: [3]f32, chunk: *const Chunk, neighbors: NeighborChunks) !void {
     const face = if (forward) axis else switch (axis) {
         .top => Face.bottom,
         .east => Face.west,
@@ -487,9 +536,67 @@ fn addGreedyFace(allocator: std.mem.Allocator, verts: *std.ArrayListUnmanaged(Ve
         }
         uv = [4][2]f32{ .{ 0, hf }, .{ wf, hf }, .{ wf, 0 }, .{ 0, 0 } };
     }
-    const idxs = [_]usize{ 0, 1, 2, 0, 2, 3 };
+
+    // Calculate AO for each corner of the quad
+    var ao: [4]f32 = undefined;
+    for (0..4) |i| {
+        const vertex_pos = p[i];
+        // Determine the three neighbor blocks to check for this vertex.
+        // We need to know which directions are 'outside' from this corner.
+        // We can find this by comparing the vertex position to the face center.
+        const center = [3]f32{
+            (p[0][0] + p[2][0]) * 0.5,
+            (p[0][1] + p[2][1]) * 0.5,
+            (p[0][2] + p[2][2]) * 0.5,
+        };
+
+        const dir_x: i32 = if (vertex_pos[0] > center[0]) 0 else -1;
+        const dir_y: i32 = if (vertex_pos[1] > center[1]) 0 else -1;
+        const dir_z: i32 = if (vertex_pos[2] > center[2]) 0 else -1;
+
+        const vx = @as(i32, @intFromFloat(@floor(vertex_pos[0])));
+        const vy = @as(i32, @intFromFloat(@floor(vertex_pos[1])));
+        const vz = @as(i32, @intFromFloat(@floor(vertex_pos[2])));
+
+        var s1: f32 = 0;
+        var s2: f32 = 0;
+        var c: f32 = 0;
+
+        if (axis == .top) {
+            const y_off: i32 = if (forward) 0 else -1;
+            s1 = getAOAt(chunk, neighbors, vx + dir_x, vy + y_off, vz);
+            s2 = getAOAt(chunk, neighbors, vx, vy + y_off, vz + dir_z);
+            c = getAOAt(chunk, neighbors, vx + dir_x, vy + y_off, vz + dir_z);
+        } else if (axis == .east) {
+            const x_off: i32 = if (forward) 0 else -1;
+            s1 = getAOAt(chunk, neighbors, vx + x_off, vy + dir_y, vz);
+            s2 = getAOAt(chunk, neighbors, vx + x_off, vy, vz + dir_z);
+            c = getAOAt(chunk, neighbors, vx + x_off, vy + dir_y, vz + dir_z);
+        } else if (axis == .south) {
+            const z_off: i32 = if (forward) 0 else -1;
+            s1 = getAOAt(chunk, neighbors, vx + dir_x, vy, vz + z_off);
+            s2 = getAOAt(chunk, neighbors, vx, vy + dir_y, vz + z_off);
+            c = getAOAt(chunk, neighbors, vx + dir_x, vy + dir_y, vz + z_off);
+        }
+
+        ao[i] = calculateVertexAO(s1, s2, c);
+    }
+
+    // Choose triangle orientation to minimize AO artifacts (flipping the diagonal)
+    var idxs: [6]usize = undefined;
+    // Correct flipping: if A+C < B+D, then diagonal B-D is brighter.
+    if (ao[0] + ao[2] < ao[1] + ao[3]) {
+        idxs = .{ 1, 2, 3, 1, 3, 0 };
+    } else {
+        idxs = .{ 0, 1, 2, 0, 2, 3 };
+    }
+
     const sky_norm = @as(f32, @floatFromInt(light.getSkyLight())) / 15.0;
-    const block_norm = @as(f32, @floatFromInt(light.getBlockLight())) / 15.0;
+    const block_norm = [3]f32{
+        @as(f32, @floatFromInt(light.getBlockLightR())) / 15.0,
+        @as(f32, @floatFromInt(light.getBlockLightG())) / 15.0,
+        @as(f32, @floatFromInt(light.getBlockLightB())) / 15.0,
+    };
 
     for (idxs) |i| {
         try verts.append(allocator, Vertex{
@@ -500,6 +607,7 @@ fn addGreedyFace(allocator: std.mem.Allocator, verts: *std.ArrayListUnmanaged(Ve
             .tile_id = tid,
             .skylight = sky_norm,
             .blocklight = block_norm,
+            .ao = ao[i],
         });
     }
 }

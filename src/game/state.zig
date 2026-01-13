@@ -7,6 +7,8 @@ pub const AppState = enum {
     paused,
     settings,
     resource_packs,
+    environment,
+    graphics,
 };
 
 pub const Settings = struct {
@@ -25,6 +27,30 @@ pub const Settings = struct {
     window_height: u32 = 1080,
     lod_enabled: bool = false, // Disabled by default due to performance issues
     texture_pack: []const u8 = "default",
+    environment_map: []const u8 = "default", // "default" or filename.exr/hdr
+
+    // PBR Settings
+    pbr_enabled: bool = true,
+    pbr_quality: u8 = 2, // 0=Off, 1=Low (no normal maps), 2=Full
+    exposure: f32 = 0.9,
+    saturation: f32 = 1.3,
+
+    // Shadow Settings
+    shadow_pcf_samples: u8 = 12, // 4, 8, 12, 16
+    shadow_cascade_blend: bool = true,
+
+    // Cloud Settings
+    cloud_shadows_enabled: bool = true,
+
+    // Volumetric Lighting Settings (Phase 4)
+    volumetric_lighting_enabled: bool = true,
+    volumetric_density: f32 = 0.05, // Fog density
+    volumetric_steps: u32 = 16, // Raymarching steps
+    volumetric_scattering: f32 = 0.8, // Mie scattering anisotropy (G)
+    ssao_enabled: bool = true,
+
+    // Texture Settings
+    max_texture_resolution: u32 = 512, // 16, 32, 64, 128, 256, 512
 
     pub const ShadowQuality = struct {
         resolution: u32,
@@ -78,6 +104,92 @@ pub const Settings = struct {
         }
     }
 
+    pub const GraphicsPreset = enum {
+        low,
+        medium,
+        high,
+        ultra,
+        custom,
+    };
+
+    pub const PresetConfig = struct {
+        preset: GraphicsPreset,
+        shadow_quality: u32,
+        shadow_pcf_samples: u8,
+        shadow_cascade_blend: bool,
+        pbr_enabled: bool,
+        pbr_quality: u8,
+        msaa_samples: u8,
+        anisotropic_filtering: u8,
+        max_texture_resolution: u32,
+        cloud_shadows_enabled: bool,
+        exposure: f32,
+        saturation: f32,
+        volumetric_lighting_enabled: bool,
+        volumetric_density: f32,
+        volumetric_steps: u32,
+        volumetric_scattering: f32,
+        ssao_enabled: bool,
+        render_distance: i32,
+    };
+
+    pub const GRAPHICS_PRESETS = [_]PresetConfig{
+        // LOW: Prioritize performance
+        .{ .preset = .low, .shadow_quality = 0, .shadow_pcf_samples = 4, .shadow_cascade_blend = false, .pbr_enabled = false, .pbr_quality = 0, .msaa_samples = 1, .anisotropic_filtering = 1, .max_texture_resolution = 64, .cloud_shadows_enabled = false, .exposure = 0.9, .saturation = 1.3, .volumetric_lighting_enabled = false, .volumetric_density = 0.0, .volumetric_steps = 4, .volumetric_scattering = 0.5, .ssao_enabled = false, .render_distance = 6 },
+
+        // MEDIUM: Balanced
+        .{ .preset = .medium, .shadow_quality = 1, .shadow_pcf_samples = 8, .shadow_cascade_blend = false, .pbr_enabled = true, .pbr_quality = 1, .msaa_samples = 2, .anisotropic_filtering = 4, .max_texture_resolution = 128, .cloud_shadows_enabled = true, .exposure = 0.9, .saturation = 1.3, .volumetric_lighting_enabled = true, .volumetric_density = 0.00005, .volumetric_steps = 8, .volumetric_scattering = 0.7, .ssao_enabled = true, .render_distance = 12 },
+
+        // HIGH: Quality focus
+        .{ .preset = .high, .shadow_quality = 2, .shadow_pcf_samples = 12, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 4, .anisotropic_filtering = 8, .max_texture_resolution = 256, .cloud_shadows_enabled = true, .exposure = 0.9, .saturation = 1.3, .volumetric_lighting_enabled = true, .volumetric_density = 0.0001, .volumetric_steps = 12, .volumetric_scattering = 0.75, .ssao_enabled = true, .render_distance = 18 },
+
+        // ULTRA: Maximum quality
+        .{ .preset = .ultra, .shadow_quality = 3, .shadow_pcf_samples = 16, .shadow_cascade_blend = true, .pbr_enabled = true, .pbr_quality = 2, .msaa_samples = 4, .anisotropic_filtering = 16, .max_texture_resolution = 512, .cloud_shadows_enabled = true, .exposure = 0.9, .saturation = 1.3, .volumetric_lighting_enabled = true, .volumetric_density = 0.0002, .volumetric_steps = 16, .volumetric_scattering = 0.8, .ssao_enabled = true, .render_distance = 28 },
+    };
+
+    pub fn applyPreset(self: *Settings, preset_idx: usize) void {
+        if (preset_idx >= GRAPHICS_PRESETS.len) return;
+        const config = GRAPHICS_PRESETS[preset_idx];
+        self.shadow_quality = config.shadow_quality;
+        self.shadow_pcf_samples = config.shadow_pcf_samples;
+        self.shadow_cascade_blend = config.shadow_cascade_blend;
+        self.pbr_enabled = config.pbr_enabled;
+        self.pbr_quality = config.pbr_quality;
+        self.msaa_samples = config.msaa_samples;
+        self.anisotropic_filtering = config.anisotropic_filtering;
+        self.max_texture_resolution = config.max_texture_resolution;
+        self.cloud_shadows_enabled = config.cloud_shadows_enabled;
+        self.exposure = config.exposure;
+        self.saturation = config.saturation;
+        self.volumetric_lighting_enabled = config.volumetric_lighting_enabled;
+        self.volumetric_density = config.volumetric_density;
+        self.volumetric_steps = config.volumetric_steps;
+        self.volumetric_scattering = config.volumetric_scattering;
+        self.ssao_enabled = config.ssao_enabled;
+        self.render_distance = config.render_distance;
+    }
+
+    pub fn getPresetIndex(self: *const Settings) usize {
+        for (GRAPHICS_PRESETS, 0..) |preset, i| {
+            if (self.shadow_quality == preset.shadow_quality and
+                self.shadow_pcf_samples == preset.shadow_pcf_samples and
+                self.shadow_cascade_blend == preset.shadow_cascade_blend and
+                self.pbr_enabled == preset.pbr_enabled and
+                self.pbr_quality == preset.pbr_quality and
+                self.msaa_samples == preset.msaa_samples and
+                self.anisotropic_filtering == preset.anisotropic_filtering and
+                self.max_texture_resolution == preset.max_texture_resolution and
+                self.cloud_shadows_enabled == preset.cloud_shadows_enabled and
+                self.exposure == preset.exposure and
+                self.saturation == preset.saturation and
+                self.render_distance == preset.render_distance)
+            {
+                return i;
+            }
+        }
+        return GRAPHICS_PRESETS.len; // Custom
+    }
+
     const CONFIG_DIR = ".config/zigcraft";
     const CONFIG_FILE = "settings.json";
 
@@ -108,6 +220,12 @@ pub const Settings = struct {
             settings.texture_pack = allocator.dupe(u8, settings.texture_pack) catch "default";
         }
 
+        if (std.mem.eql(u8, settings.environment_map, "default")) {
+            settings.environment_map = "default";
+        } else {
+            settings.environment_map = allocator.dupe(u8, settings.environment_map) catch "default";
+        }
+
         std.log.info("Settings loaded from ~/{s}", .{config_path});
         return settings;
     }
@@ -115,6 +233,9 @@ pub const Settings = struct {
     pub fn deinit(self: *Settings, allocator: std.mem.Allocator) void {
         if (!std.mem.eql(u8, self.texture_pack, "default")) {
             allocator.free(self.texture_pack);
+        }
+        if (!std.mem.eql(u8, self.environment_map, "default")) {
+            allocator.free(self.environment_map);
         }
     }
 
@@ -125,6 +246,16 @@ pub const Settings = struct {
             self.texture_pack = "default";
         } else {
             self.texture_pack = try allocator.dupe(u8, name);
+        }
+    }
+
+    pub fn setEnvironmentMap(self: *Settings, allocator: std.mem.Allocator, name: []const u8) !void {
+        if (std.mem.eql(u8, self.environment_map, name)) return;
+        if (!std.mem.eql(u8, self.environment_map, "default")) allocator.free(self.environment_map);
+        if (std.mem.eql(u8, name, "default")) {
+            self.environment_map = "default";
+        } else {
+            self.environment_map = try allocator.dupe(u8, name);
         }
     }
 

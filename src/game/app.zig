@@ -25,7 +25,11 @@ const rhi_pkg = @import("../engine/graphics/rhi.zig");
 const RHI = rhi_pkg.RHI;
 const rhi_vulkan = @import("../engine/graphics/rhi_vulkan.zig");
 const TextureAtlas = @import("../engine/graphics/texture_atlas.zig").TextureAtlas;
-const RenderGraph = @import("../engine/graphics/render_graph.zig").RenderGraph;
+const Texture = @import("../engine/graphics/texture.zig").Texture;
+const render_graph_pkg = @import("../engine/graphics/render_graph.zig");
+const RenderGraph = render_graph_pkg.RenderGraph;
+const AtmosphereSystem = @import("../engine/graphics/atmosphere_system.zig").AtmosphereSystem;
+const MaterialSystem = @import("../engine/graphics/material_system.zig").MaterialSystem;
 const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").ResourcePackManager;
 
 const AppState = @import("state.zig").AppState;
@@ -53,6 +57,7 @@ const AtmosphereState = struct {
     moon_dir: Vec3 = Vec3.init(0, -1, 0),
     sky_color: Vec3 = Vec3.init(0.5, 0.7, 1.0),
     horizon_color: Vec3 = Vec3.init(0.8, 0.85, 0.95),
+    sun_color: Vec3 = Vec3.init(1.0, 1.0, 1.0),
     fog_color: Vec3 = Vec3.init(0.6, 0.75, 0.95),
     ambient_intensity: f32 = 0.3,
     fog_density: f32 = 0.0015,
@@ -123,8 +128,8 @@ const AtmosphereState = struct {
         }
 
         self.moon_intensity = (1.0 - self.sun_intensity) * 0.15;
-        const day_ambient: f32 = 0.30;
-        const night_ambient: f32 = 0.08;
+        const day_ambient: f32 = 0.45;
+        const night_ambient: f32 = 0.15;
         self.ambient_intensity = std.math.lerp(night_ambient, day_ambient, self.sun_intensity);
     }
 
@@ -135,40 +140,52 @@ const AtmosphereState = struct {
         const DUSK_START: f32 = 0.70;
         const DUSK_END: f32 = 0.80;
 
-        const day_sky = Vec3.init(0.4, 0.65, 1.0);
-        const day_horizon = Vec3.init(0.7, 0.8, 0.95);
-        const night_sky = Vec3.init(0.02, 0.02, 0.08);
-        const night_horizon = Vec3.init(0.05, 0.05, 0.12);
-        const dawn_sky = Vec3.init(0.4, 0.4, 0.6);
-        const dawn_horizon = Vec3.init(1.0, 0.5, 0.3);
-        const dusk_sky = Vec3.init(0.35, 0.25, 0.5);
-        const dusk_horizon = Vec3.init(1.0, 0.4, 0.2);
+        const day_sky = Vec3.init(0.4, 0.65, 1.0).toLinear();
+        const day_horizon = Vec3.init(0.7, 0.8, 0.95).toLinear();
+        const night_sky = Vec3.init(0.02, 0.02, 0.08).toLinear();
+        const night_horizon = Vec3.init(0.05, 0.05, 0.12).toLinear();
+        const dawn_sky = Vec3.init(0.25, 0.3, 0.5).toLinear();
+        const dawn_horizon = Vec3.init(0.95, 0.55, 0.2).toLinear();
+        const dusk_sky = Vec3.init(0.25, 0.3, 0.5).toLinear();
+        const dusk_horizon = Vec3.init(0.95, 0.55, 0.2).toLinear();
+
+        const day_sun = Vec3.init(1.0, 0.95, 0.9).toLinear();
+        const dawn_sun = Vec3.init(1.0, 0.85, 0.6).toLinear();
+        const dusk_sun = Vec3.init(1.0, 0.85, 0.6).toLinear();
+        const night_sun = Vec3.init(0.04, 0.04, 0.1).toLinear();
 
         if (t < DAWN_START) {
             self.sky_color = night_sky;
             self.horizon_color = night_horizon;
+            self.sun_color = night_sun;
         } else if (t < DAWN_END) {
             const blend = smoothstep(DAWN_START, DAWN_END, t);
             self.sky_color = lerpVec3(night_sky, dawn_sky, blend);
             self.horizon_color = lerpVec3(night_horizon, dawn_horizon, blend);
+            self.sun_color = lerpVec3(night_sun, dawn_sun, blend);
         } else if (t < 0.35) {
             const blend = smoothstep(DAWN_END, 0.35, t);
             self.sky_color = lerpVec3(dawn_sky, day_sky, blend);
             self.horizon_color = lerpVec3(dawn_horizon, day_horizon, blend);
+            self.sun_color = lerpVec3(dawn_sun, day_sun, blend);
         } else if (t < DUSK_START) {
             self.sky_color = day_sky;
             self.horizon_color = day_horizon;
+            self.sun_color = day_sun;
         } else if (t < 0.75) {
             const blend = smoothstep(DUSK_START, 0.75, t);
             self.sky_color = lerpVec3(day_sky, dusk_sky, blend);
             self.horizon_color = lerpVec3(day_horizon, dusk_horizon, blend);
+            self.sun_color = lerpVec3(day_sun, dusk_sun, blend);
         } else if (t < DUSK_END) {
             const blend = smoothstep(0.75, DUSK_END, t);
             self.sky_color = lerpVec3(dusk_sky, night_sky, blend);
             self.horizon_color = lerpVec3(dusk_horizon, night_horizon, blend);
+            self.sun_color = lerpVec3(dusk_sun, night_sun, blend);
         } else {
             self.sky_color = night_sky;
             self.horizon_color = night_horizon;
+            self.sun_color = night_sun;
         }
 
         self.fog_color = self.horizon_color;
@@ -242,7 +259,16 @@ pub const App = struct {
     shader: rhi_pkg.ShaderHandle = rhi_pkg.InvalidShaderHandle,
     resource_pack_manager: ResourcePackManager,
     atlas: TextureAtlas,
+    env_map: ?@import("../engine/graphics/texture.zig").Texture,
     render_graph: RenderGraph,
+    atmosphere_system: *AtmosphereSystem,
+    material_system: *MaterialSystem,
+    shadow_passes: [3]render_graph_pkg.ShadowPass,
+    g_pass: render_graph_pkg.GPass,
+    ssao_pass: render_graph_pkg.SSAOPass,
+    sky_pass: render_graph_pkg.SkyPass,
+    opaque_pass: render_graph_pkg.OpaquePass,
+    cloud_pass: render_graph_pkg.CloudPass,
     atmosphere: AtmosphereState,
     clouds: CloudState,
 
@@ -298,17 +324,41 @@ pub const App = struct {
             try resource_pack_manager.setActivePack("default");
         }
 
-        const atlas = try TextureAtlas.init(allocator, rhi, &resource_pack_manager);
+        const atlas = try TextureAtlas.init(allocator, rhi, &resource_pack_manager, settings.max_texture_resolution);
         atlas.bind(1);
         // Bind PBR textures if available
         atlas.bindNormal(6);
         atlas.bindRoughness(7);
         atlas.bindDisplacement(8);
 
+        // Load EXR Environment Map
+        var env_map: ?Texture = null;
+        if (!std.mem.eql(u8, settings.environment_map, "default")) {
+            if (resource_pack_manager.loadImageFileFloat(settings.environment_map)) |tex_data| {
+                env_map = Texture.initFloat(rhi, tex_data.width, tex_data.height, tex_data.pixels);
+                env_map.?.bind(9);
+                log.log.info("Loaded Environment Map: {s}", .{settings.environment_map});
+                var td = tex_data;
+                td.deinit(allocator);
+            } else {
+                log.log.warn("Could not load environment map: {s}", .{settings.environment_map});
+                // Fallback to white
+                const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+                env_map = Texture.initFloat(rhi, 1, 1, &white_pixel);
+                env_map.?.bind(9);
+            }
+        } else {
+            // Default white
+            const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+            env_map = Texture.initFloat(rhi, 1, 1, &white_pixel);
+            env_map.?.bind(9);
+        }
+
         var atmosphere = AtmosphereState{};
         atmosphere.setTimeOfDay(0.25);
         const clouds = CloudState{};
-        const render_graph = RenderGraph.init(allocator);
+
+        const atmosphere_system = try AtmosphereSystem.init(allocator, rhi);
 
         const camera = Camera.init(.{
             .position = Vec3.init(8, 100, 8),
@@ -326,7 +376,20 @@ pub const App = struct {
             .shader = rhi_pkg.InvalidShaderHandle,
             .resource_pack_manager = resource_pack_manager,
             .atlas = atlas,
-            .render_graph = render_graph,
+            .env_map = env_map,
+            .render_graph = RenderGraph.init(allocator),
+            .atmosphere_system = atmosphere_system,
+            .material_system = undefined,
+            .shadow_passes = .{
+                render_graph_pkg.ShadowPass.init(0),
+                render_graph_pkg.ShadowPass.init(1),
+                render_graph_pkg.ShadowPass.init(2),
+            },
+            .g_pass = .{},
+            .ssao_pass = .{},
+            .sky_pass = .{},
+            .opaque_pass = .{},
+            .cloud_pass = .{},
             .atmosphere = atmosphere,
             .clouds = clouds,
             .settings = settings,
@@ -352,6 +415,18 @@ pub const App = struct {
             .debug_state = .{},
         };
 
+        app.material_system = try MaterialSystem.init(allocator, rhi, &app.atlas);
+
+        // Build RenderGraph (OCP: We can easily modify this list based on quality)
+        try app.render_graph.addPass(app.shadow_passes[0].pass());
+        try app.render_graph.addPass(app.shadow_passes[1].pass());
+        try app.render_graph.addPass(app.shadow_passes[2].pass());
+        try app.render_graph.addPass(app.g_pass.pass());
+        try app.render_graph.addPass(app.ssao_pass.pass());
+        try app.render_graph.addPass(app.sky_pass.pass());
+        try app.render_graph.addPass(app.opaque_pass.pass());
+        try app.render_graph.addPass(app.cloud_pass.pass());
+
         return app;
     }
 
@@ -362,9 +437,13 @@ pub const App = struct {
 
         if (self.ui) |*u| u.deinit();
 
+        self.render_graph.deinit();
+        self.atmosphere_system.deinit();
+        self.material_system.deinit();
         self.block_outline.deinit();
         self.hand_renderer.deinit();
         self.atlas.deinit();
+        if (self.env_map) |*t| t.deinit();
         self.resource_pack_manager.deinit();
         self.settings.deinit(self.allocator);
         if (self.shader != rhi_pkg.InvalidShaderHandle) self.rhi.destroyShader(self.shader);
@@ -391,12 +470,15 @@ pub const App = struct {
         if (self.pending_new_world_seed) |seed| {
             self.pending_new_world_seed = null;
             const lod_config = LODConfig{
-                .lod0_radius = self.settings.render_distance,
+                .lod0_radius = @min(self.settings.render_distance, 16), // Cap high-detail chunks to 16 radius (256 blocks)
                 .lod1_radius = 40,
                 .lod2_radius = 80,
                 .lod3_radius = 160,
             };
             if (self.settings.lod_enabled) {
+                // Determine max render distance based on config
+                // If render distance is huge (e.g. 50), effective distance for World is clamped by lod0_radius due to my prev fix
+                // But World itself needs the full render distance to pass to fog/sky rendering if used there
                 self.world = World.initWithLOD(self.allocator, self.settings.render_distance, seed, self.rhi, lod_config) catch |err| {
                     log.log.err("Failed to create world with LOD: {}", .{err});
                     self.app_state = .home;
@@ -442,7 +524,12 @@ pub const App = struct {
                         self.seed_focused = false;
                     },
                     .settings => self.app_state = self.last_state,
+                    .graphics => self.app_state = .settings,
                     .resource_packs => {
+                        self.settings.save(self.allocator);
+                        self.app_state = self.last_state;
+                    },
+                    .environment => {
                         self.settings.save(self.allocator);
                         self.app_state = self.last_state;
                     },
@@ -557,7 +644,7 @@ pub const App = struct {
             }
         } else if (self.input.mouse_captured) self.input.setMouseCapture(self.window_manager.window, false);
 
-        const clear_color = if (in_world or in_pause) self.atmosphere.fog_color else Vec3.init(0.07, 0.08, 0.1);
+        const clear_color = if (in_world or in_pause) self.atmosphere.fog_color else Vec3.init(0.07, 0.08, 0.1).toLinear();
         self.rhi.setClearColor(clear_color);
         self.rhi.beginFrame();
 
@@ -594,12 +681,39 @@ pub const App = struct {
                         .cloud_coverage = p.cloud_coverage,
                         .cloud_height = p.cloud_height,
                         .base_color = self.clouds.base_color,
-                        .pbr_enabled = self.atlas.has_pbr,
+                        .pbr_enabled = self.settings.pbr_enabled and self.atlas.has_pbr,
+                        .shadow_samples = self.settings.shadow_pcf_samples,
+                        .shadow_blend = self.settings.shadow_cascade_blend,
+                        .cloud_shadows = self.settings.cloud_shadows_enabled,
+                        .pbr_quality = self.settings.pbr_quality,
+                        .exposure = self.settings.exposure,
+                        .saturation = self.settings.saturation,
+                        .volumetric_enabled = self.settings.volumetric_lighting_enabled,
+                        .volumetric_density = self.settings.volumetric_density,
+                        .volumetric_steps = self.settings.volumetric_steps,
+                        .volumetric_scattering = self.settings.volumetric_scattering,
+                        .ssao_enabled = self.settings.ssao_enabled,
                     };
                 };
 
-                self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
-                self.render_graph.execute(self.rhi, active_world, &self.camera, aspect, sky_params, cloud_params, self.shader, self.atlas.texture.handle, self.settings.shadow_distance, self.settings.getShadowResolution());
+                self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.sun_color, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
+
+                const render_ctx = render_graph_pkg.SceneContext{
+                    .rhi = self.rhi,
+                    .world = active_world,
+                    .camera = &self.camera,
+                    .atmosphere_system = self.atmosphere_system,
+                    .material_system = self.material_system,
+                    .aspect = aspect,
+                    .sky_params = sky_params,
+                    .cloud_params = cloud_params,
+                    .main_shader = self.shader,
+                    .env_map_handle = if (self.env_map) |t| t.handle else 0,
+                    .shadow_distance = self.settings.shadow_distance,
+                    .shadow_resolution = self.settings.getShadowResolution(),
+                    .ssao_enabled = self.settings.ssao_enabled,
+                };
+                self.render_graph.execute(render_ctx);
 
                 if (self.player) |p| {
                     if (p.target_block) |target| self.block_outline.draw(target.x, target.y, target.z, self.camera.position);
@@ -738,18 +852,47 @@ pub const App = struct {
                     if (action == .quit) self.input.should_quit = true;
                 },
                 .settings => Menus.drawSettings(ctx, &self.app_state, &self.settings, self.last_state, self.rhi),
+                .graphics => try Menus.drawGraphics(ctx, &self.app_state, &self.settings, self.last_state, self.rhi),
                 .resource_packs => {
                     const prev_pack_ptr = self.settings.texture_pack.ptr;
                     try Menus.drawResourcePacks(ctx, &self.app_state, &self.settings, self.last_state);
                     if (prev_pack_ptr != self.settings.texture_pack.ptr) {
                         self.rhi.waitIdle();
                         self.atlas.deinit();
-                        self.atlas = try TextureAtlas.init(self.allocator, self.rhi, &self.resource_pack_manager);
+                        self.atlas = try TextureAtlas.init(self.allocator, self.rhi, &self.resource_pack_manager, self.settings.max_texture_resolution);
                         self.atlas.bind(1);
                         // Bind PBR textures if available
                         self.atlas.bindNormal(6);
                         self.atlas.bindRoughness(7);
                         self.atlas.bindDisplacement(8);
+                    }
+                },
+                .environment => {
+                    const prev_env_ptr = self.settings.environment_map.ptr;
+                    try Menus.drawEnvironment(ctx, &self.app_state, &self.settings, self.last_state);
+                    if (prev_env_ptr != self.settings.environment_map.ptr) {
+                        self.rhi.waitIdle();
+                        if (self.env_map) |*t| t.deinit();
+                        self.env_map = null;
+
+                        if (!std.mem.eql(u8, self.settings.environment_map, "default")) {
+                            if (self.resource_pack_manager.loadImageFileFloat(self.settings.environment_map)) |tex_data| {
+                                self.env_map = Texture.initFloat(self.rhi, tex_data.width, tex_data.height, tex_data.pixels);
+                                self.env_map.?.bind(9);
+                                log.log.info("Loaded Environment Map: {s}", .{self.settings.environment_map});
+                                var td = tex_data;
+                                td.deinit(self.allocator);
+                            } else {
+                                log.log.warn("Could not load environment map: {s}", .{self.settings.environment_map});
+                                const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+                                self.env_map = Texture.initFloat(self.rhi, 1, 1, &white_pixel);
+                                self.env_map.?.bind(9);
+                            }
+                        } else {
+                            const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+                            self.env_map = Texture.initFloat(self.rhi, 1, 1, &white_pixel);
+                            self.env_map.?.bind(9);
+                        }
                     }
                 },
                 .singleplayer => try Menus.drawSingleplayer(ctx, &self.app_state, &self.seed_input, &self.seed_focused, &self.pending_new_world_seed),
