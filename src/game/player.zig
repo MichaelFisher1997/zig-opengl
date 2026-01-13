@@ -18,6 +18,9 @@ const ray = @import("../engine/math/ray.zig");
 const block = @import("../world/block.zig");
 const BlockType = block.BlockType;
 const Face = block.Face;
+const input_mapper = @import("input_mapper.zig");
+const InputMapper = input_mapper.InputMapper;
+const GameAction = input_mapper.GameAction;
 
 /// Player controller with physics and block interaction.
 pub const Player = struct {
@@ -200,11 +203,11 @@ pub const Player = struct {
     fn handleFlyToggle(self: *Player, input: *const Input, current_time: f32) void {
         if (!self.can_fly) return;
 
-        if (input.isKeyReleased(.space)) {
+        if (InputMapper.isActionReleased(input, .jump)) {
             self.space_released = true;
         }
 
-        if (input.isKeyPressed(.space) and self.space_released) {
+        if (InputMapper.isActionPressed(input, .jump) and self.space_released) {
             const time_since_last = current_time - self.last_space_time;
 
             if (time_since_last < DOUBLE_TAP_THRESHOLD) {
@@ -235,10 +238,11 @@ pub const Player = struct {
             std.math.sin(self.camera.yaw + std.math.pi / 2.0),
         ).normalize();
 
-        if (input.isKeyDown(.w)) move_dir = move_dir.add(forward_flat);
-        if (input.isKeyDown(.s)) move_dir = move_dir.sub(forward_flat);
-        if (input.isKeyDown(.a)) move_dir = move_dir.sub(right_flat);
-        if (input.isKeyDown(.d)) move_dir = move_dir.add(right_flat);
+        const move_vec = InputMapper.getMovementVector(input);
+        if (move_vec.z > 0) move_dir = move_dir.add(forward_flat);
+        if (move_vec.z < 0) move_dir = move_dir.sub(forward_flat);
+        if (move_vec.x < 0) move_dir = move_dir.sub(right_flat);
+        if (move_vec.x > 0) move_dir = move_dir.add(right_flat);
 
         // Normalize if moving
         if (move_dir.lengthSquared() > 0) {
@@ -253,9 +257,9 @@ pub const Player = struct {
         var vel = move_dir.scale(FLY_SPEED);
 
         // Vertical movement
-        if (input.isKeyDown(.space)) {
+        if (InputMapper.isActionActive(input, .jump)) {
             vel.y = FLY_SPEED;
-        } else if (input.isKeyDown(.left_shift)) {
+        } else if (InputMapper.isActionActive(input, .crouch)) {
             vel.y = -FLY_SPEED;
         }
 
@@ -283,7 +287,7 @@ pub const Player = struct {
         }
 
         // Jump if grounded and space pressed
-        if (self.is_grounded and input.isKeyDown(.space)) {
+        if (self.is_grounded and InputMapper.isActionActive(input, .jump)) {
             self.velocity.y = JUMP_VELOCITY;
             self.is_grounded = false;
         }

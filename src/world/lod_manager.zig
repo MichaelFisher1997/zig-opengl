@@ -467,11 +467,15 @@ pub const LODManager = struct {
 
                     // Queue for generation
                     try queue.push(.{
-                        .type = .generation,
-                        .chunk_x = rx, // Using chunk coords for region coords
-                        .chunk_z = rz,
-                        .job_token = chunk.job_token,
+                        .type = .chunk_generation,
                         .dist_sq = encoded_priority,
+                        .data = .{
+                            .chunk = .{
+                                .x = rx, // Using chunk coords for region coords
+                                .z = rz,
+                                .job_token = chunk.job_token,
+                            },
+                        },
                     });
                     chunk.state = .generating; // Mark as generating, not queued_for_generation
                 }
@@ -495,11 +499,15 @@ pub const LODManager = struct {
 
                 chunk.state = .meshing;
                 try self.lod3_gen_queue.push(.{
-                    .type = .meshing,
-                    .chunk_x = chunk.region_x,
-                    .chunk_z = chunk.region_z,
-                    .job_token = chunk.job_token,
+                    .type = .chunk_meshing,
                     .dist_sq = (dist_sq & 0x0FFFFFFF) | (@as(i32, @intFromEnum(LODLevel.lod1)) << 28),
+                    .data = .{
+                        .chunk = .{
+                            .x = chunk.region_x,
+                            .z = chunk.region_z,
+                            .job_token = chunk.job_token,
+                        },
+                    },
                 });
             } else if (chunk.state == .mesh_ready) {
                 chunk.state = .uploading;
@@ -518,11 +526,15 @@ pub const LODManager = struct {
 
                 chunk.state = .meshing;
                 try self.lod3_gen_queue.push(.{
-                    .type = .meshing,
-                    .chunk_x = chunk.region_x,
-                    .chunk_z = chunk.region_z,
-                    .job_token = chunk.job_token,
+                    .type = .chunk_meshing,
                     .dist_sq = (dist_sq & 0x0FFFFFFF) | (@as(i32, @intFromEnum(LODLevel.lod2)) << 28),
+                    .data = .{
+                        .chunk = .{
+                            .x = chunk.region_x,
+                            .z = chunk.region_z,
+                            .job_token = chunk.job_token,
+                        },
+                    },
                 });
             } else if (chunk.state == .mesh_ready) {
                 chunk.state = .uploading;
@@ -541,11 +553,15 @@ pub const LODManager = struct {
 
                 chunk.state = .meshing;
                 try self.lod3_gen_queue.push(.{
-                    .type = .meshing,
-                    .chunk_x = chunk.region_x,
-                    .chunk_z = chunk.region_z,
-                    .job_token = chunk.job_token,
+                    .type = .chunk_meshing,
                     .dist_sq = (dist_sq & 0x0FFFFFFF) | (@as(i32, @intFromEnum(LODLevel.lod3)) << 28),
+                    .data = .{
+                        .chunk = .{
+                            .x = chunk.region_x,
+                            .z = chunk.region_z,
+                            .job_token = chunk.job_token,
+                        },
+                    },
                 });
             } else if (chunk.state == .mesh_ready) {
                 chunk.state = .uploading;
@@ -973,8 +989,8 @@ fn processLODJob(ctx: *anyopaque, job: Job) void {
     // Determine which LOD level this job is for based on encoded priority
     const lod_level: LODLevel = @enumFromInt(@as(u3, @intCast((job.dist_sq >> 28) & 0x7)));
     const key = LODRegionKey{
-        .rx = job.chunk_x,
-        .rz = job.chunk_z,
+        .rx = job.data.chunk.x,
+        .rz = job.data.chunk.z,
         .lod = lod_level,
     };
 
@@ -998,8 +1014,8 @@ fn processLODJob(ctx: *anyopaque, job: Job) void {
     const scale: i32 = @intCast(lod_level.chunksPerSide());
     const player_rx = @divFloor(self.player_cx, scale);
     const player_rz = @divFloor(self.player_cz, scale);
-    const dx = job.chunk_x - player_rx;
-    const dz = job.chunk_z - player_rz;
+    const dx = job.data.chunk.x - player_rx;
+    const dz = job.data.chunk.z - player_rz;
     const radius = switch (lod_level) {
         .lod0 => self.config.lod0_radius,
         .lod1 => self.config.lod1_radius,
@@ -1022,10 +1038,10 @@ fn processLODJob(ctx: *anyopaque, job: Job) void {
     defer chunk.unpin();
 
     // Skip if token mismatch
-    if (chunk.job_token != job.job_token) return;
+    if (chunk.job_token != job.data.chunk.job_token) return;
 
     switch (job.type) {
-        .generation => {
+        .chunk_generation => {
             if (chunk.state != .generating) return;
 
             // Initialize simplified data if needed
@@ -1041,7 +1057,7 @@ fn processLODJob(ctx: *anyopaque, job: Job) void {
             }
             chunk.state = .generated;
         },
-        .meshing => {
+        .chunk_meshing => {
             if (chunk.state != .meshing) return;
 
             self.buildMeshForChunk(chunk) catch |err| {
@@ -1051,6 +1067,7 @@ fn processLODJob(ctx: *anyopaque, job: Job) void {
             };
             chunk.state = .mesh_ready;
         },
+        else => unreachable,
     }
 }
 
