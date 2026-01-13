@@ -168,7 +168,8 @@ pub const HeightSampler = struct {
                 slope_suppress = path_info.influence * 0.6;
             },
             .river => {
-                path_depth = path_info.influence * 15.0;
+                // Use RIVER_DEPTH constant for consistency
+                path_depth = path_info.influence * RIVER_DEPTH;
                 slope_suppress = path_info.influence * 0.8;
             },
             .plains_corridor => {
@@ -202,6 +203,9 @@ pub const HeightSampler = struct {
     /// Region constraints suppress/exaggerate features per role.
     ///
     /// This is the main entry point for height computation.
+    ///
+    /// Parameters:
+    /// - reduction: LOD reduction level (0-4). Higher values simplify noise sampling.
     pub fn computeHeight(
         self: *const HeightSampler,
         noise_sampler: *const NoiseSampler,
@@ -210,6 +214,9 @@ pub const HeightSampler = struct {
         path_info: PathInfo,
         reduction: u8,
     ) f32 {
+        // Validate reduction is in expected range (0-4 for LOD0-LOD3)
+        std.debug.assert(reduction <= 4);
+
         const p = self.params;
         const sea: f32 = @floatFromInt(p.sea_level);
 

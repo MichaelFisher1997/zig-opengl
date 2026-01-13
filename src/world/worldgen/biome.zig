@@ -996,7 +996,7 @@ pub const BiomeSource = struct {
         if (edge_info.neighbor_biome) |neighbor| {
             if (getTransitionBiome(base_biome, neighbor)) |transition| {
                 // Set blend factor based on edge band
-                const blend = switch (edge_info.edge_band) {
+                const blend: f32 = switch (edge_info.edge_band) {
                     .inner => 0.3, // Closer to boundary: more original showing through
                     .middle => 0.2,
                     .outer => 0.1,

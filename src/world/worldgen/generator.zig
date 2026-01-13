@@ -238,6 +238,9 @@ const Params = struct {
 };
 
 pub const TerrainGenerator = struct {
+    // DEPRECATED (Issue #147): These noise fields are retained for backward compatibility.
+    // New code should use noise_sampler subsystem instead. These will be removed in a future version.
+    // The noise_sampler contains identical noise generators initialized with the same seed.
     warp_noise_x: ConfiguredNoise,
     warp_noise_z: ConfiguredNoise,
     continentalness_noise: ConfiguredNoise,
@@ -265,16 +268,16 @@ pub const TerrainGenerator = struct {
     cache_center_x: i32,
     cache_center_z: i32,
 
-    // V7-style multi-layer terrain noises (Issue #105)
+    // DEPRECATED (Issue #147): V7-style noises - use noise_sampler instead
     terrain_base: ConfiguredNoise,
     terrain_alt: ConfiguredNoise,
     height_select: ConfiguredNoise,
     terrain_persist: ConfiguredNoise,
-    // Variant noise for sub-biomes (Issue #110)
     variant_noise: ConfiguredNoise,
 
     // Issue #147: Modular subsystems for terrain generation
-    // These provide clean, testable interfaces to terrain generation components
+    // These provide clean, testable interfaces to terrain generation components.
+    // New code should use these subsystems instead of the deprecated noise fields above.
     noise_sampler: NoiseSampler,
     height_sampler: HeightSampler,
     surface_builder: SurfaceBuilder,
@@ -340,6 +343,37 @@ pub const TerrainGenerator = struct {
             .surface_builder = SurfaceBuilder.init(),
             .biome_source = BiomeSource.init(),
         };
+    }
+
+    // =========================================================================
+    // Issue #147: Subsystem Accessors
+    // These provide direct access to modular subsystems for callers that need
+    // isolated functionality without the full generator.
+    // =========================================================================
+
+    /// Get the noise sampler subsystem for direct noise value access
+    pub fn getNoiseSampler(self: *const TerrainGenerator) *const NoiseSampler {
+        return &self.noise_sampler;
+    }
+
+    /// Get the height sampler subsystem for terrain height computation
+    pub fn getHeightSampler(self: *const TerrainGenerator) *const HeightSampler {
+        return &self.height_sampler;
+    }
+
+    /// Get the surface builder subsystem for surface block placement
+    pub fn getSurfaceBuilder(self: *const TerrainGenerator) *const SurfaceBuilder {
+        return &self.surface_builder;
+    }
+
+    /// Get the biome source subsystem for biome selection
+    pub fn getBiomeSource(self: *const TerrainGenerator) *const BiomeSource {
+        return &self.biome_source;
+    }
+
+    /// Get the world seed
+    pub fn getSeed(self: *const TerrainGenerator) u64 {
+        return self.noise_sampler.getSeed();
     }
 
     /// Get region info for a specific world position

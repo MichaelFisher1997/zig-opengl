@@ -1767,3 +1767,148 @@ test "BiomeSource ocean detection" {
     try testing.expect(source.isOcean(0.2));
     try testing.expect(!source.isOcean(0.5));
 }
+
+test "BiomeSource selectBiome hot dry returns desert" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+    const source = BiomeSource.init();
+
+    // Hot and dry climate params -> should select desert
+    const climate = biome_mod.ClimateParams{
+        .temperature = 0.9, // Hot
+        .humidity = 0.1, // Dry
+        .elevation = 0.4,
+        .continentalness = 0.6, // Inland
+        .ruggedness = 0.2,
+    };
+
+    const structural = biome_mod.StructuralParams{
+        .height = 70,
+        .slope = 2,
+        .continentalness = 0.6,
+        .ridge_mask = 0.1,
+    };
+
+    const result = source.selectBiome(climate, structural, 0.0);
+    try testing.expectEqual(result, BiomeId.desert);
+}
+
+test "BiomeSource selectBiome cold wet returns taiga" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+    const source = BiomeSource.init();
+
+    // Cold and wet climate -> should select taiga
+    const climate = biome_mod.ClimateParams{
+        .temperature = 0.2, // Cold
+        .humidity = 0.7, // Wet
+        .elevation = 0.4,
+        .continentalness = 0.6,
+        .ruggedness = 0.3,
+    };
+
+    const structural = biome_mod.StructuralParams{
+        .height = 72,
+        .slope = 1,
+        .continentalness = 0.6,
+        .ridge_mask = 0.1,
+    };
+
+    const result = source.selectBiome(climate, structural, 0.0);
+    try testing.expectEqual(result, BiomeId.taiga);
+}
+
+test "BiomeSource selectBiome river override" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+    const source = BiomeSource.init();
+
+    // Normal land params but high river mask -> should return river
+    const climate = biome_mod.ClimateParams{
+        .temperature = 0.5,
+        .humidity = 0.5,
+        .elevation = 0.4,
+        .continentalness = 0.6,
+        .ruggedness = 0.2,
+    };
+
+    const structural = biome_mod.StructuralParams{
+        .height = 70,
+        .slope = 1,
+        .continentalness = 0.6,
+        .ridge_mask = 0.1,
+    };
+
+    // High river mask should force river biome
+    const result = source.selectBiome(climate, structural, 0.9);
+    try testing.expectEqual(result, BiomeId.river);
+}
+
+test "BiomeSource selectBiomeSimplified returns valid biome" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+    const source = BiomeSource.init();
+
+    // Test various climate combinations return valid biomes
+    const climate1 = biome_mod.ClimateParams{
+        .temperature = 0.9,
+        .humidity = 0.1,
+        .elevation = 0.4,
+        .continentalness = 0.6,
+        .ruggedness = 0.2,
+    };
+
+    const result1 = source.selectBiomeSimplified(climate1);
+    try testing.expectEqual(result1, BiomeId.desert);
+
+    // Ocean check
+    const climate2 = biome_mod.ClimateParams{
+        .temperature = 0.5,
+        .humidity = 0.5,
+        .elevation = 0.4,
+        .continentalness = 0.1, // Deep ocean
+        .ruggedness = 0.2,
+    };
+
+    const result2 = source.selectBiomeSimplified(climate2);
+    try testing.expectEqual(result2, BiomeId.deep_ocean);
+}
+
+test "BiomeSource getColor returns valid packed RGB" {
+    const source = BiomeSource.init();
+
+    // Desert should be sand-colored
+    const desert_color = source.getColor(BiomeId.desert);
+    try testing.expect(desert_color != 0);
+
+    // Ocean should be blue-ish
+    const ocean_color = source.getColor(BiomeId.ocean);
+    try testing.expect(ocean_color != desert_color);
+}
+
+test "BiomeSource selectBiomeWithEdge no edge returns primary only" {
+    const biome_mod = @import("world/worldgen/biome.zig");
+    const source = BiomeSource.init();
+
+    const climate = biome_mod.ClimateParams{
+        .temperature = 0.5,
+        .humidity = 0.5,
+        .elevation = 0.4,
+        .continentalness = 0.6,
+        .ruggedness = 0.2,
+    };
+
+    const structural = biome_mod.StructuralParams{
+        .height = 70,
+        .slope = 1,
+        .continentalness = 0.6,
+        .ridge_mask = 0.1,
+    };
+
+    // No edge detected
+    const edge_info = biome_mod.BiomeEdgeInfo{
+        .base_biome = BiomeId.plains,
+        .neighbor_biome = null,
+        .edge_band = .none,
+    };
+
+    const result = source.selectBiomeWithEdge(climate, structural, 0.0, edge_info);
+    try testing.expectEqual(result.primary, result.secondary);
+    try testing.expectEqual(result.blend_factor, 0.0);
+}
