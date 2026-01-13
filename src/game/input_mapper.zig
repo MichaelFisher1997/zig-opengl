@@ -385,14 +385,11 @@ pub const InputMapper = struct {
     /// Serialize bindings to a JSON string
     pub fn serialize(self: *const InputMapper, allocator: std.mem.Allocator) ![]u8 {
         var buffer = std.ArrayList(u8).empty;
-        errdefer buffer.deinit(allocator);
-
-        var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, &buffer);
-        // Allocating flush is a no-op
-        defer _ = aw.writer.flush() catch {};
+        var aw = std.Io.Writer.Allocating.fromArrayList(allocator, &buffer);
+        defer aw.deinit();
 
         try std.json.Stringify.value(self.bindings, .{}, &aw.writer);
-        return buffer.toOwnedSlice(allocator);
+        return aw.toOwnedSlice();
     }
 
     /// Deserialize bindings from JSON data
@@ -419,10 +416,7 @@ test "InputMapper serialization" {
     defer allocator.free(json);
 
     var restored = InputMapper.init();
-    // We need to use an allocator that matches what deserialize expects
-    var parsed = try std.json.parseFromSlice([GameAction.count]ActionBinding, allocator, json, .{});
-    defer parsed.deinit();
-    restored.bindings = parsed.value;
+    try restored.deserialize(allocator, json);
 
     try std.testing.expect(restored.getBinding(.jump).primary.key == .up);
 }

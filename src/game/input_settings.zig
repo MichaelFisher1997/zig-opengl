@@ -93,18 +93,15 @@ pub const InputSettings = struct {
 
     fn toJson(self: *const InputSettings) ![]u8 {
         var buffer = std.ArrayList(u8).empty;
-        errdefer buffer.deinit(self.allocator);
-
-        var aw: std.Io.Writer.Allocating = .fromArrayList(self.allocator, &buffer);
-        // Allocating flush is a no-op, but good practice
-        defer _ = aw.writer.flush() catch {};
+        var aw = std.Io.Writer.Allocating.fromArrayList(self.allocator, &buffer);
+        defer aw.deinit();
 
         try std.json.Stringify.value(.{
             .version = 2,
             .bindings = self.input_mapper.bindings,
         }, .{ .whitespace = .indent_2 }, &aw.writer);
 
-        return buffer.toOwnedSlice(self.allocator);
+        return aw.toOwnedSlice();
     }
 
     fn parseJson(self: *InputSettings, data: []const u8) !void {
