@@ -5,6 +5,9 @@ const Chunk = @import("chunk.zig").Chunk;
 const ChunkMesh = @import("chunk_mesh.zig").ChunkMesh;
 const NeighborChunks = @import("chunk_mesh.zig").NeighborChunks;
 const BlockType = @import("block.zig").BlockType;
+const ChunkStorage = @import("chunk_storage.zig").ChunkStorage;
+const ChunkData = @import("chunk_storage.zig").ChunkData;
+const ChunkKey = @import("chunk_storage.zig").ChunkKey;
 const worldToChunk = @import("chunk.zig").worldToChunk;
 const worldToLocal = @import("chunk.zig").worldToLocal;
 const CHUNK_SIZE_X = @import("chunk.zig").CHUNK_SIZE_X;
@@ -17,6 +20,9 @@ const Mat4 = @import("../engine/math/mat4.zig").Mat4;
 const Frustum = @import("../engine/math/frustum.zig").Frustum;
 const rhi_mod = @import("../engine/graphics/rhi.zig");
 const RHI = rhi_mod.RHI;
+const WorldStreamer = @import("world_streamer.zig").WorldStreamer;
+const WorldRenderer = @import("world_renderer.zig").WorldRenderer;
+const RenderStats = @import("world_renderer.zig").RenderStats;
 const JobQueue = @import("../engine/core/job_system.zig").JobQueue;
 const WorkerPool = @import("../engine/core/job_system.zig").WorkerPool;
 const Job = @import("../engine/core/job_system.zig").Job;
@@ -24,202 +30,48 @@ const RingBuffer = @import("../engine/core/ring_buffer.zig").RingBuffer;
 const log = @import("../engine/core/log.zig");
 
 const LODConfig = @import("lod_chunk.zig").LODConfig;
+const CHUNK_UNLOAD_BUFFER = @import("chunk.zig").CHUNK_UNLOAD_BUFFER;
 
 /// Buffer distance beyond render_distance for chunk unloading.
 /// Prevents thrashing when player moves near chunk boundaries.
-const CHUNK_UNLOAD_BUFFER: i32 = 1;
-
-pub const ChunkKey = struct {
-    x: i32,
-    z: i32,
-
-    pub fn hash(self: ChunkKey) u64 {
-        const ux: u64 = @bitCast(@as(i64, self.x));
-        const uz: u64 = @bitCast(@as(i64, self.z));
-        return ux ^ (uz *% 0x9e3779b97f4a7c15);
-    }
-
-    pub fn eql(a: ChunkKey, b: ChunkKey) bool {
-        return a.x == b.x and a.z == b.z;
-    }
-};
-
-const ChunkKeyContext = struct {
-    pub fn hash(self: @This(), key: ChunkKey) u64 {
-        _ = self;
-        return key.hash();
-    }
-
-    pub fn eql(self: @This(), a: ChunkKey, b: ChunkKey) bool {
-        _ = self;
-        return a.eql(b);
-    }
-};
-
-pub const ChunkData = struct {
-    chunk: Chunk,
-    mesh: ChunkMesh,
-};
+// const CHUNK_UNLOAD_BUFFER: i32 = 1;
 
 pub const ChunkPos = struct { x: i32, z: i32 };
 
-/// Player movement tracking for predictive chunk loading
-pub const PlayerMovement = struct {
-    /// Normalized movement direction (0,0 if stationary)
-    dir_x: f32 = 0,
-    dir_z: f32 = 0,
-    /// Speed in blocks/second
-    speed: f32 = 0,
-    /// Last position for velocity calculation
-    last_pos: Vec3 = Vec3.init(0, 0, 0),
-    /// Whether we have valid velocity data
-    has_velocity: bool = false,
-
-    /// Update with new position, returns true if direction changed significantly
-    pub fn update(self: *PlayerMovement, pos: Vec3, dt: f32) bool {
-        if (dt <= 0.001) return false;
-
-        const dx = pos.x - self.last_pos.x;
-        const dz = pos.z - self.last_pos.z;
-        self.last_pos = pos;
-
-        const dist = @sqrt(dx * dx + dz * dz);
-        self.speed = dist / dt;
-
-        // Only track direction if moving fast enough (> 2 blocks/sec)
-        if (self.speed < 2.0) {
-            self.has_velocity = false;
-            return false;
-        }
-
-        const old_dx = self.dir_x;
-        const old_dz = self.dir_z;
-
-        self.dir_x = dx / dist;
-        self.dir_z = dz / dist;
-        self.has_velocity = true;
-
-        // Check if direction changed significantly (> 45 degrees)
-        const dot = old_dx * self.dir_x + old_dz * self.dir_z;
-        return dot < 0.707; // cos(45°)
-    }
-
-    /// Calculate priority weight for a chunk based on movement direction.
-    /// Returns a multiplier: < 1.0 for chunks ahead, > 1.0 for chunks behind.
-    pub fn priorityWeight(self: *const PlayerMovement, chunk_dx: i32, chunk_dz: i32) f32 {
-        if (!self.has_velocity) return 1.0;
-
-        const cdx: f32 = @floatFromInt(chunk_dx);
-        const cdz: f32 = @floatFromInt(chunk_dz);
-        const dist = @sqrt(cdx * cdx + cdz * cdz);
-        if (dist < 0.001) return 0.5; // Player's chunk gets high priority
-
-        // Dot product with movement direction: 1.0 = ahead, -1.0 = behind
-        const dot = (cdx * self.dir_x + cdz * self.dir_z) / dist;
-
-        // Map [-1, 1] to [0.5, 1.5] - chunks ahead get 0.5x distance weight
-        return 1.0 - dot * 0.5;
-    }
-};
-
-pub const RenderStats = struct {
-    chunks_total: u32 = 0,
-    chunks_rendered: u32 = 0,
-    chunks_culled: u32 = 0,
-    vertices_rendered: u64 = 0,
-};
-
 pub const World = struct {
-    chunks: std.HashMap(ChunkKey, *ChunkData, ChunkKeyContext, 80),
-    chunks_mutex: std.Thread.RwLock,
+    storage: ChunkStorage,
+    streamer: *WorldStreamer,
+    renderer: *WorldRenderer,
     allocator: std.mem.Allocator,
     generator: TerrainGenerator,
     render_distance: i32,
-    last_render_stats: RenderStats,
-    gen_queue: *JobQueue,
-    mesh_queue: *JobQueue,
-    gen_pool: *WorkerPool,
-    mesh_pool: *WorkerPool,
-    upload_queue: RingBuffer(ChunkKey),
-    visible_chunks: std.ArrayListUnmanaged(*ChunkData),
-    next_job_token: u32,
-    last_pc: ChunkPos,
-    player_movement: PlayerMovement,
     rhi: RHI,
     paused: bool = false,
 
     // LOD System (Issue #114)
     lod_manager: ?*LODManager,
     lod_enabled: bool,
-    vertex_allocator: GlobalVertexAllocator,
-
-    // MDI Resources
-    instance_data: std.ArrayListUnmanaged(rhi_mod.InstanceData),
-    solid_commands: std.ArrayListUnmanaged(rhi_mod.DrawIndirectCommand),
-    fluid_commands: std.ArrayListUnmanaged(rhi_mod.DrawIndirectCommand),
-    instance_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle,
-    indirect_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle,
-    frame_index: usize,
-    mdi_instance_offset: usize,
-    mdi_command_offset: usize,
 
     pub fn init(allocator: std.mem.Allocator, render_distance: i32, seed: u64, rhi: RHI) !*World {
         const world = try allocator.create(World);
 
-        const gen_queue = try allocator.create(JobQueue);
-        gen_queue.* = JobQueue.init(allocator);
-
-        const mesh_queue = try allocator.create(JobQueue);
-        mesh_queue.* = JobQueue.init(allocator);
-
-        const generator = TerrainGenerator.init(seed, allocator);
-
-        // Increasing to 6GB (6144MB) to prevent OOM on high render distances (e.g. Ultra with 32+ chunks)
-        // With complex terrain, 4GB can be exceeded.
-        const vertex_allocator = try GlobalVertexAllocator.init(allocator, rhi, 6144);
-
-        // Init MDI buffers (capacity for ~16384 chunks to be safe for high render distances + shadows)
-        const max_chunks = 16384;
-        var instance_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle = undefined;
-        var indirect_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle = undefined;
-        for (0..rhi_mod.MAX_FRAMES_IN_FLIGHT) |i| {
-            instance_buffers[i] = rhi.createBuffer(max_chunks * @sizeOf(rhi_mod.InstanceData), .storage);
-            indirect_buffers[i] = rhi.createBuffer(max_chunks * @sizeOf(rhi_mod.DrawIndirectCommand) * 2, .indirect); // *2 for solid+fluid
-        }
+        const storage = ChunkStorage.init(allocator);
 
         world.* = .{
-            .chunks = std.HashMap(ChunkKey, *ChunkData, ChunkKeyContext, 80).init(allocator),
-            .chunks_mutex = .{},
+            .storage = storage,
+            .streamer = undefined,
+            .renderer = undefined,
             .allocator = allocator,
             .render_distance = render_distance,
-            .generator = generator,
-            .last_render_stats = .{},
-            .gen_queue = gen_queue,
-            .mesh_queue = mesh_queue,
-            .gen_pool = undefined,
-            .mesh_pool = undefined,
-            .upload_queue = try RingBuffer(ChunkKey).init(allocator, 256),
-            .visible_chunks = .empty,
-            .next_job_token = 1,
-            .last_pc = .{ .x = 9999, .z = 9999 },
-            .player_movement = .{},
+            .generator = TerrainGenerator.init(seed, allocator),
             .rhi = rhi,
             .paused = false,
             .lod_manager = null,
             .lod_enabled = false,
-            .vertex_allocator = vertex_allocator,
-            .instance_data = .empty,
-            .solid_commands = .empty,
-            .fluid_commands = .empty,
-            .instance_buffers = instance_buffers,
-            .indirect_buffers = indirect_buffers,
-            .frame_index = 0,
-            .mdi_instance_offset = 0,
-            .mdi_command_offset = 0,
         };
 
-        world.gen_pool = try WorkerPool.init(allocator, 4, gen_queue, world, processGenJob);
-        world.mesh_pool = try WorkerPool.init(allocator, 3, mesh_queue, world, processMeshJob);
+        world.streamer = try WorldStreamer.init(allocator, &world.storage, &world.generator, render_distance);
+        world.renderer = try WorldRenderer.init(allocator, rhi, &world.storage);
 
         return world;
     }
@@ -239,81 +91,40 @@ pub const World = struct {
 
     pub fn deinit(self: *World) void {
         self.rhi.waitIdle();
-        self.gen_queue.stop();
-        self.mesh_queue.stop();
+        self.streamer.deinit();
 
-        self.gen_pool.deinit();
-        self.mesh_pool.deinit();
-
-        self.gen_queue.deinit();
-        self.mesh_queue.deinit();
-        self.allocator.destroy(self.gen_queue);
-        self.allocator.destroy(self.mesh_queue);
-
-        self.upload_queue.deinit();
-        self.visible_chunks.deinit(self.allocator);
-
-        var iter = self.chunks.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.*.mesh.deinit(&self.vertex_allocator);
-            self.allocator.destroy(entry.value_ptr.*);
-        }
-        self.chunks.deinit();
+        // Storage must be deinitialized before renderer because it uses the renderer's vertex_allocator
+        // to free mesh buffers.
+        // On shutdown we can skip per-chunk GPU frees since the allocator is destroyed next.
+        self.storage.deinitWithoutRHI();
+        self.renderer.deinit();
 
         // Cleanup LOD manager if enabled
         if (self.lod_manager) |lod_mgr| {
             lod_mgr.deinit();
         }
 
-        for (0..rhi_mod.MAX_FRAMES_IN_FLIGHT) |i| {
-            if (self.instance_buffers[i] != 0) self.rhi.destroyBuffer(self.instance_buffers[i]);
-            if (self.indirect_buffers[i] != 0) self.rhi.destroyBuffer(self.indirect_buffers[i]);
-        }
-        self.instance_data.deinit(self.allocator);
-        self.solid_commands.deinit(self.allocator);
-        self.fluid_commands.deinit(self.allocator);
-
-        self.vertex_allocator.deinit();
         self.allocator.destroy(self);
     }
 
     pub fn pauseGeneration(self: *World) void {
         self.paused = true;
-        self.gen_queue.setPaused(true);
-        self.mesh_queue.setPaused(true);
+        self.streamer.setPaused(true);
 
         // Pause LOD manager if enabled
         if (self.lod_manager) |lod_mgr| {
             lod_mgr.pause();
         }
-
-        // Reset chunks that were waiting for generation or meshing
-        self.chunks_mutex.lock();
-        defer self.chunks_mutex.unlock();
-        var iter = self.chunks.iterator();
-        while (iter.next()) |entry| {
-            const chunk = &entry.value_ptr.*.chunk;
-            if (chunk.state == .generating) {
-                chunk.state = .missing;
-            } else if (chunk.state == .meshing) {
-                chunk.state = .generated;
-            }
-        }
     }
 
     pub fn resumeGeneration(self: *World) void {
         self.paused = false;
-        self.gen_queue.setPaused(false);
-        self.mesh_queue.setPaused(false);
+        self.streamer.setPaused(false);
 
         // Resume LOD manager if enabled
         if (self.lod_manager) |lod_mgr| {
             lod_mgr.unpause();
         }
-
-        // Chunks will be re-queued in the next update() cycle
-        // Force an update of player position to trigger re-scanning
-        self.last_pc = .{ .x = 9999, .z = 9999 };
     }
 
     /// Set render distance and trigger chunk loading/unloading update
@@ -321,149 +132,18 @@ pub const World = struct {
         if (self.render_distance != distance) {
             std.log.info("Render distance changed: {} -> {}", .{ self.render_distance, distance });
             self.render_distance = distance;
+            self.streamer.setRenderDistance(distance);
+
             // Only update LOD0 radius - LOD1/2/3 are fixed for "infinite" terrain view
             if (self.lod_manager) |lod_mgr| {
                 lod_mgr.config.lod0_radius = distance;
                 std.log.info("LOD0 radius updated to match render distance: {}", .{distance});
             }
-            // Force chunk rescan on next update
-            self.last_pc = .{ .x = 9999, .z = 9999 };
-        }
-    }
-
-    fn processGenJob(ctx: *anyopaque, job: Job) void {
-        const self: *World = @ptrCast(@alignCast(ctx));
-
-        self.chunks_mutex.lockShared();
-        const chunk_data = self.chunks.get(ChunkKey{ .x = job.chunk_x, .z = job.chunk_z }) orelse {
-            self.chunks_mutex.unlockShared();
-            return;
-        };
-
-        // Skip if chunk is now too far from player (stale job)
-        const dx = job.chunk_x - self.last_pc.x;
-        const dz = job.chunk_z - self.last_pc.z;
-        const max_dist = self.render_distance + CHUNK_UNLOAD_BUFFER;
-        if (dx * dx + dz * dz > max_dist * max_dist) {
-            // Reset state so it can be re-queued if player returns
-            if (chunk_data.chunk.state == .generating) {
-                chunk_data.chunk.state = .missing;
-            }
-            self.chunks_mutex.unlockShared();
-            return;
-        }
-
-        // Pin chunk to prevent unloading during generation.
-        chunk_data.chunk.pin();
-        self.chunks_mutex.unlockShared();
-
-        defer chunk_data.chunk.unpin();
-
-        if (chunk_data.chunk.state == .generating and chunk_data.chunk.job_token == job.job_token) {
-            self.generator.generate(&chunk_data.chunk, &self.gen_queue.abort_worker);
-            if (self.gen_queue.abort_worker) {
-                chunk_data.chunk.state = .missing;
-                return;
-            }
-            chunk_data.chunk.state = .generated;
-            self.markNeighborsForRemesh(job.chunk_x, job.chunk_z);
-        }
-    }
-
-    fn processMeshJob(ctx: *anyopaque, job: Job) void {
-        const self: *World = @ptrCast(@alignCast(ctx));
-
-        self.chunks_mutex.lockShared();
-        const chunk_data = self.chunks.get(ChunkKey{ .x = job.chunk_x, .z = job.chunk_z }) orelse {
-            self.chunks_mutex.unlockShared();
-            return;
-        };
-
-        // Skip if chunk is now too far from player (stale job)
-        const dx = job.chunk_x - self.last_pc.x;
-        const dz = job.chunk_z - self.last_pc.z;
-        const max_dist = self.render_distance + CHUNK_UNLOAD_BUFFER;
-        if (dx * dx + dz * dz > max_dist * max_dist) {
-            if (chunk_data.chunk.state == .meshing) {
-                chunk_data.chunk.state = .generated;
-            }
-            self.chunks_mutex.unlockShared();
-            return;
-        }
-
-        // Pin chunk and neighbors to prevent unloading during mesh building.
-        chunk_data.chunk.pin();
-        const neighbors = NeighborChunks{
-            .north = if (self.chunks.get(ChunkKey{ .x = job.chunk_x, .z = job.chunk_z - 1 })) |d| d: {
-                d.chunk.pin();
-                break :d &d.chunk;
-            } else null,
-            .south = if (self.chunks.get(ChunkKey{ .x = job.chunk_x, .z = job.chunk_z + 1 })) |d| d: {
-                d.chunk.pin();
-                break :d &d.chunk;
-            } else null,
-            .east = if (self.chunks.get(ChunkKey{ .x = job.chunk_x + 1, .z = job.chunk_z })) |d| d: {
-                d.chunk.pin();
-                break :d &d.chunk;
-            } else null,
-            .west = if (self.chunks.get(ChunkKey{ .x = job.chunk_x - 1, .z = job.chunk_z })) |d| d: {
-                d.chunk.pin();
-                break :d &d.chunk;
-            } else null,
-        };
-        self.chunks_mutex.unlockShared();
-
-        defer {
-            chunk_data.chunk.unpin();
-            if (neighbors.north) |n| @as(*Chunk, @constCast(n)).unpin();
-            if (neighbors.south) |s| @as(*Chunk, @constCast(s)).unpin();
-            if (neighbors.east) |e| @as(*Chunk, @constCast(e)).unpin();
-            if (neighbors.west) |w| @as(*Chunk, @constCast(w)).unpin();
-        }
-
-        if (chunk_data.chunk.state == .meshing and chunk_data.chunk.job_token == job.job_token) {
-            chunk_data.mesh.buildWithNeighbors(&chunk_data.chunk, neighbors) catch |err| {
-                log.log.err("Mesh build failed for chunk ({}, {}): {}", .{ job.chunk_x, job.chunk_z, err });
-            };
-            if (self.mesh_queue.abort_worker) {
-                chunk_data.chunk.state = .generated;
-                return;
-            }
-            chunk_data.chunk.state = .mesh_ready;
         }
     }
 
     pub fn getOrCreateChunk(self: *World, chunk_x: i32, chunk_z: i32) !*ChunkData {
-        self.chunks_mutex.lock();
-        defer self.chunks_mutex.unlock();
-
-        const key = ChunkKey{ .x = chunk_x, .z = chunk_z };
-        if (self.chunks.get(key)) |data| return data;
-
-        const data = try self.allocator.create(ChunkData);
-        data.* = .{
-            .chunk = Chunk.init(chunk_x, chunk_z),
-            .mesh = ChunkMesh.init(self.allocator),
-        };
-        data.chunk.job_token = self.next_job_token;
-        self.next_job_token += 1;
-        try self.chunks.put(key, data);
-        return data;
-    }
-
-    fn markNeighborsForRemesh(self: *World, cx: i32, cz: i32) void {
-        const offsets = [_][2]i32{ .{ 0, 1 }, .{ 0, -1 }, .{ 1, 0 }, .{ -1, 0 } };
-        self.chunks_mutex.lockShared();
-        defer self.chunks_mutex.unlockShared();
-        for (offsets) |off| {
-            if (self.chunks.get(ChunkKey{ .x = cx + off[0], .z = cz + off[1] })) |data| {
-                if (data.chunk.state == .renderable) {
-                    data.chunk.state = .generated;
-                } else if (data.chunk.state == .mesh_ready or data.chunk.state == .uploading or data.chunk.state == .meshing) {
-                    data.chunk.dirty = true;
-                }
-            }
-        }
+        return self.storage.getOrCreate(chunk_x, chunk_z);
     }
 
     pub fn getBlock(self: *World, world_x: i32, world_y: i32, world_z: i32) BlockType {
@@ -508,297 +188,58 @@ pub const World = struct {
         }
     }
 
+    /// Get chunk data at chunk coordinates.
+    /// WARNING: Returned pointer is only guaranteed valid if called from the main thread
+    /// and used before the next call to World.update (which may unload chunks).
+    /// If accessing from a background thread, the chunk must be pinned first.
     pub fn getChunk(self: *World, cx: i32, cz: i32) ?*ChunkData {
-        self.chunks_mutex.lockShared();
-        defer self.chunks_mutex.unlockShared();
-        return self.chunks.get(ChunkKey{ .x = cx, .z = cz });
+        self.storage.chunks_mutex.lockShared();
+        defer self.storage.chunks_mutex.unlockShared();
+        return self.storage.chunks.get(ChunkKey{ .x = cx, .z = cz });
     }
 
     pub fn update(self: *World, player_pos: Vec3, dt: f32) !void {
-        if (self.paused) return;
+        try self.streamer.update(player_pos, dt, self.lod_manager);
 
-        // Update velocity tracking for predictive loading
-        _ = self.player_movement.update(player_pos, dt);
+        // Process a few uploads per frame
+        self.streamer.processUploads(self.renderer.vertex_allocator, 32);
 
-        const pc = worldToChunk(@intFromFloat(player_pos.x), @intFromFloat(player_pos.z));
-        const moved = pc.chunk_x != self.last_pc.x or pc.chunk_z != self.last_pc.z;
+        // Process unloads
+        try self.streamer.processUnloads(player_pos, self.renderer.vertex_allocator, self.lod_manager);
 
-        if (moved) {
-            self.last_pc = .{ .x = pc.chunk_x, .z = pc.chunk_z };
-
-            try self.gen_queue.updatePlayerPos(pc.chunk_x, pc.chunk_z);
-            try self.mesh_queue.updatePlayerPos(pc.chunk_x, pc.chunk_z);
-
-            // Clamp generation distance to LOD0 radius if LOD is active - prevent generating chunks we won't mesh
-            const render_dist = if (self.lod_manager) |mgr| @min(self.render_distance, mgr.config.lod0_radius) else self.render_distance;
-
-            var cz = pc.chunk_z - render_dist;
-            while (cz <= pc.chunk_z + render_dist) : (cz += 1) {
-                var cx = pc.chunk_x - render_dist;
-                while (cx <= pc.chunk_x + render_dist) : (cx += 1) {
-                    const dx = cx - pc.chunk_x;
-                    const dz = cz - pc.chunk_z;
-                    const dist_sq = dx * dx + dz * dz;
-
-                    if (dist_sq > render_dist * render_dist) continue;
-
-                    const data = try self.getOrCreateChunk(cx, cz);
-
-                    switch (data.chunk.state) {
-                        .missing => {
-                            // Apply velocity-based priority weighting
-                            const weight = self.player_movement.priorityWeight(dx, dz);
-                            const weighted_dist: i32 = @intFromFloat(@as(f32, @floatFromInt(dist_sq)) * weight);
-
-                            try self.gen_queue.push(.{
-                                .type = .generation,
-                                .chunk_x = cx,
-                                .chunk_z = cz,
-                                .job_token = data.chunk.job_token,
-                                .dist_sq = weighted_dist,
-                            });
-                            data.chunk.state = .generating;
-                        },
-                        else => {},
-                    }
-                }
-            }
-        }
-
-        self.chunks_mutex.lockShared();
-        var mesh_iter = self.chunks.iterator();
-
-        const render_dist = if (self.lod_manager) |mgr| @min(self.render_distance, mgr.config.lod0_radius) else self.render_distance;
-
-        while (mesh_iter.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const data = entry.value_ptr.*;
-            if (data.chunk.state == .generated) {
-                const dx = data.chunk.chunk_x - pc.chunk_x;
-                const dz = data.chunk.chunk_z - pc.chunk_z;
-                if (dx * dx + dz * dz <= render_dist * render_dist) {
-                    // Apply velocity-based priority weighting
-                    const weight = self.player_movement.priorityWeight(dx, dz);
-                    const weighted_dist: i32 = @intFromFloat(@as(f32, @floatFromInt(dx * dx + dz * dz)) * weight);
-
-                    try self.mesh_queue.push(.{
-                        .type = .meshing,
-                        .chunk_x = data.chunk.chunk_x,
-                        .chunk_z = data.chunk.chunk_z,
-                        .job_token = data.chunk.job_token,
-                        .dist_sq = weighted_dist,
-                    });
-                    data.chunk.state = .meshing;
-                }
-            } else if (data.chunk.state == .mesh_ready) {
-                data.chunk.state = .uploading;
-                try self.upload_queue.push(key);
-            } else if (data.chunk.state == .renderable and data.chunk.dirty) {
-                data.chunk.dirty = false;
-                data.chunk.state = .generated;
-            }
-        }
-        self.chunks_mutex.unlockShared();
-
-        const max_uploads: usize = 32;
-        var uploads: usize = 0;
-        while (!self.upload_queue.isEmpty() and uploads < max_uploads) {
-            const key = self.upload_queue.pop() orelse break;
-            if (self.chunks.get(key)) |data| {
-                if (data.chunk.state != .uploading) continue;
-
-                data.mesh.upload(&self.vertex_allocator);
-                if (data.mesh.ready) {
-                    data.chunk.state = .renderable;
-                } else {
-                    // Allocation failed (OOM), reset state so it can be retried or unloaded
-                    data.chunk.state = .mesh_ready;
-                }
-                uploads += 1;
-            }
-        }
-
-        const render_dist_unload = if (self.lod_manager) |mgr| @min(self.render_distance, mgr.config.lod0_radius) else self.render_distance;
-        const unload_dist_sq = (render_dist_unload + CHUNK_UNLOAD_BUFFER) * (render_dist_unload + CHUNK_UNLOAD_BUFFER);
-        self.chunks_mutex.lock();
-        var to_remove = std.ArrayListUnmanaged(ChunkKey).empty;
-        defer to_remove.deinit(self.allocator);
-
-        var unload_iter = self.chunks.iterator();
-        while (unload_iter.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const data = entry.value_ptr.*;
-            const dx = key.x - pc.chunk_x;
-            const dz = key.z - pc.chunk_z;
-            if (dx * dx + dz * dz > unload_dist_sq) {
-                if (data.chunk.state != .generating and data.chunk.state != .meshing and
-                    !data.chunk.isPinned())
-                {
-                    try to_remove.append(self.allocator, key);
-                }
-            }
-        }
-
-        for (to_remove.items) |key| {
-            if (self.chunks.get(key)) |data| {
-                data.mesh.deinit(&self.vertex_allocator);
-                self.allocator.destroy(data);
-                _ = self.chunks.remove(key);
-            }
-        }
-        self.chunks_mutex.unlock();
-
-        // Update LOD manager if enabled
-        if (self.lod_manager) |lod_mgr| {
-            const velocity = Vec3.init(
-                self.player_movement.dir_x * self.player_movement.speed,
-                0,
-                self.player_movement.dir_z * self.player_movement.speed,
-            );
-            try lod_mgr.update(player_pos, velocity);
-        }
+        // NOTE: LOD Manager update is handled inside streamer.update() now
     }
 
     pub fn render(self: *World, view_proj: Mat4, camera_pos: Vec3) void {
-        self.last_render_stats = .{};
-
-        // Lock chunks for the chunk checker callback
-        self.chunks_mutex.lockShared();
-        defer self.chunks_mutex.unlockShared();
-
-        // Render LOD meshes first (background, distant)
-        // Pass a chunk checker so LOD regions only hide when chunks are actually loaded
-        if (self.lod_manager) |lod_mgr| {
-            lod_mgr.render(view_proj, camera_pos, isChunkRenderable, @ptrCast(self));
-        }
-
-        // IMPORTANT: Reset mask radius to 0 for LOD0 chunks
-        if (self.lod_manager) |lod_mgr| {
-            _ = lod_mgr;
-        }
-
-        self.visible_chunks.clearRetainingCapacity();
-
-        const frustum = Frustum.fromViewProj(view_proj);
-
-        const pc = worldToChunk(@intFromFloat(camera_pos.x), @intFromFloat(camera_pos.z));
-
-        const render_dist = if (self.lod_manager) |mgr| @min(self.render_distance, mgr.config.lod0_radius) else self.render_distance;
-
-        var cz = pc.chunk_z - render_dist;
-        while (cz <= pc.chunk_z + render_dist) : (cz += 1) {
-            var cx = pc.chunk_x - render_dist;
-            while (cx <= pc.chunk_x + render_dist) : (cx += 1) {
-                if (self.chunks.get(.{ .x = cx, .z = cz })) |data| {
-                    if (data.chunk.state == .renderable or data.mesh.solid_allocation != null or data.mesh.fluid_allocation != null) {
-                        if (frustum.intersectsChunkRelative(cx, cz, camera_pos.x, camera_pos.y, camera_pos.z)) {
-                            self.visible_chunks.append(self.allocator, data) catch {};
-                        } else {
-                            self.last_render_stats.chunks_culled += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        self.last_render_stats.chunks_total = @intCast(self.chunks.count());
-
-        for (self.visible_chunks.items) |data| {
-            self.last_render_stats.chunks_rendered += 1;
-            const chunk_world_x: f32 = @floatFromInt(data.chunk.chunk_x * CHUNK_SIZE_X);
-            const chunk_world_z: f32 = @floatFromInt(data.chunk.chunk_z * CHUNK_SIZE_Z);
-            const rel_x = chunk_world_x - camera_pos.x;
-            const rel_z = chunk_world_z - camera_pos.z;
-            const rel_y = -camera_pos.y;
-            const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
-
-            self.rhi.setModelMatrix(model, 0);
-
-            if (data.mesh.solid_allocation) |alloc| {
-                self.last_render_stats.vertices_rendered += alloc.count;
-                self.rhi.drawOffset(self.vertex_allocator.buffer, alloc.count, .triangles, alloc.offset);
-            }
-            if (data.mesh.fluid_allocation) |alloc| {
-                self.last_render_stats.vertices_rendered += alloc.count;
-                self.rhi.drawOffset(self.vertex_allocator.buffer, alloc.count, .triangles, alloc.offset);
-            }
-        }
-
-        self.mdi_instance_offset = 0;
-        self.mdi_command_offset = 0;
+        self.renderer.render(view_proj, camera_pos, self.render_distance, self.lod_manager);
     }
 
     pub fn renderShadowPass(self: *World, light_space_matrix: Mat4, camera_pos: Vec3) void {
-        // Build frustum from the light's orthographic projection matrix
-        const shadow_frustum = Frustum.fromViewProj(light_space_matrix);
-
-        self.chunks_mutex.lockShared();
-        defer self.chunks_mutex.unlockShared();
-
-        const frustum = shadow_frustum;
-        const pc = worldToChunk(@intFromFloat(camera_pos.x), @intFromFloat(camera_pos.z));
-
-        const render_dist = if (self.lod_manager) |mgr| @min(self.render_distance, mgr.config.lod0_radius) else self.render_distance;
-
-        var cz = pc.chunk_z - render_dist;
-        while (cz <= pc.chunk_z + render_dist) : (cz += 1) {
-            var cx = pc.chunk_x - render_dist;
-            while (cx <= pc.chunk_x + render_dist) : (cx += 1) {
-                if (self.chunks.get(.{ .x = cx, .z = cz })) |data| {
-                    if (data.chunk.state == .renderable or data.mesh.solid_allocation != null or data.mesh.fluid_allocation != null) {
-                        const chunk_world_x: f32 = @floatFromInt(data.chunk.chunk_x * CHUNK_SIZE_X);
-                        const chunk_world_z: f32 = @floatFromInt(data.chunk.chunk_z * CHUNK_SIZE_Z);
-
-                        if (!frustum.intersectsChunkRelative(cx, cz, camera_pos.x, camera_pos.y, camera_pos.z)) {
-                            continue;
-                        }
-
-                        const rel_x = chunk_world_x - camera_pos.x;
-                        const rel_z = chunk_world_z - camera_pos.z;
-                        const rel_y = -camera_pos.y;
-                        const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
-
-                        if (data.mesh.solid_allocation) |alloc| {
-                            self.rhi.setModelMatrix(model, 0);
-                            self.rhi.drawOffset(self.vertex_allocator.buffer, alloc.count, .triangles, alloc.offset);
-                        }
-                    }
-                }
-            }
-        }
-
-        self.mdi_instance_offset = 0;
-        self.mdi_command_offset = 0;
+        self.renderer.renderShadowPass(light_space_matrix, camera_pos, self.render_distance, self.lod_manager);
     }
 
     pub fn getRenderStats(self: *const World) RenderStats {
-        return self.last_render_stats;
+        return self.renderer.last_render_stats;
     }
 
     pub fn getStats(self: *World) struct { chunks_loaded: usize, total_vertices: u64, gen_queue: usize, mesh_queue: usize, upload_queue: usize } {
-        self.chunks_mutex.lockShared();
-        defer self.chunks_mutex.unlockShared();
+        self.storage.chunks_mutex.lockShared();
+        defer self.storage.chunks_mutex.unlockShared();
         var total_verts: u64 = 0;
-        var iter = self.chunks.iterator();
+        var iter = self.storage.iteratorUnsafe();
         while (iter.next()) |entry| {
             if (entry.value_ptr.*.mesh.solid_allocation) |alloc| total_verts += alloc.count;
             if (entry.value_ptr.*.mesh.fluid_allocation) |alloc| total_verts += alloc.count;
         }
 
-        self.gen_queue.mutex.lock();
-        const gen_count = self.gen_queue.jobs.count();
-        self.gen_queue.mutex.unlock();
-
-        self.mesh_queue.mutex.lock();
-        const mesh_count = self.mesh_queue.jobs.count();
-        self.mesh_queue.mutex.unlock();
+        const streamer_stats = self.streamer.getStats();
 
         return .{
-            .chunks_loaded = self.chunks.count(),
+            .chunks_loaded = self.storage.chunks.count(),
             .total_vertices = total_verts,
-            .gen_queue = gen_count,
-            .mesh_queue = mesh_count,
-            .upload_queue = self.upload_queue.count(),
+            .gen_queue = streamer_stats.gen_queue,
+            .mesh_queue = streamer_stats.mesh_queue,
+            .upload_queue = streamer_stats.upload_queue,
         };
     }
 
@@ -813,15 +254,5 @@ pub const World = struct {
     /// Check if LOD system is enabled
     pub fn isLODEnabled(self: *const World) bool {
         return self.lod_enabled;
-    }
-
-    /// Callback for LODManager to check if a chunk is loaded and renderable.
-    /// Must be called while chunks_mutex is held.
-    fn isChunkRenderable(chunk_x: i32, chunk_z: i32, ctx: *anyopaque) bool {
-        const self: *World = @ptrCast(@alignCast(ctx));
-        if (self.chunks.get(.{ .x = chunk_x, .z = chunk_z })) |data| {
-            return data.chunk.state == .renderable;
-        }
-        return false;
     }
 };

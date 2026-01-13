@@ -9,6 +9,10 @@ pub const CHUNK_SIZE_Y = 256;
 pub const CHUNK_SIZE_Z = 16;
 pub const CHUNK_VOLUME = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
 
+/// Buffer distance beyond render_distance for chunk unloading.
+/// Prevents thrashing when player moves near chunk boundaries.
+pub const CHUNK_UNLOAD_BUFFER: i32 = 1;
+
 /// Maximum light level (0-15)
 pub const MAX_LIGHT: u4 = 15;
 

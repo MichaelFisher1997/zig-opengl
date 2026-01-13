@@ -1,4 +1,4 @@
-//! Job system for asynchronous chunk operations.
+//! Job system for asynchronous operations.
 
 const std = @import("std");
 const Thread = std.Thread;
@@ -8,22 +8,65 @@ const Chunk = @import("../../world/chunk.zig").Chunk;
 const log = @import("log.zig");
 
 pub const JobType = enum {
-    generation,
-    meshing,
+    chunk_generation,
+    chunk_meshing,
+    generic,
 };
 
 pub const Job = struct {
     type: JobType,
-    chunk_x: i32,
-    chunk_z: i32,
-    job_token: u32,
-    dist_sq: i32, // Priority: closer is smaller
 
-    // Comparison for min-heap (lower dist = higher priority)
+    // Priority value for generic jobs (lower = higher priority)
+    priority: i32 = 0,
+
+    // Distance-based priority for spatial jobs (lower = closer to player)
+    dist_sq: i32 = 0,
+
+    // Payload union - holds job-specific data
+    data: union {
+        chunk: ChunkJobData,
+        generic: GenericJobData,
+    },
+
+    pub const ChunkJobData = struct {
+        x: i32,
+        z: i32,
+        job_token: u32,
+    };
+
+    pub const GenericJobData = struct {
+        context: *anyopaque,
+        process_fn: *const fn (*anyopaque) void,
+    };
+
+    // Comparison for min-heap (lower priority/dist = higher priority)
     pub fn compare(a: Job, b: Job) std.math.Order {
-        return std.math.order(a.dist_sq, b.dist_sq);
+        return std.math.order(a.getPriorityValue(), b.getPriorityValue());
+    }
+
+    fn getPriorityValue(self: Job) i32 {
+        return switch (self.type) {
+            .chunk_generation, .chunk_meshing => self.dist_sq,
+            .generic => self.priority,
+        };
+    }
+
+    pub fn getChunkCoords(self: Job) ?struct { x: i32, z: i32 } {
+        return switch (self.type) {
+            .chunk_generation, .chunk_meshing => .{ .x = self.data.chunk.x, .z = self.data.chunk.z },
+            else => null,
+        };
+    }
+
+    pub fn getJobToken(self: Job) ?u32 {
+        return switch (self.type) {
+            .chunk_generation, .chunk_meshing => self.data.chunk.job_token,
+            else => null,
+        };
     }
 };
+
+pub const REPRIORITIZE_THRESHOLD = 16;
 
 pub const JobQueue = struct {
     mutex: Mutex,
@@ -39,7 +82,7 @@ pub const JobQueue = struct {
     // Lazy re-prioritization: mark dirty instead of immediate rebuild
     needs_reprioritize: bool = false,
     // Threshold: only reprioritize if queue has this many items
-    reprioritize_threshold: usize = 16,
+    reprioritize_threshold: usize = REPRIORITIZE_THRESHOLD,
 
     fn compareJobs(context: void, a: Job, b: Job) std.math.Order {
         _ = context;
@@ -56,7 +99,7 @@ pub const JobQueue = struct {
             .abort_worker = false,
             .allocator = allocator,
             .needs_reprioritize = false,
-            .reprioritize_threshold = 16,
+            .reprioritize_threshold = REPRIORITIZE_THRESHOLD,
         };
     }
 
@@ -101,11 +144,15 @@ pub const JobQueue = struct {
 
         // Extract all jobs
         while (self.jobs.removeOrNull()) |job| {
-            // Recalculate distance from current player position
-            const dx = job.chunk_x - self.player_cx;
-            const dz = job.chunk_z - self.player_cz;
             var updated_job = job;
-            updated_job.dist_sq = dx * dx + dz * dz;
+
+            // Only update distance for chunk-based jobs
+            if (job.getChunkCoords()) |coords| {
+                const dx = coords.x - self.player_cx;
+                const dz = coords.z - self.player_cz;
+                updated_job.dist_sq = dx * dx + dz * dz;
+            }
+
             temp.append(self.allocator, updated_job) catch {
                 log.log.warn("Job queue: dropped job during priority update (allocation failed)", .{});
                 continue;
@@ -210,7 +257,14 @@ pub const WorkerPool = struct {
     fn workerThread(queue: *JobQueue, pool: *WorkerPool) void {
         while (true) {
             const job = queue.pop() orelse break;
-            pool.process_job_fn(pool.context, job);
+            switch (job.type) {
+                .chunk_generation, .chunk_meshing => {
+                    pool.process_job_fn(pool.context, job);
+                },
+                .generic => {
+                    job.data.generic.process_fn(job.data.generic.context);
+                },
+            }
         }
     }
 };
