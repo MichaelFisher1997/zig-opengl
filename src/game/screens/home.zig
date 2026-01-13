@@ -22,6 +22,7 @@ pub const HomeScreen = struct {
     pub const vtable = IScreen.VTable{
         .deinit = deinit,
         .draw = draw,
+        .onEnter = onEnter,
     };
 
     pub fn init(allocator: std.mem.Allocator, context: EngineContext) !*HomeScreen {
@@ -50,7 +51,8 @@ pub const HomeScreen = struct {
         const screen_h: f32 = @floatFromInt(ctx.input.window_height);
 
         // Scale UI based on screen height for better readability at high resolutions
-        const ui_scale: f32 = @max(1.0, screen_h / 720.0);
+        const auto_scale: f32 = @max(1.0, screen_h / 720.0);
+        const ui_scale: f32 = auto_scale * ctx.settings.ui_scale;
         const title_scale: f32 = 5.0 * ui_scale;
         const btn_scale: f32 = 2.8 * ui_scale;
         const btn_height: f32 = BUTTON_HEIGHT_BASE * ui_scale;
@@ -88,6 +90,11 @@ pub const HomeScreen = struct {
         if (Widgets.drawButton(ui, .{ .x = bx, .y = by, .width = bw, .height = btn_height }, "QUIT", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             ctx.input.should_quit = true;
         }
+    }
+
+    pub fn onEnter(ptr: *anyopaque) void {
+        const self: *@This() = @ptrCast(@alignCast(ptr));
+        self.context.input.setMouseCapture(self.context.window_manager.window, false);
     }
 
     pub fn screen(self: *@This()) IScreen {

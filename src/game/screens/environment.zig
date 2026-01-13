@@ -20,6 +20,7 @@ pub const EnvironmentScreen = struct {
 
     pub const vtable = IScreen.VTable{
         .deinit = deinit,
+        .update = update,
         .draw = draw,
     };
 
@@ -34,6 +35,16 @@ pub const EnvironmentScreen = struct {
     pub fn deinit(ptr: *anyopaque) void {
         const self: *@This() = @ptrCast(@alignCast(ptr));
         self.context.allocator.destroy(self);
+    }
+
+    pub fn update(ptr: *anyopaque, dt: f32) !void {
+        const self: *@This() = @ptrCast(@alignCast(ptr));
+        _ = dt;
+
+        if (self.context.input_mapper.isActionPressed(self.context.input, .ui_back)) {
+            self.context.saveSettings();
+            self.context.screen_manager.popScreen();
+        }
     }
 
     pub fn draw(ptr: *anyopaque, ui: *UISystem) !void {
@@ -116,34 +127,36 @@ pub const EnvironmentScreen = struct {
 
         // Back button
         if (Widgets.drawButton(ui, .{ .x = px + (pw - 150.0 * ui_scale) * 0.5, .y = py + ph - 70.0 * ui_scale, .width = 150.0 * ui_scale, .height = 50.0 * ui_scale }, "BACK", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-            settings.save(ctx.allocator);
+            ctx.saveSettings();
             ctx.screen_manager.popScreen();
         }
     }
 
     fn reloadEnvMap(self: *@This()) !void {
         const ctx = self.context;
+        const env_ptr = ctx.env_map_ptr orelse return;
+
         ctx.rhi.waitIdle();
-        if (ctx.env_map_ptr.*) |*t| t.deinit();
-        ctx.env_map_ptr.* = null;
+        if (env_ptr.*) |*t| t.deinit();
+        env_ptr.* = null;
 
         if (!std.mem.eql(u8, ctx.settings.environment_map, "default")) {
             if (ctx.resource_pack_manager.loadImageFileFloat(ctx.settings.environment_map)) |tex_data| {
-                ctx.env_map_ptr.* = Texture.initFloat(ctx.rhi, tex_data.width, tex_data.height, tex_data.pixels);
-                ctx.env_map_ptr.*.?.bind(9);
+                env_ptr.* = Texture.initFloat(ctx.rhi, tex_data.width, tex_data.height, tex_data.pixels);
+                env_ptr.*.?.bind(9);
                 log.log.info("Loaded Environment Map: {s}", .{ctx.settings.environment_map});
                 var td = tex_data;
                 td.deinit(ctx.allocator);
             } else {
                 log.log.warn("Could not load environment map: {s}", .{ctx.settings.environment_map});
                 const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
-                ctx.env_map_ptr.* = Texture.initFloat(ctx.rhi, 1, 1, &white_pixel);
-                ctx.env_map_ptr.*.?.bind(9);
+                env_ptr.* = Texture.initFloat(ctx.rhi, 1, 1, &white_pixel);
+                env_ptr.*.?.bind(9);
             }
         } else {
             const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
-            ctx.env_map_ptr.* = Texture.initFloat(ctx.rhi, 1, 1, &white_pixel);
-            ctx.env_map_ptr.*.?.bind(9);
+            env_ptr.* = Texture.initFloat(ctx.rhi, 1, 1, &white_pixel);
+            env_ptr.*.?.bind(9);
         }
     }
 

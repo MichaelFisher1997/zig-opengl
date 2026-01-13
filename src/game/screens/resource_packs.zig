@@ -19,6 +19,7 @@ pub const ResourcePacksScreen = struct {
 
     pub const vtable = IScreen.VTable{
         .deinit = deinit,
+        .update = update,
         .draw = draw,
     };
 
@@ -33,6 +34,16 @@ pub const ResourcePacksScreen = struct {
     pub fn deinit(ptr: *anyopaque) void {
         const self: *@This() = @ptrCast(@alignCast(ptr));
         self.context.allocator.destroy(self);
+    }
+
+    pub fn update(ptr: *anyopaque, dt: f32) !void {
+        const self: *@This() = @ptrCast(@alignCast(ptr));
+        _ = dt;
+
+        if (self.context.input_mapper.isActionPressed(self.context.input, .ui_back)) {
+            self.context.saveSettings();
+            self.context.screen_manager.popScreen();
+        }
     }
 
     pub fn draw(ptr: *anyopaque, ui: *UISystem) !void {
@@ -106,7 +117,7 @@ pub const ResourcePacksScreen = struct {
 
         // Back button
         if (Widgets.drawButton(ui, .{ .x = px + (pw - 150.0 * ui_scale) * 0.5, .y = py + ph - 70.0 * ui_scale, .width = 150.0 * ui_scale, .height = 50.0 * ui_scale }, "BACK", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-            settings.save(ctx.allocator);
+            ctx.saveSettings();
             ctx.screen_manager.popScreen();
         }
     }

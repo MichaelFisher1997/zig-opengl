@@ -40,7 +40,7 @@ pub const GraphicsScreen = struct {
         _ = dt;
 
         if (self.context.input_mapper.isActionPressed(self.context.input, .ui_back)) {
-            self.context.settings.save(self.context.allocator);
+            self.context.saveSettings();
             self.context.screen_manager.popScreen();
         }
     }
@@ -175,7 +175,7 @@ pub const GraphicsScreen = struct {
 
         // Back button
         if (Widgets.drawButton(ui, .{ .x = px + (pw - 150.0 * ui_scale) * 0.5, .y = py + ph - 60.0 * ui_scale, .width = 150.0 * ui_scale, .height = 45.0 * ui_scale }, "BACK", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-            settings.save(ctx.allocator);
+            ctx.saveSettings();
             ctx.screen_manager.popScreen();
         }
     }

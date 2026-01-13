@@ -133,6 +133,8 @@ pub const WorldScreen = struct {
 
         ctx.rhi.updateGlobalUniforms(view_proj_render, camera.position, self.session.atmosphere.sun_dir, self.session.atmosphere.sun_color, self.session.atmosphere.time_of_day, self.session.atmosphere.fog_color, self.session.atmosphere.fog_density, self.session.atmosphere.fog_enabled, self.session.atmosphere.sun_intensity, self.session.atmosphere.ambient_intensity, ctx.settings.textures_enabled, cloud_params);
 
+        const env_map_handle = if (ctx.env_map_ptr) |e_ptr| (if (e_ptr.*) |t| t.handle else 0) else 0;
+
         const render_ctx = render_graph_pkg.SceneContext{
             .rhi = ctx.rhi,
             .world = self.session.world,
@@ -143,7 +145,7 @@ pub const WorldScreen = struct {
             .sky_params = sky_params,
             .cloud_params = cloud_params,
             .main_shader = ctx.shader,
-            .env_map_handle = if (ctx.env_map_ptr.*) |t| t.handle else 0,
+            .env_map_handle = env_map_handle,
             .shadow_distance = ctx.settings.shadow_distance,
             .shadow_resolution = ctx.settings.getShadowResolution(),
             .ssao_enabled = ctx.settings.ssao_enabled,

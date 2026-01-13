@@ -23,6 +23,7 @@ pub const PausedScreen = struct {
         .update = update,
         .draw = draw,
         .onEnter = onEnter,
+        .onExit = onExit,
     };
 
     pub fn init(allocator: std.mem.Allocator, context: EngineContext) !*PausedScreen {
@@ -91,6 +92,13 @@ pub const PausedScreen = struct {
     pub fn onEnter(ptr: *anyopaque) void {
         const self: *@This() = @ptrCast(@alignCast(ptr));
         self.context.input.setMouseCapture(self.context.window_manager.window, false);
+    }
+
+    pub fn onExit(ptr: *anyopaque) void {
+        const self: *@This() = @ptrCast(@alignCast(ptr));
+        // Restore mouse capture when leaving pause menu (if going back to world)
+        // If we are going to title screen, it will be released again in HomeScreen.onEnter if needed
+        self.context.input.setMouseCapture(self.context.window_manager.window, true);
     }
 
     pub fn screen(self: *@This()) IScreen {

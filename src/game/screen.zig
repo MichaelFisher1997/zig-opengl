@@ -23,7 +23,7 @@ pub const EngineContext = struct {
     render_graph: *RenderGraph,
     atmosphere_system: *AtmosphereSystem,
     material_system: *MaterialSystem,
-    env_map_ptr: *?Texture,
+    env_map_ptr: ?*?Texture,
     shader: rhi_pkg.ShaderHandle,
 
     settings: *Settings,
@@ -32,6 +32,15 @@ pub const EngineContext = struct {
     time: *Time,
 
     screen_manager: *ScreenManager,
+
+    /// Saves all persistent application settings.
+    /// Screens should call this when settings are modified, typically on a 'Back' action.
+    pub fn saveSettings(self: EngineContext) void {
+        self.settings.save(self.allocator);
+        @import("input_settings.zig").InputSettings.saveFromMapper(self.allocator, self.input_mapper.*) catch |err| {
+            @import("../engine/core/log.zig").log.err("Failed to save input settings: {}", .{err});
+        };
+    }
 };
 
 pub const IScreen = struct {
