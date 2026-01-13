@@ -303,7 +303,7 @@ pub const GameSession = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn update(self: *GameSession, dt: f32, total_time: f32, input: *Input, atlas: *TextureAtlas, window: anytype, paused: bool) !void {
+    pub fn update(self: *GameSession, dt: f32, total_time: f32, input: *Input, mapper: *const InputMapper, atlas: *TextureAtlas, window: anytype, paused: bool) !void {
         self.atmosphere.update(dt);
         self.clouds.update(dt);
 
@@ -314,50 +314,50 @@ pub const GameSession = struct {
         const screen_h: f32 = @floatFromInt(input.window_height);
 
         if (!paused) {
-            if (InputMapper.isActionPressed(input, .toggle_fps)) self.debug_show_fps = !self.debug_show_fps;
-            if (InputMapper.isActionPressed(input, .toggle_block_info)) self.debug_show_block_info = !self.debug_show_block_info;
-            if (InputMapper.isActionPressed(input, .toggle_shadows)) self.debug_shadows = !self.debug_shadows;
-            if (self.debug_shadows and InputMapper.isActionPressed(input, .cycle_cascade)) self.debug_cascade_idx = (self.debug_cascade_idx + 1) % 3;
-            if (InputMapper.isActionPressed(input, .toggle_time_scale)) {
+            if (mapper.isActionPressed(input, .toggle_fps)) self.debug_show_fps = !self.debug_show_fps;
+            if (mapper.isActionPressed(input, .toggle_block_info)) self.debug_show_block_info = !self.debug_show_block_info;
+            if (mapper.isActionPressed(input, .toggle_shadows)) self.debug_shadows = !self.debug_shadows;
+            if (self.debug_shadows and mapper.isActionPressed(input, .cycle_cascade)) self.debug_cascade_idx = (self.debug_cascade_idx + 1) % 3;
+            if (mapper.isActionPressed(input, .toggle_time_scale)) {
                 self.atmosphere.time_scale = if (self.atmosphere.time_scale > 0) @as(f32, 0.0) else @as(f32, 1.0);
             }
-            if (InputMapper.isActionPressed(input, .toggle_creative)) {
+            if (mapper.isActionPressed(input, .toggle_creative)) {
                 self.creative_mode = !self.creative_mode;
                 self.player.setCreativeMode(self.creative_mode);
             }
 
-            if (InputMapper.isActionPressed(input, .inventory)) {
+            if (mapper.isActionPressed(input, .inventory)) {
                 self.inventory_ui_state.toggle();
                 input.setMouseCapture(window, !self.inventory_ui_state.visible);
             }
 
             if (!self.inventory_ui_state.visible) {
-                if (InputMapper.isActionPressed(input, .slot_1)) self.inventory.selectSlot(0);
-                if (InputMapper.isActionPressed(input, .slot_2)) self.inventory.selectSlot(1);
-                if (InputMapper.isActionPressed(input, .slot_3)) self.inventory.selectSlot(2);
-                if (InputMapper.isActionPressed(input, .slot_4)) self.inventory.selectSlot(3);
-                if (InputMapper.isActionPressed(input, .slot_5)) self.inventory.selectSlot(4);
-                if (InputMapper.isActionPressed(input, .slot_6)) self.inventory.selectSlot(5);
-                if (InputMapper.isActionPressed(input, .slot_7)) self.inventory.selectSlot(6);
-                if (InputMapper.isActionPressed(input, .slot_8)) self.inventory.selectSlot(7);
-                if (InputMapper.isActionPressed(input, .slot_9)) self.inventory.selectSlot(8);
+                if (mapper.isActionPressed(input, .slot_1)) self.inventory.selectSlot(0);
+                if (mapper.isActionPressed(input, .slot_2)) self.inventory.selectSlot(1);
+                if (mapper.isActionPressed(input, .slot_3)) self.inventory.selectSlot(2);
+                if (mapper.isActionPressed(input, .slot_4)) self.inventory.selectSlot(3);
+                if (mapper.isActionPressed(input, .slot_5)) self.inventory.selectSlot(4);
+                if (mapper.isActionPressed(input, .slot_6)) self.inventory.selectSlot(5);
+                if (mapper.isActionPressed(input, .slot_7)) self.inventory.selectSlot(6);
+                if (mapper.isActionPressed(input, .slot_8)) self.inventory.selectSlot(7);
+                if (mapper.isActionPressed(input, .slot_9)) self.inventory.selectSlot(8);
                 if (input.scroll_y != 0) {
                     self.inventory.scrollSelection(@intFromFloat(input.scroll_y));
                 }
             }
 
             if (self.map_controller.show_map) {
-                self.map_controller.update(input, &self.camera, dt, window, screen_w, screen_h, self.world_map.width);
+                self.map_controller.update(input, mapper, &self.camera, dt, window, screen_w, screen_h, self.world_map.width);
             } else {
                 if (!self.inventory_ui_state.visible) {
-                    self.player.update(input, self.world, dt, total_time);
+                    self.player.update(input, mapper, self.world, dt, total_time);
 
                     // Handle interaction
-                    if (InputMapper.isActionPressed(input, .interact_primary)) {
+                    if (mapper.isActionPressed(input, .interact_primary)) {
                         self.player.breakTargetBlock(self.world);
                         self.hand_renderer.swing();
                     }
-                    if (InputMapper.isActionPressed(input, .interact_secondary)) {
+                    if (mapper.isActionPressed(input, .interact_secondary)) {
                         if (self.inventory.getSelectedBlock()) |block_type| {
                             self.player.placeBlock(self.world, block_type);
                             self.hand_renderer.swing();

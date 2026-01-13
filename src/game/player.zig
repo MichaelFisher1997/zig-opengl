@@ -151,6 +151,7 @@ pub const Player = struct {
     pub fn update(
         self: *Player,
         input: *const Input,
+        mapper: *const InputMapper,
         world: *World,
         delta_time: f32,
         current_time: f32,
@@ -159,15 +160,15 @@ pub const Player = struct {
         self.handleMouseLook(input);
 
         // Handle double-tap space for fly toggle
-        self.handleFlyToggle(input, current_time);
+        self.handleFlyToggle(input, mapper, current_time);
 
         // Calculate movement
-        const move_dir = self.getMovementDirection(input);
+        const move_dir = self.getMovementDirection(input, mapper);
 
         if (self.fly_mode) {
-            self.updateFlying(input, move_dir, delta_time);
+            self.updateFlying(input, mapper, move_dir, delta_time);
         } else {
-            self.updateWalking(input, move_dir, world, delta_time);
+            self.updateWalking(input, mapper, move_dir, world, delta_time);
         }
 
         // Sync camera to eye position
@@ -200,14 +201,14 @@ pub const Player = struct {
     }
 
     /// Handle double-tap space for fly mode toggle (creative only)
-    fn handleFlyToggle(self: *Player, input: *const Input, current_time: f32) void {
+    fn handleFlyToggle(self: *Player, input: *const Input, mapper: *const InputMapper, current_time: f32) void {
         if (!self.can_fly) return;
 
-        if (InputMapper.isActionReleased(input, .jump)) {
+        if (mapper.isActionReleased(input, .jump)) {
             self.space_released = true;
         }
 
-        if (InputMapper.isActionPressed(input, .jump) and self.space_released) {
+        if (mapper.isActionPressed(input, .jump) and self.space_released) {
             const time_since_last = current_time - self.last_space_time;
 
             if (time_since_last < DOUBLE_TAP_THRESHOLD) {
@@ -222,7 +223,7 @@ pub const Player = struct {
     }
 
     /// Get horizontal movement direction from WASD input
-    fn getMovementDirection(self: *Player, input: *const Input) Vec3 {
+    fn getMovementDirection(self: *Player, input: *const Input, mapper: *const InputMapper) Vec3 {
         var move_dir = Vec3.zero;
 
         // Get horizontal forward (ignore pitch for ground movement)
@@ -238,7 +239,7 @@ pub const Player = struct {
             std.math.sin(self.camera.yaw + std.math.pi / 2.0),
         ).normalize();
 
-        const move_vec = InputMapper.getMovementVector(input);
+        const move_vec = mapper.getMovementVector(input);
         if (move_vec.z > 0) move_dir = move_dir.add(forward_flat);
         if (move_vec.z < 0) move_dir = move_dir.sub(forward_flat);
         if (move_vec.x < 0) move_dir = move_dir.sub(right_flat);
@@ -253,13 +254,13 @@ pub const Player = struct {
     }
 
     /// Update player when flying (creative mode)
-    fn updateFlying(self: *Player, input: *const Input, move_dir: Vec3, delta_time: f32) void {
+    fn updateFlying(self: *Player, input: *const Input, mapper: *const InputMapper, move_dir: Vec3, delta_time: f32) void {
         var vel = move_dir.scale(FLY_SPEED);
 
         // Vertical movement
-        if (InputMapper.isActionActive(input, .jump)) {
+        if (mapper.isActionActive(input, .jump)) {
             vel.y = FLY_SPEED;
-        } else if (InputMapper.isActionActive(input, .crouch)) {
+        } else if (mapper.isActionActive(input, .crouch)) {
             vel.y = -FLY_SPEED;
         }
 
@@ -274,6 +275,7 @@ pub const Player = struct {
     fn updateWalking(
         self: *Player,
         input: *const Input,
+        mapper: *const InputMapper,
         move_dir: Vec3,
         world: *World,
         delta_time: f32,
@@ -287,7 +289,7 @@ pub const Player = struct {
         }
 
         // Jump if grounded and space pressed
-        if (self.is_grounded and InputMapper.isActionActive(input, .jump)) {
+        if (self.is_grounded and mapper.isActionActive(input, .jump)) {
             self.velocity.y = JUMP_VELOCITY;
             self.is_grounded = false;
         }

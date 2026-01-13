@@ -10,6 +10,10 @@ const Font = @import("../engine/ui/font.zig");
 const log = @import("../engine/core/log.zig");
 const Vec3 = @import("../engine/math/vec3.zig").Vec3;
 
+const input_mapper = @import("input_mapper.zig");
+const InputMapper = input_mapper.InputMapper;
+const GameAction = input_mapper.GameAction;
+
 pub const MapController = struct {
     show_map: bool = false,
     map_needs_update: bool = true,
@@ -20,8 +24,8 @@ pub const MapController = struct {
     last_mouse_x: f32 = 0.0,
     last_mouse_y: f32 = 0.0,
 
-    pub fn update(self: *MapController, input: *Input, camera: *const Camera, time_delta: f32, window: *c.SDL_Window, screen_w: f32, screen_h: f32, world_map_width: u32) void {
-        if (input.isKeyPressed(.m)) {
+    pub fn update(self: *MapController, input: *Input, mapper: *const InputMapper, camera: *const Camera, time_delta: f32, window: *c.SDL_Window, screen_w: f32, screen_h: f32, world_map_width: u32) void {
+        if (mapper.isActionPressed(input, .toggle_map)) {
             self.show_map = !self.show_map;
             log.log.info("Toggle map: show={}", .{self.show_map});
             if (self.show_map) {
@@ -38,11 +42,11 @@ pub const MapController = struct {
         if (!self.show_map) return;
 
         const dt = @min(time_delta, 0.033);
-        if (input.isKeyDown(.plus) or input.isKeyDown(.kp_plus)) {
+        if (mapper.isActionActive(input, .map_zoom_in)) {
             self.map_target_zoom /= @exp(1.2 * dt);
             self.map_needs_update = true;
         }
-        if (input.isKeyDown(.minus) or input.isKeyDown(.kp_minus)) {
+        if (mapper.isActionActive(input, .map_zoom_out)) {
             self.map_target_zoom *= @exp(1.2 * dt);
             self.map_needs_update = true;
         }
@@ -55,7 +59,7 @@ pub const MapController = struct {
         self.map_zoom = std.math.lerp(self.map_zoom, self.map_target_zoom, 20.0 * dt);
         if (@abs(self.map_zoom - old_zoom) > 0.001 * self.map_zoom) self.map_needs_update = true;
 
-        if (input.isKeyPressed(.space)) {
+        if (mapper.isActionPressed(input, .map_center)) {
             self.map_pos_x = camera.position.x;
             self.map_pos_z = camera.position.z;
             self.map_needs_update = true;
@@ -85,15 +89,10 @@ pub const MapController = struct {
             self.last_mouse_y = mouse_y;
         } else {
             const pan_kb_speed = 800.0 * self.map_zoom;
-            var dx: f32 = 0;
-            var dz: f32 = 0;
-            if (input.isKeyDown(.w)) dz -= 1;
-            if (input.isKeyDown(.s)) dz += 1;
-            if (input.isKeyDown(.a)) dx -= 1;
-            if (input.isKeyDown(.d)) dx += 1;
-            if (dx != 0 or dz != 0) {
-                self.map_pos_x += dx * pan_kb_speed * dt;
-                self.map_pos_z += dz * pan_kb_speed * dt;
+            const move_vec = mapper.getMovementVector(input);
+            if (move_vec.x != 0 or move_vec.z != 0) {
+                self.map_pos_x += move_vec.x * pan_kb_speed * dt;
+                self.map_pos_z -= move_vec.z * pan_kb_speed * dt; // Match coordinate system (W is z+)
                 self.map_needs_update = true;
             }
         }

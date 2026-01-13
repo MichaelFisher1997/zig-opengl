@@ -14,6 +14,8 @@ const WindowManager = @import("../engine/core/window.zig").WindowManager;
 const log = @import("../engine/core/log.zig");
 const seed_gen = @import("seed.zig");
 const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").ResourcePackManager;
+const InputSettings = @import("input_settings.zig").InputSettings;
+const InputMapper = @import("input_mapper.zig").InputMapper;
 
 pub const MenuAction = enum {
     none,
@@ -23,6 +25,7 @@ pub const MenuAction = enum {
 pub const MenuContext = struct {
     ui: *UISystem,
     input: *const Input,
+    input_mapper: *const InputMapper,
     screen_w: f32,
     screen_h: f32,
     time: *const Time,
@@ -72,6 +75,13 @@ pub fn drawHome(ctx: MenuContext, app_state: *AppState, last_state: *AppState, s
         return .quit;
     }
     return .none;
+}
+
+pub fn saveAllSettings(ctx: MenuContext, settings: *Settings) void {
+    settings.save(ctx.allocator);
+    InputSettings.saveFromMapper(ctx.allocator, ctx.input_mapper.*) catch |err| {
+        log.log.err("Failed to save input settings: {}", .{err});
+    };
 }
 
 pub fn drawSettings(ctx: MenuContext, app_state: *AppState, settings: *Settings, last_state: AppState, rhi: RHI) void {
@@ -197,7 +207,7 @@ pub fn drawSettings(ctx: MenuContext, app_state: *AppState, settings: *Settings,
 
     // Back button
     if (Widgets.drawButton(ctx.ui, .{ .x = px + (pw - 150.0 * ui_scale) * 0.5, .y = py + ph - 70.0 * ui_scale, .width = 150.0 * ui_scale, .height = 50.0 * ui_scale }, "BACK", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-        settings.save(ctx.allocator);
+        saveAllSettings(ctx, settings);
         app_state.* = last_state;
     }
 }
@@ -415,7 +425,7 @@ pub fn drawGraphics(ctx: MenuContext, app_state: *AppState, settings: *Settings,
 
     // Back button
     if (Widgets.drawButton(ctx.ui, .{ .x = px + (pw - 150.0 * ui_scale) * 0.5, .y = py + ph - 60.0 * ui_scale, .width = 150.0 * ui_scale, .height = 45.0 * ui_scale }, "BACK", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-        settings.save(ctx.allocator);
+        saveAllSettings(ctx, settings);
         app_state.* = .settings;
     }
 }
@@ -465,7 +475,7 @@ pub fn drawSingleplayer(ctx: MenuContext, app_state: *AppState, seed_input: *std
         app_state.* = .home;
         seed_focused.* = false;
     }
-    if (Widgets.drawButton(ctx.ui, .{ .x = px + 30.0 * ui_scale + hw + 15.0 * ui_scale, .y = byy, .width = hw, .height = btn_h }, "CREATE", btn_scale, mouse_x, mouse_y, mouse_clicked) or ctx.input.isKeyPressed(.enter)) {
+    if (Widgets.drawButton(ctx.ui, .{ .x = px + 30.0 * ui_scale + hw + 15.0 * ui_scale, .y = byy, .width = hw, .height = btn_h }, "CREATE", btn_scale, mouse_x, mouse_y, mouse_clicked) or ctx.input_mapper.isActionPressed(ctx.input, .ui_confirm)) {
         const seed = try seed_gen.resolveSeed(seed_input, ctx.allocator);
         pending_new_world_seed.* = seed;
         app_state.* = .world;
@@ -545,7 +555,7 @@ pub fn drawResourcePacks(ctx: MenuContext, app_state: *AppState, settings: *Sett
 
     // Back button
     if (Widgets.drawButton(ctx.ui, .{ .x = px + (pw - 150.0 * ui_scale) * 0.5, .y = py + ph - 70.0 * ui_scale, .width = 150.0 * ui_scale, .height = 50.0 * ui_scale }, "BACK", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-        settings.save(ctx.allocator);
+        saveAllSettings(ctx, settings);
         app_state.* = last_state;
     }
 }
@@ -616,7 +626,7 @@ pub fn drawEnvironment(ctx: MenuContext, app_state: *AppState, settings: *Settin
 
     // Back button
     if (Widgets.drawButton(ctx.ui, .{ .x = px + (pw - 150.0 * ui_scale) * 0.5, .y = py + ph - 70.0 * ui_scale, .width = 150.0 * ui_scale, .height = 50.0 * ui_scale }, "BACK", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-        settings.save(ctx.allocator);
+        saveAllSettings(ctx, settings);
         app_state.* = last_state;
     }
 }
