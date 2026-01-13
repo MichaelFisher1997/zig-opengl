@@ -39,7 +39,7 @@ const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").Reso
 const AppState = @import("state.zig").AppState;
 const Settings = @import("state.zig").Settings;
 const Menus = @import("menus.zig");
-const InputSettings = @import("settings.zig").Settings;
+const InputSettings = @import("input_settings.zig").InputSettings;
 
 // Player physics and interaction
 const Player = @import("player.zig").Player;
@@ -151,10 +151,10 @@ pub const App = struct {
 
         const ui = try UISystem.init(rhi, input.window_width, input.window_height);
 
-        var input_mapper = InputMapper.init();
-        // Load custom bindings if they exist
-        const input_settings = InputSettings.load(allocator);
-        input_mapper = input_settings.input_mapper;
+        // Load custom bindings
+        var input_settings = InputSettings.load(allocator);
+        defer input_settings.deinit();
+        const input_mapper = input_settings.input_mapper;
 
         const app = try allocator.create(App);
         app.* = .{
@@ -233,10 +233,50 @@ pub const App = struct {
     pub fn saveAllSettings(self: *const App) void {
         self.settings.save(self.allocator);
         var input_settings = InputSettings.init(self.allocator);
+        defer input_settings.deinit();
         input_settings.input_mapper = self.input_mapper;
         input_settings.save() catch |err| {
             log.log.err("Failed to save input settings: {}", .{err});
         };
+    }
+
+    fn handleUiBack(self: *App) void {
+        var handled = false;
+        if (self.game_session) |session| {
+            if (session.map_controller.show_map) {
+                session.map_controller.show_map = false;
+                if (self.app_state == .world) self.input.setMouseCapture(self.window_manager.window, true);
+                handled = true;
+            }
+        }
+
+        if (!handled) {
+            switch (self.app_state) {
+                .home => self.input.should_quit = true,
+                .singleplayer => {
+                    self.app_state = .home;
+                    self.seed_focused = false;
+                },
+                .settings => self.app_state = self.last_state,
+                .graphics => self.app_state = .settings,
+                .resource_packs => {
+                    self.saveAllSettings();
+                    self.app_state = self.last_state;
+                },
+                .environment => {
+                    self.saveAllSettings();
+                    self.app_state = self.last_state;
+                },
+                .world => {
+                    self.app_state = .paused;
+                    self.input.setMouseCapture(self.window_manager.window, false);
+                },
+                .paused => {
+                    self.app_state = .world;
+                    self.input.setMouseCapture(self.window_manager.window, true);
+                },
+            }
+        }
     }
 
     pub fn runSingleFrame(self: *App) !void {
@@ -278,42 +318,7 @@ pub const App = struct {
         const mouse_clicked = self.input.isMouseButtonPressed(.left);
 
         if (self.input_mapper.isActionPressed(&self.input, .ui_back)) {
-            var handled = false;
-            if (self.game_session) |session| {
-                if (session.map_controller.show_map) {
-                    session.map_controller.show_map = false;
-                    if (self.app_state == .world) self.input.setMouseCapture(self.window_manager.window, true);
-                    handled = true;
-                }
-            }
-
-            if (!handled) {
-                switch (self.app_state) {
-                    .home => self.input.should_quit = true,
-                    .singleplayer => {
-                        self.app_state = .home;
-                        self.seed_focused = false;
-                    },
-                    .settings => self.app_state = self.last_state,
-                    .graphics => self.app_state = .settings,
-                    .resource_packs => {
-                        self.saveAllSettings();
-                        self.app_state = self.last_state;
-                    },
-                    .environment => {
-                        self.saveAllSettings();
-                        self.app_state = self.last_state;
-                    },
-                    .world => {
-                        self.app_state = .paused;
-                        self.input.setMouseCapture(self.window_manager.window, false);
-                    },
-                    .paused => {
-                        self.app_state = .world;
-                        self.input.setMouseCapture(self.window_manager.window, true);
-                    },
-                }
-            }
+            self.handleUiBack();
         }
 
         if (in_world or in_pause) {

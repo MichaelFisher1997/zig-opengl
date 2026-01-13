@@ -14,7 +14,7 @@ const WindowManager = @import("../engine/core/window.zig").WindowManager;
 const log = @import("../engine/core/log.zig");
 const seed_gen = @import("seed.zig");
 const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").ResourcePackManager;
-const InputSettings = @import("settings.zig").Settings;
+const InputSettings = @import("input_settings.zig").InputSettings;
 const InputMapper = @import("input_mapper.zig").InputMapper;
 
 pub const MenuAction = enum {
@@ -80,6 +80,7 @@ pub fn drawHome(ctx: MenuContext, app_state: *AppState, last_state: *AppState, s
 pub fn saveAllSettings(ctx: MenuContext, settings: *Settings) void {
     settings.save(ctx.allocator);
     var input_settings = InputSettings.init(ctx.allocator);
+    defer input_settings.deinit();
     input_settings.input_mapper = ctx.input_mapper.*;
     input_settings.save() catch |err| {
         log.log.err("Failed to save input settings: {}", .{err});

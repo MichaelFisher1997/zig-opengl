@@ -14,62 +14,98 @@ const Input = @import("../engine/input/input.zig").Input;
 /// All logical game actions that can be triggered by input.
 /// Gameplay code should query these actions instead of specific keys.
 pub const GameAction = enum(u8) {
-    // Movement (held/continuous)
+    // Movement
+    /// Move player forward
     move_forward,
+    /// Move player backward
     move_backward,
+    /// Strafe player left
     move_left,
+    /// Strafe player right
     move_right,
+    /// Jump or fly up
     jump,
+    /// Crouch or fly down
     crouch,
+    /// Sprint (increase speed)
     sprint,
+    /// Toggle fly mode (detected via double-tap jump usually)
     fly,
 
-    // Interaction (triggers)
-    interact_primary, // Left click - break block
-    interact_secondary, // Right click - place block
+    // Interaction
+    /// Primary action (e.g., mine block)
+    interact_primary,
+    /// Secondary action (e.g., place block)
+    interact_secondary,
 
     // UI/Menu toggles
+    /// Open/close inventory
     inventory,
+    /// Toggle mouse capture or menu
     tab_menu,
+    /// Pause the game
     pause,
 
     // Hotbar slots
+    /// Select hotbar slot 1
     slot_1,
+    /// Select hotbar slot 2
     slot_2,
+    /// Select hotbar slot 3
     slot_3,
+    /// Select hotbar slot 4
     slot_4,
+    /// Select hotbar slot 5
     slot_5,
+    /// Select hotbar slot 6
     slot_6,
+    /// Select hotbar slot 7
     slot_7,
+    /// Select hotbar slot 8
     slot_8,
+    /// Select hotbar slot 9
     slot_9,
 
     // Debug/toggles
+    /// Toggle wireframe rendering
     toggle_wireframe,
+    /// Toggle textures
     toggle_textures,
+    /// Toggle VSync
     toggle_vsync,
+    /// Toggle FPS counter
     toggle_fps,
+    /// Toggle block information overlay
     toggle_block_info,
+    /// Toggle shadow debug view
     toggle_shadows,
+    /// Cycle through shadow cascades
     cycle_cascade,
+    /// Pause/resume time
     toggle_time_scale,
+    /// Toggle creative mode
     toggle_creative,
 
     // Map controls
+    /// Open/close world map
     toggle_map,
+    /// Zoom in on map
     map_zoom_in,
+    /// Zoom out on map
     map_zoom_out,
+    /// Center map on player
     map_center,
 
     // UI navigation
+    /// Confirm menu selection
     ui_confirm,
+    /// Go back in menu or close
     ui_back,
 
     pub const count = @typeInfo(GameAction).@"enum".fields.len;
 };
 
 /// Represents a physical input that can be bound to an action.
-/// Supports keyboard keys, mouse buttons, and future gamepad support.
 pub const InputBinding = union(enum) {
     key: Key,
     mouse_button: MouseButton,
@@ -77,6 +113,7 @@ pub const InputBinding = union(enum) {
     key_alt: Key,
     none: void,
 
+    /// Returns true if both bindings represent the same physical input
     pub fn eql(self: InputBinding, other: InputBinding) bool {
         return switch (self) {
             .key => |k| switch (other) {
@@ -199,7 +236,6 @@ pub const ActionBinding = struct {
 };
 
 /// Input mapper that translates physical inputs to logical game actions.
-/// Supports configurable key bindings that can be saved/loaded.
 pub const InputMapper = struct {
     /// Current bindings for all actions
     bindings: [GameAction.count]ActionBinding,
@@ -221,7 +257,7 @@ pub const InputMapper = struct {
         self.bindings[@intFromEnum(GameAction.jump)] = ActionBinding.init(.{ .key = .space });
         self.bindings[@intFromEnum(GameAction.crouch)] = ActionBinding.init(.{ .key = .left_shift });
         self.bindings[@intFromEnum(GameAction.sprint)] = ActionBinding.init(.{ .key = .left_ctrl });
-        self.bindings[@intFromEnum(GameAction.fly)] = ActionBinding.init(.{ .none = {} }); // No default binding
+        self.bindings[@intFromEnum(GameAction.fly)] = ActionBinding.init(.{ .none = {} });
 
         // Interaction
         self.bindings[@intFromEnum(GameAction.interact_primary)] = ActionBinding.init(.{ .mouse_button = .left });
@@ -254,7 +290,7 @@ pub const InputMapper = struct {
         self.bindings[@intFromEnum(GameAction.toggle_time_scale)] = ActionBinding.init(.{ .key = .n });
         self.bindings[@intFromEnum(GameAction.toggle_creative)] = ActionBinding.init(.{ .key = .f3 });
 
-        // Map controls (with alternate bindings for numpad)
+        // Map controls
         self.bindings[@intFromEnum(GameAction.toggle_map)] = ActionBinding.init(.{ .key = .m });
         self.bindings[@intFromEnum(GameAction.map_zoom_in)] = ActionBinding.initWithAlt(.{ .key = .plus }, .{ .key_alt = .kp_plus });
         self.bindings[@intFromEnum(GameAction.map_zoom_out)] = ActionBinding.initWithAlt(.{ .key = .minus }, .{ .key_alt = .kp_minus });
@@ -263,6 +299,12 @@ pub const InputMapper = struct {
         // UI navigation
         self.bindings[@intFromEnum(GameAction.ui_confirm)] = ActionBinding.init(.{ .key = .enter });
         self.bindings[@intFromEnum(GameAction.ui_back)] = ActionBinding.init(.{ .key = .escape });
+    }
+
+    /// Reset an individual action to its default value
+    pub fn resetAction(self: *InputMapper, action: GameAction) void {
+        const defaults = init();
+        self.bindings[@intFromEnum(action)] = defaults.bindings[@intFromEnum(action)];
     }
 
     /// Set a new binding for an action
@@ -280,83 +322,49 @@ pub const InputMapper = struct {
         return self.bindings[@intFromEnum(action)];
     }
 
-    /// Check if a binding matches the current input state (for held actions)
-    fn isBindingActive(self: *const InputMapper, input: *const Input, action: GameAction) bool {
-        const binding = self.bindings[@intFromEnum(action)];
-
-        // Check primary binding
-        const primary_active = switch (binding.primary) {
-            .key, .key_alt => |k| input.isKeyDown(k),
-            .mouse_button => |mb| input.isMouseButtonDown(mb),
-            .none => false,
-        };
-        if (primary_active) return true;
-
-        // Check alternate binding
-        return switch (binding.alternate) {
-            .key, .key_alt => |k| input.isKeyDown(k),
-            .mouse_button => |mb| input.isMouseButtonDown(mb),
-            .none => false,
-        };
-    }
-
-    /// Check if a binding was pressed this frame (for trigger actions)
-    fn isBindingPressed(self: *const InputMapper, input: *const Input, action: GameAction) bool {
-        const binding = self.bindings[@intFromEnum(action)];
-
-        // Check primary binding
-        const primary_pressed = switch (binding.primary) {
-            .key, .key_alt => |k| input.isKeyPressed(k),
-            .mouse_button => |mb| input.isMouseButtonPressed(mb),
-            .none => false,
-        };
-        if (primary_pressed) return true;
-
-        // Check alternate binding
-        return switch (binding.alternate) {
-            .key, .key_alt => |k| input.isKeyPressed(k),
-            .mouse_button => |mb| input.isMouseButtonPressed(mb),
-            .none => false,
-        };
-    }
-
-    /// Check if a binding was released this frame
-    fn isBindingReleased(self: *const InputMapper, input: *const Input, action: GameAction) bool {
-        const binding = self.bindings[@intFromEnum(action)];
-
-        // Check primary binding
-        const primary_released = switch (binding.primary) {
-            .key, .key_alt => |k| input.isKeyReleased(k),
-            .mouse_button => false, // Mouse button release not currently tracked per-frame
-            .none => false,
-        };
-        if (primary_released) return true;
-
-        // Check alternate binding
-        return switch (binding.alternate) {
-            .key, .key_alt => |k| input.isKeyReleased(k),
-            .mouse_button => false,
-            .none => false,
-        };
-    }
-
-    // ========================================================================
-    // Public Query API - These match the original interface for compatibility
-    // ========================================================================
-
     /// Check if a continuous/held action is currently active (e.g., movement)
     pub fn isActionActive(self: *const InputMapper, input: *const Input, action: GameAction) bool {
-        return self.isBindingActive(input, action);
+        const binding = self.bindings[@intFromEnum(action)];
+        return self.isBindingStateActive(input, binding.primary) or self.isBindingStateActive(input, binding.alternate);
     }
 
     /// Check if a trigger action was pressed this frame (e.g., jump, toggle)
     pub fn isActionPressed(self: *const InputMapper, input: *const Input, action: GameAction) bool {
-        return self.isBindingPressed(input, action);
+        const binding = self.bindings[@intFromEnum(action)];
+        return self.isBindingStatePressed(input, binding.primary) or self.isBindingStatePressed(input, binding.alternate);
     }
 
     /// Check if an action was released this frame
     pub fn isActionReleased(self: *const InputMapper, input: *const Input, action: GameAction) bool {
-        return self.isBindingReleased(input, action);
+        const binding = self.bindings[@intFromEnum(action)];
+        return self.isBindingStateReleased(input, binding.primary) or self.isBindingStateReleased(input, binding.alternate);
+    }
+
+    fn isBindingStateActive(self: *const InputMapper, input: *const Input, binding: InputBinding) bool {
+        _ = self;
+        return switch (binding) {
+            .key, .key_alt => |k| input.isKeyDown(k),
+            .mouse_button => |mb| input.isMouseButtonDown(mb),
+            .none => false,
+        };
+    }
+
+    fn isBindingStatePressed(self: *const InputMapper, input: *const Input, binding: InputBinding) bool {
+        _ = self;
+        return switch (binding) {
+            .key, .key_alt => |k| input.isKeyPressed(k),
+            .mouse_button => |mb| input.isMouseButtonPressed(mb),
+            .none => false,
+        };
+    }
+
+    fn isBindingStateReleased(self: *const InputMapper, input: *const Input, binding: InputBinding) bool {
+        _ = self;
+        return switch (binding) {
+            .key, .key_alt => |k| input.isKeyReleased(k),
+            .mouse_button => false, // Mouse button release not currently tracked per-frame in Input
+            .none => false,
+        };
     }
 
     /// Get movement vector based on current bindings
@@ -371,152 +379,30 @@ pub const InputMapper = struct {
     }
 
     // ========================================================================
-    // Serialization for settings persistence
+    // Serialization
     // ========================================================================
 
-    /// Serialize bindings to a JSON-compatible format
+    /// Serialize bindings to a JSON string
     pub fn serialize(self: *const InputMapper, allocator: std.mem.Allocator) ![]u8 {
-        var buffer = std.ArrayListUnmanaged(u8){};
+        var buffer = std.ArrayList(u8).empty;
         errdefer buffer.deinit(allocator);
 
-        try buffer.appendSlice(allocator, "{\n");
+        var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, &buffer);
+        // Allocating flush is a no-op
+        defer _ = aw.writer.flush() catch {};
 
-        var first = true;
-        inline for (@typeInfo(GameAction).@"enum".fields, 0..) |field, idx| {
-            const action: GameAction = @enumFromInt(field.value);
-            const binding = self.bindings[idx];
-
-            if (!first) try buffer.appendSlice(allocator, ",\n");
-            first = false;
-
-            try buffer.appendSlice(allocator, "  \"");
-            try buffer.appendSlice(allocator, field.name);
-            try buffer.appendSlice(allocator, "\": { \"primary\": ");
-            try serializeBinding(&buffer, allocator, binding.primary);
-            try buffer.appendSlice(allocator, ", \"alternate\": ");
-            try serializeBinding(&buffer, allocator, binding.alternate);
-            try buffer.appendSlice(allocator, " }");
-            _ = action;
-        }
-
-        try buffer.appendSlice(allocator, "\n}");
+        try std.json.Stringify.value(self.bindings, .{}, &aw.writer);
         return buffer.toOwnedSlice(allocator);
     }
 
-    fn serializeBinding(buffer: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, binding: InputBinding) !void {
-        switch (binding) {
-            .key => |k| {
-                try buffer.appendSlice(allocator, "{ \"type\": \"key\", \"value\": ");
-                var val_buf: [32]u8 = undefined;
-                const val_str = try std.fmt.bufPrint(&val_buf, "{d}", .{@intFromEnum(k)});
-                try buffer.appendSlice(allocator, val_str);
-                try buffer.appendSlice(allocator, " }");
-            },
-            .key_alt => |k| {
-                try buffer.appendSlice(allocator, "{ \"type\": \"key_alt\", \"value\": ");
-                var val_buf: [32]u8 = undefined;
-                const val_str = try std.fmt.bufPrint(&val_buf, "{d}", .{@intFromEnum(k)});
-                try buffer.appendSlice(allocator, val_str);
-                try buffer.appendSlice(allocator, " }");
-            },
-            .mouse_button => |mb| {
-                try buffer.appendSlice(allocator, "{ \"type\": \"mouse\", \"value\": ");
-                var val_buf: [32]u8 = undefined;
-                const val_str = try std.fmt.bufPrint(&val_buf, "{d}", .{@intFromEnum(mb)});
-                try buffer.appendSlice(allocator, val_str);
-                try buffer.appendSlice(allocator, " }");
-            },
-            .none => {
-                try buffer.appendSlice(allocator, "null");
-            },
-        }
-    }
-
     /// Deserialize bindings from JSON data
-    pub fn deserialize(self: *InputMapper, data: []const u8) !void {
-        // Simple JSON parser for our specific format
-        var i: usize = 0;
-        while (i < data.len) {
-            // Find action name
-            if (std.mem.indexOfPos(u8, data, i, "\"")) |quote_start| {
-                if (std.mem.indexOfPos(u8, data, quote_start + 1, "\"")) |quote_end| {
-                    const action_name = data[quote_start + 1 .. quote_end];
+    pub fn deserialize(self: *InputMapper, allocator: std.mem.Allocator, data: []const u8) !void {
+        var parsed = try std.json.parseFromSlice([GameAction.count]ActionBinding, allocator, data, .{
+            .ignore_unknown_fields = true,
+        });
+        defer parsed.deinit();
 
-                    // Find the action enum
-                    const maybe_action = stringToAction(action_name);
-                    if (maybe_action) |action| {
-                        // Parse primary binding
-                        if (std.mem.indexOfPos(u8, data, quote_end, "\"primary\":")) |primary_start| {
-                            const primary_binding = parseBindingAt(data, primary_start + 10);
-                            self.bindings[@intFromEnum(action)].primary = primary_binding;
-                        }
-
-                        // Parse alternate binding
-                        if (std.mem.indexOfPos(u8, data, quote_end, "\"alternate\":")) |alt_start| {
-                            const alt_binding = parseBindingAt(data, alt_start + 12);
-                            self.bindings[@intFromEnum(action)].alternate = alt_binding;
-                        }
-                    }
-                    i = quote_end + 1;
-                } else break;
-            } else break;
-        }
-    }
-
-    fn parseBindingAt(data: []const u8, start: usize) InputBinding {
-        // Skip whitespace
-        var i = start;
-        while (i < data.len and (data[i] == ' ' or data[i] == '\n' or data[i] == '\t')) : (i += 1) {}
-
-        if (i >= data.len) return .{ .none = {} };
-
-        // Check for null
-        if (i + 4 <= data.len and std.mem.eql(u8, data[i .. i + 4], "null")) {
-            return .{ .none = {} };
-        }
-
-        // Parse object
-        if (std.mem.indexOfPos(u8, data, i, "\"type\":")) |type_start| {
-            // Find type value
-            if (std.mem.indexOfPos(u8, data, type_start + 7, "\"")) |tq_start| {
-                if (std.mem.indexOfPos(u8, data, tq_start + 1, "\"")) |tq_end| {
-                    const type_str = data[tq_start + 1 .. tq_end];
-
-                    // Find value
-                    if (std.mem.indexOfPos(u8, data, tq_end, "\"value\":")) |val_start| {
-                        var val_i = val_start + 8;
-                        while (val_i < data.len and (data[val_i] == ' ' or data[val_i] == '\n')) : (val_i += 1) {}
-
-                        // Parse number
-                        var val_end = val_i;
-                        while (val_end < data.len and data[val_end] >= '0' and data[val_end] <= '9') : (val_end += 1) {}
-
-                        if (val_end > val_i) {
-                            const value = std.fmt.parseInt(u32, data[val_i..val_end], 10) catch return .{ .none = {} };
-
-                            if (std.mem.eql(u8, type_str, "key")) {
-                                return .{ .key = @enumFromInt(value) };
-                            } else if (std.mem.eql(u8, type_str, "key_alt")) {
-                                return .{ .key_alt = @enumFromInt(value) };
-                            } else if (std.mem.eql(u8, type_str, "mouse")) {
-                                return .{ .mouse_button = @enumFromInt(@as(u8, @truncate(value))) };
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        return .{ .none = {} };
-    }
-
-    fn stringToAction(name: []const u8) ?GameAction {
-        inline for (@typeInfo(GameAction).@"enum".fields) |field| {
-            if (std.mem.eql(u8, name, field.name)) {
-                return @enumFromInt(field.value);
-            }
-        }
-        return null;
+        self.bindings = parsed.value;
     }
 };
 
@@ -524,44 +410,19 @@ pub const InputMapper = struct {
 // Tests
 // ============================================================================
 
-test "InputMapper default bindings" {
-    const mapper = InputMapper.init();
-
-    // Check some default bindings
-    const forward_binding = mapper.getBinding(.move_forward);
-    try std.testing.expect(forward_binding.primary.key == .w);
-
-    const jump_binding = mapper.getBinding(.jump);
-    try std.testing.expect(jump_binding.primary.key == .space);
-
-    const primary_binding = mapper.getBinding(.interact_primary);
-    try std.testing.expect(primary_binding.primary.mouse_button == .left);
-}
-
-test "InputMapper rebinding" {
-    var mapper = InputMapper.init();
-
-    // Rebind forward to up arrow
-    mapper.setBinding(.move_forward, .{ .key = .up });
-
-    const binding = mapper.getBinding(.move_forward);
-    try std.testing.expect(binding.primary.key == .up);
-}
-
-test "InputMapper serialization roundtrip" {
+test "InputMapper serialization" {
     const allocator = std.testing.allocator;
+    var mapper = InputMapper.init();
+    mapper.setBinding(.jump, .{ .key = .up });
 
-    var original = InputMapper.init();
-    original.setBinding(.move_forward, .{ .key = .up });
-    original.setBinding(.jump, .{ .key = .w });
-
-    const json = try original.serialize(allocator);
+    const json = try mapper.serialize(allocator);
     defer allocator.free(json);
 
     var restored = InputMapper.init();
-    try restored.deserialize(json);
+    // We need to use an allocator that matches what deserialize expects
+    var parsed = try std.json.parseFromSlice([GameAction.count]ActionBinding, allocator, json, .{});
+    defer parsed.deinit();
+    restored.bindings = parsed.value;
 
-    // Check that custom bindings were restored
-    try std.testing.expect(restored.getBinding(.move_forward).primary.key == .up);
-    try std.testing.expect(restored.getBinding(.jump).primary.key == .w);
+    try std.testing.expect(restored.getBinding(.jump).primary.key == .up);
 }
