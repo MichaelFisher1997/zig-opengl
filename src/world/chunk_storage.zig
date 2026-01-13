@@ -112,23 +112,9 @@ pub const ChunkStorage = struct {
         return false;
     }
 
-    pub fn iterator(self: *ChunkStorage) struct {
-        storage: *ChunkStorage,
-        inner: std.HashMap(ChunkKey, *ChunkData, ChunkKeyContext, 80).Iterator,
-
-        pub fn next(it: *@This()) ?struct { ChunkKey, *ChunkData } {
-            it.storage.chunks_mutex.lockShared();
-            defer it.storage.chunks_mutex.unlockShared();
-            return it.inner.next();
-        }
-    } {
-        return .{
-            .storage = self,
-            .inner = self.chunks.iterator(),
-        };
-    }
-
-    pub fn iteratorExcludingLock(self: *ChunkStorage) std.HashMap(ChunkKey, *ChunkData, ChunkKeyContext, 80).Iterator {
+    /// Unsafe iterator - caller must hold chunks_mutex!
+    /// Using next() on the returned iterator is not thread-safe without external locking.
+    pub fn iteratorUnsafe(self: *ChunkStorage) std.HashMap(ChunkKey, *ChunkData, ChunkKeyContext, 80).Iterator {
         return self.chunks.iterator();
     }
 };

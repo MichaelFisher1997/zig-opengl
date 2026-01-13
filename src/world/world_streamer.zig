@@ -13,12 +13,13 @@ const RingBuffer = @import("../engine/core/ring_buffer.zig").RingBuffer;
 const TerrainGenerator = @import("worldgen/generator.zig").TerrainGenerator;
 const LODManager = @import("lod_manager.zig").LODManager;
 const worldToChunk = @import("chunk.zig").worldToChunk;
+const CHUNK_UNLOAD_BUFFER = @import("chunk.zig").CHUNK_UNLOAD_BUFFER;
 const GlobalVertexAllocator = @import("chunk_allocator.zig").GlobalVertexAllocator;
 const log = @import("../engine/core/log.zig");
 
 /// Buffer distance beyond render_distance for chunk unloading.
 /// Prevents thrashing when player moves near chunk boundaries.
-const CHUNK_UNLOAD_BUFFER: i32 = 1;
+// const CHUNK_UNLOAD_BUFFER: i32 = 1;
 
 /// Player movement tracking for predictive chunk loading
 pub const PlayerMovement = struct {
@@ -96,6 +97,9 @@ pub const WorldStreamer = struct {
 
     paused: bool = false,
 
+    const GEN_WORKERS = 4;
+    const MESH_WORKERS = 3;
+
     pub fn init(allocator: std.mem.Allocator, storage: *ChunkStorage, generator: *TerrainGenerator, render_distance: i32) !*WorldStreamer {
         const streamer = try allocator.create(WorldStreamer);
 
@@ -119,8 +123,8 @@ pub const WorldStreamer = struct {
             .render_distance = render_distance,
         };
 
-        streamer.gen_pool = try WorkerPool.init(allocator, 4, gen_queue, streamer, processGenJob);
-        streamer.mesh_pool = try WorkerPool.init(allocator, 3, mesh_queue, streamer, processMeshJob);
+        streamer.gen_pool = try WorkerPool.init(allocator, GEN_WORKERS, gen_queue, streamer, processGenJob);
+        streamer.mesh_pool = try WorkerPool.init(allocator, MESH_WORKERS, mesh_queue, streamer, processMeshJob);
 
         return streamer;
     }
@@ -150,7 +154,7 @@ pub const WorldStreamer = struct {
             // Reset chunks that were waiting for generation or meshing
             self.storage.chunks_mutex.lock();
             defer self.storage.chunks_mutex.unlock();
-            var iter = self.storage.iteratorExcludingLock();
+            var iter = self.storage.iteratorUnsafe();
             while (iter.next()) |entry| {
                 const chunk = &entry.value_ptr.*.chunk;
                 if (chunk.state == .generating) {
@@ -228,7 +232,7 @@ pub const WorldStreamer = struct {
         }
 
         self.storage.chunks_mutex.lockShared();
-        var mesh_iter = self.storage.iteratorExcludingLock();
+        var mesh_iter = self.storage.iteratorUnsafe();
 
         const render_dist = if (lod_manager) |mgr| @min(self.render_distance, mgr.config.lod0_radius) else self.render_distance;
 
@@ -303,7 +307,7 @@ pub const WorldStreamer = struct {
         var to_remove = std.ArrayListUnmanaged(ChunkKey).empty;
         defer to_remove.deinit(self.allocator);
 
-        var unload_iter = self.storage.iteratorExcludingLock();
+        var unload_iter = self.storage.iteratorUnsafe();
         while (unload_iter.next()) |entry| {
             const key = entry.key_ptr.*;
             const data = entry.value_ptr.*;

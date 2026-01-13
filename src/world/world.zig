@@ -30,10 +30,11 @@ const RingBuffer = @import("../engine/core/ring_buffer.zig").RingBuffer;
 const log = @import("../engine/core/log.zig");
 
 const LODConfig = @import("lod_chunk.zig").LODConfig;
+const CHUNK_UNLOAD_BUFFER = @import("chunk.zig").CHUNK_UNLOAD_BUFFER;
 
 /// Buffer distance beyond render_distance for chunk unloading.
 /// Prevents thrashing when player moves near chunk boundaries.
-const CHUNK_UNLOAD_BUFFER: i32 = 1;
+// const CHUNK_UNLOAD_BUFFER: i32 = 1;
 
 pub const ChunkPos = struct { x: i32, z: i32 };
 
@@ -221,7 +222,7 @@ pub const World = struct {
         self.storage.chunks_mutex.lockShared();
         defer self.storage.chunks_mutex.unlockShared();
         var total_verts: u64 = 0;
-        var iter = self.storage.chunks.iterator();
+        var iter = self.storage.iteratorUnsafe();
         while (iter.next()) |entry| {
             if (entry.value_ptr.*.mesh.solid_allocation) |alloc| total_verts += alloc.count;
             if (entry.value_ptr.*.mesh.fluid_allocation) |alloc| total_verts += alloc.count;
