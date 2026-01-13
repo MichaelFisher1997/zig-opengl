@@ -39,6 +39,7 @@ const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").Reso
 const AppState = @import("state.zig").AppState;
 const Settings = @import("state.zig").Settings;
 const Menus = @import("menus.zig");
+const InputSettings = @import("settings.zig").Settings;
 
 // Player physics and interaction
 const Player = @import("player.zig").Player;
@@ -71,6 +72,7 @@ pub const App = struct {
 
     settings: Settings,
     input: Input,
+    input_mapper: InputMapper,
     time: Time,
     camera: Camera,
 
@@ -149,6 +151,11 @@ pub const App = struct {
 
         const ui = try UISystem.init(rhi, input.window_width, input.window_height);
 
+        var input_mapper = InputMapper.init();
+        // Load custom bindings if they exist
+        const input_settings = InputSettings.load(allocator);
+        input_mapper = input_settings.input_mapper;
+
         const app = try allocator.create(App);
         app.* = .{
             .allocator = allocator,
@@ -173,6 +180,7 @@ pub const App = struct {
             .cloud_pass = .{},
             .settings = settings,
             .input = input,
+            .input_mapper = input_mapper,
             .time = time,
             .camera = camera,
             .ui = ui,
@@ -222,6 +230,15 @@ pub const App = struct {
         self.allocator.destroy(self);
     }
 
+    pub fn saveAllSettings(self: *const App) void {
+        self.settings.save(self.allocator);
+        var input_settings = InputSettings.init(self.allocator);
+        input_settings.input_mapper = self.input_mapper;
+        input_settings.save() catch |err| {
+            log.log.err("Failed to save input settings: {}", .{err});
+        };
+    }
+
     pub fn runSingleFrame(self: *App) !void {
         self.rhi.setViewport(self.input.window_width, self.input.window_height);
 
@@ -260,7 +277,7 @@ pub const App = struct {
         const mouse_y: f32 = @floatFromInt(mouse_pos.y);
         const mouse_clicked = self.input.isMouseButtonPressed(.left);
 
-        if (self.input.isKeyPressed(.escape)) {
+        if (self.input_mapper.isActionPressed(&self.input, .ui_back)) {
             var handled = false;
             if (self.game_session) |session| {
                 if (session.map_controller.show_map) {
@@ -280,11 +297,11 @@ pub const App = struct {
                     .settings => self.app_state = self.last_state,
                     .graphics => self.app_state = .settings,
                     .resource_packs => {
-                        self.settings.save(self.allocator);
+                        self.saveAllSettings();
                         self.app_state = self.last_state;
                     },
                     .environment => {
-                        self.settings.save(self.allocator);
+                        self.saveAllSettings();
                         self.app_state = self.last_state;
                     },
                     .world => {
@@ -301,22 +318,22 @@ pub const App = struct {
 
         if (in_world or in_pause) {
             if (self.game_session) |session| {
-                if (in_world and InputMapper.isActionPressed(&self.input, .tab_menu)) self.input.setMouseCapture(self.window_manager.window, !self.input.mouse_captured);
-                if (InputMapper.isActionPressed(&self.input, .toggle_wireframe)) {
+                if (in_world and self.input_mapper.isActionPressed(&self.input, .tab_menu)) self.input.setMouseCapture(self.window_manager.window, !self.input.mouse_captured);
+                if (self.input_mapper.isActionPressed(&self.input, .toggle_wireframe)) {
                     self.settings.wireframe_enabled = !self.settings.wireframe_enabled;
                     self.rhi.setWireframe(self.settings.wireframe_enabled);
                 }
-                if (InputMapper.isActionPressed(&self.input, .toggle_textures)) {
+                if (self.input_mapper.isActionPressed(&self.input, .toggle_textures)) {
                     self.settings.textures_enabled = !self.settings.textures_enabled;
                     self.rhi.setTexturesEnabled(self.settings.textures_enabled);
                 }
-                if (InputMapper.isActionPressed(&self.input, .toggle_vsync)) {
+                if (self.input_mapper.isActionPressed(&self.input, .toggle_vsync)) {
                     self.settings.vsync = !self.settings.vsync;
                     self.rhi.setVSync(self.settings.vsync);
                 }
 
                 // Update session (handles internal input, physics, etc.)
-                try session.update(self.time.delta_time, self.time.elapsed, &self.input, &self.atlas, self.window_manager.window, in_pause);
+                try session.update(self.time.delta_time, self.time.elapsed, &self.input, &self.input_mapper, &self.atlas, self.window_manager.window, in_pause);
                 self.camera = session.player.camera;
 
                 if (session.world.render_distance != self.settings.render_distance) {
@@ -432,7 +449,7 @@ pub const App = struct {
             }
         } else if (self.ui) |*u| {
             u.begin();
-            const ctx = Menus.MenuContext{ .ui = u, .input = &self.input, .screen_w = screen_w, .screen_h = screen_h, .time = &self.time, .allocator = self.allocator, .window_manager = &self.window_manager, .resource_pack_manager = &self.resource_pack_manager };
+            const ctx = Menus.MenuContext{ .ui = u, .input = &self.input, .input_mapper = &self.input_mapper, .screen_w = screen_w, .screen_h = screen_h, .time = &self.time, .allocator = self.allocator, .window_manager = &self.window_manager, .resource_pack_manager = &self.resource_pack_manager };
             switch (self.app_state) {
                 .home => {
                     const action = Menus.drawHome(ctx, &self.app_state, &self.last_state, &self.seed_focused);

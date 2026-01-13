@@ -6,6 +6,8 @@ const Mat4 = @import("../math/mat4.zig").Mat4;
 const Input = @import("../input/input.zig").Input;
 const Key = @import("../core/interfaces.zig").Key;
 
+const InputMapper = @import("../../game/input_mapper.zig").InputMapper;
+
 pub const Camera = struct {
     position: Vec3,
 
@@ -65,7 +67,7 @@ pub const Camera = struct {
     }
 
     /// Update camera from input (call once per frame)
-    pub fn update(self: *Camera, input: *const Input, delta_time: f32) void {
+    pub fn update(self: *Camera, input: *const Input, mapper: *const InputMapper, delta_time: f32) void {
         // Mouse look
         const mouse_delta = input.getMouseDelta();
         if (input.mouse_captured) {
@@ -82,12 +84,13 @@ pub const Camera = struct {
         // Keyboard movement
         var move_dir = Vec3.zero;
 
-        if (input.isKeyDown(.w)) move_dir = move_dir.add(self.forward);
-        if (input.isKeyDown(.s)) move_dir = move_dir.sub(self.forward);
-        if (input.isKeyDown(.a)) move_dir = move_dir.sub(self.right);
-        if (input.isKeyDown(.d)) move_dir = move_dir.add(self.right);
-        if (input.isKeyDown(.space)) move_dir = move_dir.add(Vec3.up);
-        if (input.isKeyDown(.left_shift)) move_dir = move_dir.sub(Vec3.up);
+        const move_vec = mapper.getMovementVector(input);
+        if (move_vec.z > 0) move_dir = move_dir.add(self.forward);
+        if (move_vec.z < 0) move_dir = move_dir.sub(self.forward);
+        if (move_vec.x < 0) move_dir = move_dir.sub(self.right);
+        if (move_vec.x > 0) move_dir = move_dir.add(self.right);
+        if (mapper.isActionActive(input, .jump)) move_dir = move_dir.add(Vec3.up);
+        if (mapper.isActionActive(input, .crouch)) move_dir = move_dir.sub(Vec3.up);
 
         // Normalize and apply speed
         if (move_dir.lengthSquared() > 0) {
