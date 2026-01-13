@@ -28,6 +28,8 @@ const TextureAtlas = @import("../engine/graphics/texture_atlas.zig").TextureAtla
 const Texture = @import("../engine/graphics/texture.zig").Texture;
 const render_graph_pkg = @import("../engine/graphics/render_graph.zig");
 const RenderGraph = render_graph_pkg.RenderGraph;
+const AtmosphereSystem = @import("../engine/graphics/atmosphere_system.zig").AtmosphereSystem;
+const MaterialSystem = @import("../engine/graphics/material_system.zig").MaterialSystem;
 const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").ResourcePackManager;
 
 const AppState = @import("state.zig").AppState;
@@ -259,6 +261,8 @@ pub const App = struct {
     atlas: TextureAtlas,
     env_map: ?@import("../engine/graphics/texture.zig").Texture,
     render_graph: RenderGraph,
+    atmosphere_system: *AtmosphereSystem,
+    material_system: *MaterialSystem,
     shadow_passes: [3]render_graph_pkg.ShadowPass,
     g_pass: render_graph_pkg.GPass,
     ssao_pass: render_graph_pkg.SSAOPass,
@@ -354,6 +358,8 @@ pub const App = struct {
         atmosphere.setTimeOfDay(0.25);
         const clouds = CloudState{};
 
+        const atmosphere_system = try AtmosphereSystem.init(allocator, rhi);
+
         const camera = Camera.init(.{
             .position = Vec3.init(8, 100, 8),
             .pitch = -0.3,
@@ -372,6 +378,8 @@ pub const App = struct {
             .atlas = atlas,
             .env_map = env_map,
             .render_graph = RenderGraph.init(allocator),
+            .atmosphere_system = atmosphere_system,
+            .material_system = undefined,
             .shadow_passes = .{
                 render_graph_pkg.ShadowPass.init(0),
                 render_graph_pkg.ShadowPass.init(1),
@@ -407,6 +415,8 @@ pub const App = struct {
             .debug_state = .{},
         };
 
+        app.material_system = try MaterialSystem.init(allocator, rhi, &app.atlas);
+
         // Build RenderGraph (OCP: We can easily modify this list based on quality)
         try app.render_graph.addPass(app.shadow_passes[0].pass());
         try app.render_graph.addPass(app.shadow_passes[1].pass());
@@ -428,6 +438,8 @@ pub const App = struct {
         if (self.ui) |*u| u.deinit();
 
         self.render_graph.deinit();
+        self.atmosphere_system.deinit();
+        self.material_system.deinit();
         self.block_outline.deinit();
         self.hand_renderer.deinit();
         self.atlas.deinit();
@@ -684,25 +696,19 @@ pub const App = struct {
                     };
                 };
 
-                const atlas_handles = rhi_pkg.TextureAtlasHandles{
-                    .diffuse = self.atlas.texture.handle,
-                    .normal = if (self.atlas.normal_texture) |t| t.handle else 0,
-                    .roughness = if (self.atlas.roughness_texture) |t| t.handle else 0,
-                    .displacement = if (self.atlas.displacement_texture) |t| t.handle else 0,
-                    .env = if (self.env_map) |t| t.handle else 0,
-                };
-
                 self.rhi.updateGlobalUniforms(view_proj_render, self.camera.position, self.atmosphere.sun_dir, self.atmosphere.sun_color, self.atmosphere.time_of_day, self.atmosphere.fog_color, self.atmosphere.fog_density, self.atmosphere.fog_enabled, self.atmosphere.sun_intensity, self.atmosphere.ambient_intensity, self.settings.textures_enabled, cloud_params);
 
                 const render_ctx = render_graph_pkg.SceneContext{
                     .rhi = self.rhi,
                     .world = active_world,
                     .camera = &self.camera,
+                    .atmosphere_system = self.atmosphere_system,
+                    .material_system = self.material_system,
                     .aspect = aspect,
                     .sky_params = sky_params,
                     .cloud_params = cloud_params,
                     .main_shader = self.shader,
-                    .atlas = atlas_handles,
+                    .env_map_handle = if (self.env_map) |t| t.handle else 0,
                     .shadow_distance = self.settings.shadow_distance,
                     .shadow_resolution = self.settings.getShadowResolution(),
                     .ssao_enabled = self.settings.ssao_enabled,

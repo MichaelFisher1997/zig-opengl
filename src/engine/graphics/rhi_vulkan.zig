@@ -4235,6 +4235,27 @@ fn getMaxMSAASamples(ctx_ptr: *anyopaque) u8 {
     return ctx.vulkan_device.max_msaa_samples;
 }
 
+fn drawIndexed(ctx_ptr: *anyopaque, vbo_handle: rhi.BufferHandle, ebo_handle: rhi.BufferHandle, count: u32) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (!ctx.frame_in_progress) return;
+
+    ctx.mutex.lock();
+    const vbo_opt = ctx.buffers.get(vbo_handle);
+    const ebo_opt = ctx.buffers.get(ebo_handle);
+    ctx.mutex.unlock();
+
+    if (vbo_opt) |vbo| {
+        if (ebo_opt) |ebo| {
+            ctx.draw_call_count += 1;
+            const cb = ctx.command_buffers[ctx.current_sync_frame];
+            const offset: c.VkDeviceSize = 0;
+            c.vkCmdBindVertexBuffers(cb, 0, 1, &vbo.buffer, &offset);
+            c.vkCmdBindIndexBuffer(cb, ebo.buffer, 0, c.VK_INDEX_TYPE_UINT16);
+            c.vkCmdDrawIndexed(cb, count, 1, 0, 0, 0);
+        }
+    }
+}
+
 fn drawIndirect(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, command_buffer: rhi.BufferHandle, offset: usize, draw_count: u32, stride: u32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frame_in_progress) return;
@@ -4493,6 +4514,40 @@ fn flushUI(ctx: *VulkanContext) void {
         c.vkCmdDraw(command_buffer, count, 1, ctx.ui_flushed_vertex_count, 0);
         ctx.ui_flushed_vertex_count = total_vertices;
     }
+}
+
+fn bindBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, usage: rhi.BufferUsage) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (!ctx.frame_in_progress) return;
+
+    ctx.mutex.lock();
+    const buf_opt = ctx.buffers.get(handle);
+    ctx.mutex.unlock();
+
+    if (buf_opt) |buf| {
+        const cb = ctx.command_buffers[ctx.current_sync_frame];
+        const offset: c.VkDeviceSize = 0;
+        switch (usage) {
+            .vertex => c.vkCmdBindVertexBuffers(cb, 0, 1, &buf.buffer, &offset),
+            .index => c.vkCmdBindIndexBuffer(cb, buf.buffer, 0, c.VK_INDEX_TYPE_UINT16),
+            else => {},
+        }
+    }
+}
+
+fn pushConstants(ctx_ptr: *anyopaque, stages: rhi.ShaderStageFlags, offset: u32, size: u32, data: *const anyopaque) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (!ctx.frame_in_progress) return;
+
+    var vk_stages: c.VkShaderStageFlags = 0;
+    if (stages.vertex) vk_stages |= c.VK_SHADER_STAGE_VERTEX_BIT;
+    if (stages.fragment) vk_stages |= c.VK_SHADER_STAGE_FRAGMENT_BIT;
+    if (stages.compute) vk_stages |= c.VK_SHADER_STAGE_COMPUTE_BIT;
+
+    const cb = ctx.command_buffers[ctx.current_sync_frame];
+    // Currently we only have one main pipeline layout used for everything.
+    // In a more SOLID system, we'd bind the layout associated with the current shader.
+    c.vkCmdPushConstants(cb, ctx.pipeline_layout, vk_stages, offset, size, data);
 }
 
 // UI Rendering functions
@@ -4858,9 +4913,12 @@ const vtable = rhi.RHI.VTable{
         .setTextureUniforms = setTextureUniforms,
         .draw = draw,
         .drawOffset = drawOffset,
+        .drawIndexed = drawIndexed,
         .drawIndirect = drawIndirect,
         .drawInstance = drawInstance,
         .setViewport = setViewport,
+        .bindBuffer = bindBuffer,
+        .pushConstants = pushConstants,
         .setClearColor = setClearColor,
         .beginUI = beginUI,
         .endUI = endUI,

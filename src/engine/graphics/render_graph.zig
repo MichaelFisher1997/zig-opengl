@@ -6,16 +6,20 @@ const rhi_pkg = @import("rhi.zig");
 const Mat4 = @import("../math/mat4.zig").Mat4;
 const Vec3 = @import("../math/vec3.zig").Vec3;
 const CSM = @import("csm.zig");
+const AtmosphereSystem = @import("atmosphere_system.zig").AtmosphereSystem;
+const MaterialSystem = @import("material_system.zig").MaterialSystem;
 
 pub const SceneContext = struct {
     rhi: RHI,
     world: *World,
     camera: *Camera,
+    atmosphere_system: *AtmosphereSystem,
+    material_system: *MaterialSystem,
     aspect: f32,
     sky_params: rhi_pkg.SkyParams,
     cloud_params: rhi_pkg.CloudParams,
     main_shader: rhi_pkg.ShaderHandle,
-    atlas: rhi_pkg.TextureAtlasHandles,
+    env_map_handle: rhi_pkg.TextureHandle,
     shadow_distance: f32,
     shadow_resolution: u32,
     ssao_enabled: bool,
@@ -144,7 +148,8 @@ pub const GPass = struct {
         if (!ctx.ssao_enabled) return;
 
         ctx.rhi.beginGPass();
-        ctx.rhi.bindTexture(ctx.atlas.diffuse, 1);
+        const atlas = ctx.material_system.getAtlasHandles(ctx.env_map_handle);
+        ctx.rhi.bindTexture(atlas.diffuse, 1);
         const view_proj = Mat4.perspectiveReverseZ(ctx.camera.fov, ctx.aspect, ctx.camera.near, ctx.camera.far).multiply(ctx.camera.getViewMatrixOriginCentered());
         ctx.world.render(view_proj, ctx.camera.position);
         ctx.rhi.endGPass();
@@ -184,7 +189,7 @@ pub const SkyPass = struct {
 
     fn execute(ptr: *anyopaque, ctx: SceneContext) void {
         _ = ptr;
-        ctx.rhi.drawSky(ctx.sky_params);
+        ctx.atmosphere_system.renderSky(ctx.sky_params);
     }
 };
 
@@ -204,11 +209,7 @@ pub const OpaquePass = struct {
         _ = ptr;
         const rhi = ctx.rhi;
         rhi.bindShader(ctx.main_shader);
-        rhi.bindTexture(ctx.atlas.diffuse, 1);
-        rhi.bindTexture(ctx.atlas.normal, 6);
-        rhi.bindTexture(ctx.atlas.roughness, 7);
-        rhi.bindTexture(ctx.atlas.displacement, 8);
-        rhi.bindTexture(ctx.atlas.env, 9);
+        ctx.material_system.bindTerrainMaterial(ctx.env_map_handle);
         const view_proj = Mat4.perspectiveReverseZ(ctx.camera.fov, ctx.aspect, ctx.camera.near, ctx.camera.far).multiply(ctx.camera.getViewMatrixOriginCentered());
         ctx.world.render(view_proj, ctx.camera.position);
     }
@@ -229,9 +230,6 @@ pub const CloudPass = struct {
     fn execute(ptr: *anyopaque, ctx: SceneContext) void {
         _ = ptr;
         const view_proj = Mat4.perspectiveReverseZ(ctx.camera.fov, ctx.aspect, ctx.camera.near, ctx.camera.far).multiply(ctx.camera.getViewMatrixOriginCentered());
-        var params = ctx.cloud_params;
-        params.view_proj = view_proj;
-        params.cam_pos = ctx.camera.position;
-        ctx.rhi.drawClouds(params);
+        ctx.atmosphere_system.renderClouds(ctx.cloud_params, view_proj);
     }
 };

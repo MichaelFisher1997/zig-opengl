@@ -89,6 +89,13 @@ pub const DrawMode = enum {
     points,
 };
 
+pub const ShaderStageFlags = packed struct(u32) {
+    vertex: bool = false,
+    fragment: bool = false,
+    compute: bool = false,
+    _pad: u29 = 0,
+};
+
 pub const DrawIndirectCommand = extern struct {
     vertexCount: u32,
     instanceCount: u32,
@@ -116,6 +123,25 @@ pub const SkyParams = struct {
     sun_intensity: f32,
     moon_intensity: f32,
     time: f32,
+};
+
+pub const SkyPushConstants = extern struct {
+    cam_forward: [4]f32,
+    cam_right: [4]f32,
+    cam_up: [4]f32,
+    sun_dir: [4]f32,
+    sky_color: [4]f32,
+    horizon_color: [4]f32,
+    params: [4]f32, // x=aspect, y=tan_half_fov, z=sun_intensity, w=moon_intensity
+    time: [4]f32, // x=time, y=cam_pos.x, z=cam_pos.y, w=cam_pos.z
+};
+
+pub const CloudPushConstants = extern struct {
+    view_proj: [4][4]f32,
+    camera_pos: [4]f32, // xyz = camera position, w = cloud_height
+    cloud_params: [4]f32, // x = coverage, y = scale, z = wind_offset_x, w = wind_offset_z
+    sun_params: [4]f32, // xyz = sun_dir, w = sun_intensity
+    fog_params: [4]f32, // xyz = fog_color, w = fog_density
 };
 
 pub const ShadowParams = struct {
@@ -251,12 +277,18 @@ pub const IRenderContext = struct {
         setTextureUniforms: *const fn (ptr: *anyopaque, texture_enabled: bool, shadow_map_handles: [SHADOW_CASCADE_COUNT]TextureHandle) void,
         draw: *const fn (ptr: *anyopaque, handle: BufferHandle, count: u32, mode: DrawMode) void,
         drawOffset: *const fn (ptr: *anyopaque, handle: BufferHandle, count: u32, mode: DrawMode, offset: usize) void,
+        drawIndexed: *const fn (ptr: *anyopaque, vbo: BufferHandle, ebo: BufferHandle, count: u32) void,
         drawIndirect: *const fn (ptr: *anyopaque, handle: BufferHandle, command_buffer: BufferHandle, offset: usize, draw_count: u32, stride: u32) void,
         drawInstance: *const fn (ptr: *anyopaque, handle: BufferHandle, count: u32, instance_index: u32) void,
         setViewport: *const fn (ptr: *anyopaque, width: u32, height: u32) void,
+
+        // Low-level primitives for Systems
+        bindBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle, usage: BufferUsage) void,
+        pushConstants: *const fn (ptr: *anyopaque, stages: ShaderStageFlags, offset: u32, size: u32, data: *const anyopaque) void,
+
         setClearColor: *const fn (ptr: *anyopaque, color: Vec3) void,
 
-        // UI & Atmospheric logic (to be moved eventually)
+        // UI logic (to be moved eventually)
         beginUI: *const fn (ptr: *anyopaque, screen_width: f32, screen_height: f32) void,
         endUI: *const fn (ptr: *anyopaque) void,
         drawUIQuad: *const fn (ptr: *anyopaque, rect: Rect, color: Color) void,
@@ -290,7 +322,12 @@ pub const IRenderContext = struct {
     pub fn drawOffset(self: IRenderContext, handle: BufferHandle, count: u32, mode: DrawMode, offset: usize) void {
         self.vtable.drawOffset(self.ptr, handle, count, mode, offset);
     }
-    // ... add more wrappers as needed ...
+    pub fn drawIndexed(self: IRenderContext, vbo: BufferHandle, ebo: BufferHandle, count: u32) void {
+        self.vtable.drawIndexed(self.ptr, vbo, ebo, count);
+    }
+    pub fn pushConstants(self: IRenderContext, stages: ShaderStageFlags, offset: u32, size: u32, data: *const anyopaque) void {
+        self.vtable.pushConstants(self.ptr, stages, offset, size, data);
+    }
 };
 
 pub const IDeviceQuery = struct {
@@ -399,6 +436,9 @@ pub const RHI = struct {
     pub fn drawOffset(self: RHI, handle: BufferHandle, count: u32, mode: DrawMode, offset: usize) void {
         self.vtable.render.drawOffset(self.ptr, handle, count, mode, offset);
     }
+    pub fn drawIndexed(self: RHI, vbo: BufferHandle, ebo: BufferHandle, count: u32) void {
+        self.vtable.render.drawIndexed(self.ptr, vbo, ebo, count);
+    }
     pub fn bindTexture(self: RHI, handle: TextureHandle, slot: u32) void {
         self.vtable.render.bindTexture(self.ptr, handle, slot);
     }
@@ -407,6 +447,9 @@ pub const RHI = struct {
     }
     pub fn setModelMatrix(self: RHI, model: Mat4, mask_radius: f32) void {
         self.vtable.render.setModelMatrix(self.ptr, model, mask_radius);
+    }
+    pub fn pushConstants(self: RHI, stages: ShaderStageFlags, offset: u32, size: u32, data: *const anyopaque) void {
+        self.vtable.render.pushConstants(self.ptr, stages, offset, size, data);
     }
     pub fn updateGlobalUniforms(self: RHI, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, sun_color: Vec3, time: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32, use_texture: bool, cloud_params: CloudParams) void {
         self.vtable.render.updateGlobalUniforms(self.ptr, view_proj, cam_pos, sun_dir, sun_color, time, fog_color, fog_density, fog_enabled, sun_intensity, ambient, use_texture, cloud_params);
