@@ -9,8 +9,19 @@ const EngineContext = Screen.EngineContext;
 const Settings = @import("../state.zig").Settings;
 const GraphicsScreen = @import("graphics.zig").GraphicsScreen;
 
+const PANEL_WIDTH_MAX = 750.0;
+const PANEL_HEIGHT_BASE = 845.0;
+const BG_COLOR = Color.rgba(0.12, 0.14, 0.18, 0.95);
+const BORDER_COLOR = Color.rgba(0.28, 0.33, 0.42, 1.0);
+
 pub const SettingsScreen = struct {
     context: EngineContext,
+
+    pub const vtable = IScreen.VTable{
+        .deinit = deinit,
+        .update = update,
+        .draw = draw,
+    };
 
     pub fn init(allocator: std.mem.Allocator, context: EngineContext) !*SettingsScreen {
         const self = try allocator.create(SettingsScreen);
@@ -21,12 +32,12 @@ pub const SettingsScreen = struct {
     }
 
     pub fn deinit(ptr: *anyopaque) void {
-        const self: *SettingsScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         self.context.allocator.destroy(self);
     }
 
     pub fn update(ptr: *anyopaque, dt: f32) !void {
-        const self: *SettingsScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         _ = dt;
 
         if (self.context.input_mapper.isActionPressed(self.context.input, .ui_back)) {
@@ -36,15 +47,12 @@ pub const SettingsScreen = struct {
     }
 
     pub fn draw(ptr: *anyopaque, ui: *UISystem) !void {
-        const self: *SettingsScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         const ctx = self.context;
         const settings = ctx.settings;
 
         // Draw background screen if it exists
         if (ctx.screen_manager.stack.items.len > 1) {
-            // If we are in-game, we want to see the world
-            // But if we came from Home -> Settings, we might just want a solid background or the home screen
-            // Actually, drawing the previous screen is fine.
             try ctx.screen_manager.stack.items[ctx.screen_manager.stack.items.len - 2].draw(ui);
         }
 
@@ -66,13 +74,13 @@ pub const SettingsScreen = struct {
         const btn_width: f32 = 40.0 * ui_scale;
         const toggle_width: f32 = 160.0 * ui_scale;
 
-        const pw: f32 = @min(screen_w * 0.75, 750.0 * ui_scale);
-        const ph: f32 = 845.0 * ui_scale;
+        const pw: f32 = @min(screen_w * 0.75, PANEL_WIDTH_MAX * ui_scale);
+        const ph: f32 = PANEL_HEIGHT_BASE * ui_scale;
         const px: f32 = (screen_w - pw) * 0.5;
         const py: f32 = (screen_h - ph) * 0.5;
 
-        ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.12, 0.14, 0.18, 0.95));
-        ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.28, 0.33, 0.42, 1.0), 2.0 * ui_scale);
+        ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, BG_COLOR);
+        ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, BORDER_COLOR, 2.0 * ui_scale);
         Font.drawTextCentered(ui, "SETTINGS", screen_w * 0.5, py + 25.0 * ui_scale, title_scale, Color.white);
         var sy: f32 = py + 85.0 * ui_scale;
         const lx: f32 = px + 50.0 * ui_scale;
@@ -133,6 +141,7 @@ pub const SettingsScreen = struct {
         // Advanced Graphics Button
         if (Widgets.drawButton(ui, .{ .x = px + (pw - 250.0 * ui_scale) * 0.5, .y = sy, .width = 250.0 * ui_scale, .height = btn_height + 10.0 * ui_scale }, "ADVANCED GRAPHICS...", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             const graphics_screen = try GraphicsScreen.init(ctx.allocator, ctx);
+            errdefer graphics_screen.deinit(graphics_screen);
             ctx.screen_manager.pushScreen(graphics_screen.screen());
         }
         sy += row_height + 15.0 * ui_scale;
@@ -175,25 +184,8 @@ pub const SettingsScreen = struct {
         }
     }
 
-    pub fn onEnter(ptr: *anyopaque) void {
-        _ = ptr;
-    }
-
-    pub fn onExit(ptr: *anyopaque) void {
-        _ = ptr;
-    }
-
-    pub fn screen(self: *SettingsScreen) IScreen {
-        return .{
-            .ptr = self,
-            .vtable = &.{
-                .deinit = deinit,
-                .update = update,
-                .draw = draw,
-                .onEnter = onEnter,
-                .onExit = onExit,
-            },
-        };
+    pub fn screen(self: *@This()) IScreen {
+        return Screen.makeScreen(@This(), self);
     }
 };
 

@@ -8,8 +8,19 @@ const IScreen = Screen.IScreen;
 const EngineContext = Screen.EngineContext;
 const Settings = @import("../state.zig").Settings;
 
+const PANEL_WIDTH_MAX = 850.0;
+const PANEL_HEIGHT_BASE = 850.0;
+const BG_COLOR = Color.rgba(0.12, 0.14, 0.18, 0.95);
+const BORDER_COLOR = Color.rgba(0.28, 0.33, 0.42, 1.0);
+
 pub const GraphicsScreen = struct {
     context: EngineContext,
+
+    pub const vtable = IScreen.VTable{
+        .deinit = deinit,
+        .update = update,
+        .draw = draw,
+    };
 
     pub fn init(allocator: std.mem.Allocator, context: EngineContext) !*GraphicsScreen {
         const self = try allocator.create(GraphicsScreen);
@@ -20,12 +31,12 @@ pub const GraphicsScreen = struct {
     }
 
     pub fn deinit(ptr: *anyopaque) void {
-        const self: *GraphicsScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         self.context.allocator.destroy(self);
     }
 
     pub fn update(ptr: *anyopaque, dt: f32) !void {
-        const self: *GraphicsScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         _ = dt;
 
         if (self.context.input_mapper.isActionPressed(self.context.input, .ui_back)) {
@@ -35,7 +46,7 @@ pub const GraphicsScreen = struct {
     }
 
     pub fn draw(ptr: *anyopaque, ui: *UISystem) !void {
-        const self: *GraphicsScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         const ctx = self.context;
         const settings = ctx.settings;
 
@@ -61,13 +72,13 @@ pub const GraphicsScreen = struct {
         const btn_height: f32 = 34.0 * ui_scale;
         const toggle_width: f32 = 180.0 * ui_scale;
 
-        const pw: f32 = @min(screen_w * 0.8, 850.0 * ui_scale);
-        const ph: f32 = @min(screen_h - 40.0, 850.0 * ui_scale);
+        const pw: f32 = @min(screen_w * 0.8, PANEL_WIDTH_MAX * ui_scale);
+        const ph: f32 = @min(screen_h - 40.0, PANEL_HEIGHT_BASE * ui_scale);
         const px: f32 = (screen_w - pw) * 0.5;
         const py: f32 = (screen_h - ph) * 0.5;
 
-        ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.12, 0.14, 0.18, 0.95));
-        ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.28, 0.33, 0.42, 1.0), 2.0 * ui_scale);
+        ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, BG_COLOR);
+        ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, BORDER_COLOR, 2.0 * ui_scale);
         Font.drawTextCentered(ui, "GRAPHICS SETTINGS", screen_w * 0.5, py + 25.0 * ui_scale, title_scale, Color.white);
 
         var sy: f32 = py + 80.0 * ui_scale;
@@ -169,25 +180,8 @@ pub const GraphicsScreen = struct {
         }
     }
 
-    pub fn onEnter(ptr: *anyopaque) void {
-        _ = ptr;
-    }
-
-    pub fn onExit(ptr: *anyopaque) void {
-        _ = ptr;
-    }
-
-    pub fn screen(self: *GraphicsScreen) IScreen {
-        return .{
-            .ptr = self,
-            .vtable = &.{
-                .deinit = deinit,
-                .update = update,
-                .draw = draw,
-                .onEnter = onEnter,
-                .onExit = onExit,
-            },
-        };
+    pub fn screen(self: *@This()) IScreen {
+        return Screen.makeScreen(@This(), self);
     }
 };
 

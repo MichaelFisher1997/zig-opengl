@@ -197,7 +197,7 @@ pub const App = struct {
             .render_graph = &self.render_graph,
             .atmosphere_system = self.atmosphere_system,
             .material_system = self.material_system,
-            .env_map = &self.env_map,
+            .env_map_ptr = &self.env_map,
             .shader = self.shader,
             .settings = &self.settings,
             .input = &self.input,
@@ -215,17 +215,19 @@ pub const App = struct {
     }
 
     pub fn runSingleFrame(self: *App) !void {
-        self.rhi.setViewport(self.input.window_width, self.input.window_height);
-
         self.time.update();
 
         self.input.beginFrame();
         self.input.pollEvents();
+
         self.rhi.setViewport(self.input.window_width, self.input.window_height);
         if (self.ui) |*u| u.resize(self.input.window_width, self.input.window_height);
 
-        // Update current screen
+        // Update current screen. Transitions happen here.
         try self.screen_manager.update(self.time.delta_time);
+
+        // Early out if no screen is active (e.g. during transition or shutdown)
+        if (self.screen_manager.stack.items.len == 0) return;
 
         self.rhi.beginFrame();
 

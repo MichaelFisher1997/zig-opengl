@@ -23,7 +23,7 @@ pub const EngineContext = struct {
     render_graph: *RenderGraph,
     atmosphere_system: *AtmosphereSystem,
     material_system: *MaterialSystem,
-    env_map: *?Texture,
+    env_map_ptr: *?Texture,
     shader: rhi_pkg.ShaderHandle,
 
     settings: *Settings,
@@ -40,10 +40,10 @@ pub const IScreen = struct {
 
     pub const VTable = struct {
         deinit: *const fn (ptr: *anyopaque) void,
-        update: *const fn (ptr: *anyopaque, dt: f32) anyerror!void,
-        draw: *const fn (ptr: *anyopaque, ui: *UISystem) anyerror!void,
-        onEnter: *const fn (ptr: *anyopaque) void,
-        onExit: *const fn (ptr: *anyopaque) void,
+        update: ?*const fn (ptr: *anyopaque, dt: f32) anyerror!void = null,
+        draw: ?*const fn (ptr: *anyopaque, ui: *UISystem) anyerror!void = null,
+        onEnter: ?*const fn (ptr: *anyopaque) void = null,
+        onExit: ?*const fn (ptr: *anyopaque) void = null,
     };
 
     pub fn deinit(self: IScreen) void {
@@ -51,19 +51,27 @@ pub const IScreen = struct {
     }
 
     pub fn update(self: IScreen, dt: f32) !void {
-        try self.vtable.update(self.ptr, dt);
+        if (self.vtable.update) |update_fn| {
+            try update_fn(self.ptr, dt);
+        }
     }
 
     pub fn draw(self: IScreen, ui: *UISystem) !void {
-        try self.vtable.draw(self.ptr, ui);
+        if (self.vtable.draw) |draw_fn| {
+            try draw_fn(self.ptr, ui);
+        }
     }
 
     pub fn onEnter(self: IScreen) void {
-        self.vtable.onEnter(self.ptr);
+        if (self.vtable.onEnter) |onEnter_fn| {
+            onEnter_fn(self.ptr);
+        }
     }
 
     pub fn onExit(self: IScreen) void {
-        self.vtable.onExit(self.ptr);
+        if (self.vtable.onExit) |onExit_fn| {
+            onExit_fn(self.ptr);
+        }
     }
 };
 
@@ -112,7 +120,9 @@ pub const ScreenManager = struct {
     }
 
     pub fn update(self: *ScreenManager, dt: f32) !void {
-        if (self.next_screen) |next| {
+        while (self.next_screen != null) {
+            const next = self.next_screen.?;
+            self.next_screen = null;
             switch (next) {
                 .push => |screen| {
                     if (self.stack.items.len > 0) {
@@ -141,7 +151,6 @@ pub const ScreenManager = struct {
                     screen.onEnter();
                 },
             }
-            self.next_screen = null;
         }
 
         if (self.stack.items.len > 0) {
@@ -157,3 +166,10 @@ pub const ScreenManager = struct {
         }
     }
 };
+
+pub fn makeScreen(comptime T: type, ptr: *T) IScreen {
+    return .{
+        .ptr = ptr,
+        .vtable = &T.vtable,
+    };
+}

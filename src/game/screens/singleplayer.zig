@@ -13,10 +13,23 @@ const Key = @import("../../engine/core/interfaces.zig").Key;
 const Input = @import("../../engine/input/input.zig").Input;
 const WorldScreen = @import("world.zig").WorldScreen;
 
+const PANEL_WIDTH_MAX = 650.0;
+const PANEL_HEIGHT_BASE = 320.0;
+const BG_COLOR = Color.rgba(0.12, 0.14, 0.18, 0.92);
+const BORDER_COLOR = Color.rgba(0.28, 0.33, 0.42, 1.0);
+const TITLE_COLOR = Color.rgba(0.92, 0.94, 0.97, 1.0);
+const LABEL_COLOR = Color.rgba(0.72, 0.78, 0.86, 1.0);
+
 pub const SingleplayerScreen = struct {
     context: EngineContext,
     seed_input: std.ArrayListUnmanaged(u8),
     seed_focused: bool,
+
+    pub const vtable = IScreen.VTable{
+        .deinit = deinit,
+        .update = update,
+        .draw = draw,
+    };
 
     pub fn init(allocator: std.mem.Allocator, context: EngineContext) !*SingleplayerScreen {
         const self = try allocator.create(SingleplayerScreen);
@@ -29,13 +42,13 @@ pub const SingleplayerScreen = struct {
     }
 
     pub fn deinit(ptr: *anyopaque) void {
-        const self: *SingleplayerScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         self.seed_input.deinit(self.context.allocator);
         self.context.allocator.destroy(self);
     }
 
     pub fn update(ptr: *anyopaque, dt: f32) !void {
-        const self: *SingleplayerScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         _ = dt;
 
         if (self.context.input_mapper.isActionPressed(self.context.input, .ui_back)) {
@@ -49,7 +62,7 @@ pub const SingleplayerScreen = struct {
     }
 
     pub fn draw(ptr: *anyopaque, ui: *UISystem) !void {
-        const self: *SingleplayerScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         const ctx = self.context;
 
         const mouse_pos = ctx.input.getMousePosition();
@@ -60,22 +73,22 @@ pub const SingleplayerScreen = struct {
         const screen_w: f32 = @floatFromInt(ctx.input.window_width);
         const screen_h: f32 = @floatFromInt(ctx.input.window_height);
 
-        // Scale UI based on screen height for better readability at high resolutions
+        // Scale UI based on screen height
         const ui_scale: f32 = @max(1.0, screen_h / 720.0);
         const title_scale: f32 = 3.5 * ui_scale;
         const label_scale: f32 = 2.5 * ui_scale;
         const btn_scale: f32 = 2.2 * ui_scale;
         const input_scale: f32 = 2.5 * ui_scale;
 
-        const pw: f32 = @min(screen_w * 0.7, 650.0 * ui_scale);
-        const ph: f32 = 320.0 * ui_scale;
+        const pw: f32 = @min(screen_w * 0.7, PANEL_WIDTH_MAX * ui_scale);
+        const ph: f32 = PANEL_HEIGHT_BASE * ui_scale;
         const px: f32 = (screen_w - pw) * 0.5;
         const py: f32 = screen_h * 0.24;
-        ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.12, 0.14, 0.18, 0.92));
-        ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.28, 0.33, 0.42, 1.0), 2.0 * ui_scale);
-        Font.drawTextCentered(ui, "CREATE WORLD", screen_w * 0.5, py + 22.0 * ui_scale, title_scale, Color.rgba(0.92, 0.94, 0.97, 1.0));
+        ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, BG_COLOR);
+        ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, BORDER_COLOR, 2.0 * ui_scale);
+        Font.drawTextCentered(ui, "CREATE WORLD", screen_w * 0.5, py + 22.0 * ui_scale, title_scale, TITLE_COLOR);
         const ly: f32 = py + 90.0 * ui_scale;
-        Font.drawText(ui, "SEED", px + 30.0 * ui_scale, ly, label_scale, Color.rgba(0.72, 0.78, 0.86, 1.0));
+        Font.drawText(ui, "SEED", px + 30.0 * ui_scale, ly, label_scale, LABEL_COLOR);
         const ih: f32 = 52.0 * ui_scale;
         const iy: f32 = ly + 28.0 * ui_scale;
         const rw: f32 = 150.0 * ui_scale;
@@ -85,7 +98,10 @@ pub const SingleplayerScreen = struct {
         const seed_rect = Rect{ .x = ix, .y = iy, .width = iw, .height = ih };
         const random_rect = Rect{ .x = rx, .y = iy, .width = rw, .height = ih };
         if (mouse_clicked) self.seed_focused = seed_rect.contains(mouse_x, mouse_y);
-        Widgets.drawTextInput(ui, seed_rect, self.seed_input.items, "LEAVE BLANK FOR RANDOM", input_scale, self.seed_focused, @as(u32, @intFromFloat(ctx.time.elapsed * 2.0)) % 2 == 0);
+
+        const cursor_visible = @as(u32, @truncate(@as(u64, @intFromFloat(ctx.time.elapsed * 2.0)))) % 2 == 0;
+        Widgets.drawTextInput(ui, seed_rect, self.seed_input.items, "LEAVE BLANK FOR RANDOM", input_scale, self.seed_focused, cursor_visible);
+
         if (Widgets.drawButton(ui, random_rect, "RANDOM", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             const gen = seed_gen.randomSeedValue();
             try seed_gen.setSeedInput(&self.seed_input, ctx.allocator, gen);
@@ -99,32 +115,17 @@ pub const SingleplayerScreen = struct {
             ctx.screen_manager.popScreen();
         }
         if (Widgets.drawButton(ui, .{ .x = px + 30.0 * ui_scale + hw + 15.0 * ui_scale, .y = byy, .width = hw, .height = btn_h }, "CREATE", btn_scale, mouse_x, mouse_y, mouse_clicked) or ctx.input_mapper.isActionPressed(ctx.input, .ui_confirm)) {
+            // Seed is a 64-bit unsigned integer. If left blank, a random one is generated.
             const seed = try seed_gen.resolveSeed(&self.seed_input, ctx.allocator);
             log.log.info("World seed: {}", .{seed});
             const world_screen = try WorldScreen.init(ctx.allocator, ctx, seed);
+            errdefer world_screen.deinit(world_screen);
             ctx.screen_manager.setScreen(world_screen.screen());
         }
     }
 
-    pub fn onEnter(ptr: *anyopaque) void {
-        _ = ptr;
-    }
-
-    pub fn onExit(ptr: *anyopaque) void {
-        _ = ptr;
-    }
-
-    pub fn screen(self: *SingleplayerScreen) IScreen {
-        return .{
-            .ptr = self,
-            .vtable = &.{
-                .deinit = deinit,
-                .update = update,
-                .draw = draw,
-                .onEnter = onEnter,
-                .onExit = onExit,
-            },
-        };
+    pub fn screen(self: *@This()) IScreen {
+        return Screen.makeScreen(@This(), self);
     }
 };
 

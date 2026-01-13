@@ -10,8 +10,18 @@ const Settings = @import("../state.zig").Settings;
 const Texture = @import("../../engine/graphics/texture.zig").Texture;
 const log = @import("../../engine/core/log.zig");
 
+const PANEL_WIDTH_MAX = 750.0;
+const PANEL_HEIGHT_MAX = 800.0;
+const BG_COLOR = Color.rgba(0.12, 0.14, 0.18, 0.95);
+const BORDER_COLOR = Color.rgba(0.28, 0.33, 0.42, 1.0);
+
 pub const EnvironmentScreen = struct {
     context: EngineContext,
+
+    pub const vtable = IScreen.VTable{
+        .deinit = deinit,
+        .draw = draw,
+    };
 
     pub fn init(allocator: std.mem.Allocator, context: EngineContext) !*EnvironmentScreen {
         const self = try allocator.create(EnvironmentScreen);
@@ -22,22 +32,12 @@ pub const EnvironmentScreen = struct {
     }
 
     pub fn deinit(ptr: *anyopaque) void {
-        const self: *EnvironmentScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         self.context.allocator.destroy(self);
     }
 
-    pub fn update(ptr: *anyopaque, dt: f32) !void {
-        const self: *EnvironmentScreen = @ptrCast(@alignCast(ptr));
-        _ = dt;
-
-        if (self.context.input_mapper.isActionPressed(self.context.input, .ui_back)) {
-            self.context.settings.save(self.context.allocator);
-            self.context.screen_manager.popScreen();
-        }
-    }
-
     pub fn draw(ptr: *anyopaque, ui: *UISystem) !void {
-        const self: *EnvironmentScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         const ctx = self.context;
         const settings = ctx.settings;
 
@@ -59,13 +59,13 @@ pub const EnvironmentScreen = struct {
         const title_scale: f32 = 3.5 * ui_scale;
         const btn_scale: f32 = 2.0 * ui_scale;
 
-        const pw: f32 = @min(screen_w * 0.75, 750.0 * ui_scale);
-        const ph: f32 = @min(screen_h - 40.0, 800.0 * ui_scale);
+        const pw: f32 = @min(screen_w * 0.75, PANEL_WIDTH_MAX * ui_scale);
+        const ph: f32 = @min(screen_h - 40.0, PANEL_HEIGHT_MAX * ui_scale);
         const px: f32 = (screen_w - pw) * 0.5;
         const py: f32 = (screen_h - ph) * 0.5;
 
-        ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.12, 0.14, 0.18, 0.95));
-        ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.28, 0.33, 0.42, 1.0), 2.0 * ui_scale);
+        ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, BG_COLOR);
+        ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, BORDER_COLOR, 2.0 * ui_scale);
         Font.drawTextCentered(ui, "ENVIRONMENT MAPS", screen_w * 0.5, py + 25.0 * ui_scale, title_scale, Color.white);
 
         var sy: f32 = py + 100.0 * ui_scale;
@@ -90,7 +90,7 @@ pub const EnvironmentScreen = struct {
         defer dir.close();
 
         var iterator = dir.iterate();
-        var buf: [128]u8 = undefined;
+        var buffer: [128]u8 = undefined;
 
         while (try iterator.next()) |entry| {
             if (entry.kind != .file) continue;
@@ -101,7 +101,7 @@ pub const EnvironmentScreen = struct {
             if (is_hdr and std.mem.endsWith(u8, entry.name, ".exr.hdr")) continue;
 
             const is_selected = std.mem.eql(u8, settings.environment_map, entry.name);
-            const label = try std.fmt.bufPrint(&buf, "{s}{s}", .{ entry.name, if (is_selected) " [SELECTED]" else "" });
+            const label = try std.fmt.bufPrint(&buffer, "{s}{s}", .{ entry.name, if (is_selected) " [SELECTED]" else "" });
 
             if (Widgets.drawButton(ui, .{ .x = btn_x, .y = sy, .width = btn_width, .height = btn_height }, label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
                 if (!is_selected) {
@@ -121,50 +121,33 @@ pub const EnvironmentScreen = struct {
         }
     }
 
-    fn reloadEnvMap(self: *EnvironmentScreen) !void {
+    fn reloadEnvMap(self: *@This()) !void {
         const ctx = self.context;
         ctx.rhi.waitIdle();
-        if (ctx.env_map.*) |*t| t.deinit();
-        ctx.env_map.* = null;
+        if (ctx.env_map_ptr.*) |*t| t.deinit();
+        ctx.env_map_ptr.* = null;
 
         if (!std.mem.eql(u8, ctx.settings.environment_map, "default")) {
             if (ctx.resource_pack_manager.loadImageFileFloat(ctx.settings.environment_map)) |tex_data| {
-                ctx.env_map.* = Texture.initFloat(ctx.rhi, tex_data.width, tex_data.height, tex_data.pixels);
-                ctx.env_map.*.?.bind(9);
+                ctx.env_map_ptr.* = Texture.initFloat(ctx.rhi, tex_data.width, tex_data.height, tex_data.pixels);
+                ctx.env_map_ptr.*.?.bind(9);
                 log.log.info("Loaded Environment Map: {s}", .{ctx.settings.environment_map});
                 var td = tex_data;
                 td.deinit(ctx.allocator);
             } else {
                 log.log.warn("Could not load environment map: {s}", .{ctx.settings.environment_map});
                 const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
-                ctx.env_map.* = Texture.initFloat(ctx.rhi, 1, 1, &white_pixel);
-                ctx.env_map.*.?.bind(9);
+                ctx.env_map_ptr.* = Texture.initFloat(ctx.rhi, 1, 1, &white_pixel);
+                ctx.env_map_ptr.*.?.bind(9);
             }
         } else {
             const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
-            ctx.env_map.* = Texture.initFloat(ctx.rhi, 1, 1, &white_pixel);
-            ctx.env_map.*.?.bind(9);
+            ctx.env_map_ptr.* = Texture.initFloat(ctx.rhi, 1, 1, &white_pixel);
+            ctx.env_map_ptr.*.?.bind(9);
         }
     }
 
-    pub fn onEnter(ptr: *anyopaque) void {
-        _ = ptr;
-    }
-
-    pub fn onExit(ptr: *anyopaque) void {
-        _ = ptr;
-    }
-
-    pub fn screen(self: *EnvironmentScreen) IScreen {
-        return .{
-            .ptr = self,
-            .vtable = &.{
-                .deinit = deinit,
-                .update = update,
-                .draw = draw,
-                .onEnter = onEnter,
-                .onExit = onExit,
-            },
-        };
+    pub fn screen(self: *@This()) IScreen {
+        return Screen.makeScreen(@This(), self);
     }
 };

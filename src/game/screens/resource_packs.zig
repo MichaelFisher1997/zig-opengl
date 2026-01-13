@@ -9,8 +9,18 @@ const EngineContext = Screen.EngineContext;
 const Settings = @import("../state.zig").Settings;
 const TextureAtlas = @import("../../engine/graphics/texture_atlas.zig").TextureAtlas;
 
+const PANEL_WIDTH_MAX = 750.0;
+const PANEL_HEIGHT_MAX = 800.0;
+const BG_COLOR = Color.rgba(0.12, 0.14, 0.18, 0.95);
+const BORDER_COLOR = Color.rgba(0.28, 0.33, 0.42, 1.0);
+
 pub const ResourcePacksScreen = struct {
     context: EngineContext,
+
+    pub const vtable = IScreen.VTable{
+        .deinit = deinit,
+        .draw = draw,
+    };
 
     pub fn init(allocator: std.mem.Allocator, context: EngineContext) !*ResourcePacksScreen {
         const self = try allocator.create(ResourcePacksScreen);
@@ -21,22 +31,12 @@ pub const ResourcePacksScreen = struct {
     }
 
     pub fn deinit(ptr: *anyopaque) void {
-        const self: *ResourcePacksScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         self.context.allocator.destroy(self);
     }
 
-    pub fn update(ptr: *anyopaque, dt: f32) !void {
-        const self: *ResourcePacksScreen = @ptrCast(@alignCast(ptr));
-        _ = dt;
-
-        if (self.context.input_mapper.isActionPressed(self.context.input, .ui_back)) {
-            self.context.settings.save(self.context.allocator);
-            self.context.screen_manager.popScreen();
-        }
-    }
-
     pub fn draw(ptr: *anyopaque, ui: *UISystem) !void {
-        const self: *ResourcePacksScreen = @ptrCast(@alignCast(ptr));
+        const self: *@This() = @ptrCast(@alignCast(ptr));
         const ctx = self.context;
         const settings = ctx.settings;
         const manager = ctx.resource_pack_manager;
@@ -59,13 +59,13 @@ pub const ResourcePacksScreen = struct {
         const title_scale: f32 = 3.5 * ui_scale;
         const btn_scale: f32 = 2.0 * ui_scale;
 
-        const pw: f32 = @min(screen_w * 0.75, 750.0 * ui_scale);
-        const ph: f32 = @min(screen_h - 40.0, 800.0 * ui_scale);
+        const pw: f32 = @min(screen_w * 0.75, PANEL_WIDTH_MAX * ui_scale);
+        const ph: f32 = @min(screen_h - 40.0, PANEL_HEIGHT_MAX * ui_scale);
         const px: f32 = (screen_w - pw) * 0.5;
         const py: f32 = (screen_h - ph) * 0.5;
 
-        ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.12, 0.14, 0.18, 0.95));
-        ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, Color.rgba(0.28, 0.33, 0.42, 1.0), 2.0 * ui_scale);
+        ui.drawRect(.{ .x = px, .y = py, .width = pw, .height = ph }, BG_COLOR);
+        ui.drawRectOutline(.{ .x = px, .y = py, .width = pw, .height = ph }, BORDER_COLOR, 2.0 * ui_scale);
         Font.drawTextCentered(ui, "RESOURCE PACKS", screen_w * 0.5, py + 25.0 * ui_scale, title_scale, Color.white);
 
         var sy: f32 = py + 100.0 * ui_scale;
@@ -111,7 +111,7 @@ pub const ResourcePacksScreen = struct {
         }
     }
 
-    fn reloadAtlas(self: *ResourcePacksScreen) !void {
+    fn reloadAtlas(self: *@This()) !void {
         const ctx = self.context;
         ctx.rhi.waitIdle();
         ctx.atlas.deinit();
@@ -122,24 +122,7 @@ pub const ResourcePacksScreen = struct {
         ctx.atlas.bindDisplacement(8);
     }
 
-    pub fn onEnter(ptr: *anyopaque) void {
-        _ = ptr;
-    }
-
-    pub fn onExit(ptr: *anyopaque) void {
-        _ = ptr;
-    }
-
-    pub fn screen(self: *ResourcePacksScreen) IScreen {
-        return .{
-            .ptr = self,
-            .vtable = &.{
-                .deinit = deinit,
-                .update = update,
-                .draw = draw,
-                .onEnter = onEnter,
-                .onExit = onExit,
-            },
-        };
+    pub fn screen(self: *@This()) IScreen {
+        return Screen.makeScreen(@This(), self);
     }
 };

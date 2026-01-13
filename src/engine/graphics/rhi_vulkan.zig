@@ -3307,35 +3307,38 @@ fn transitionShadowImage(ctx: *VulkanContext, cascade_index: u32, new_layout: c.
 
 fn beginMainPass(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    if (!ctx.frame_in_progress or ctx.main_pass_active) return;
-
-    ensureNoRenderPassActive(ctx_ptr);
-
-    ctx.terrain_pipeline_bound = false;
-
-    var render_pass_info = std.mem.zeroes(c.VkRenderPassBeginInfo);
-    render_pass_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    render_pass_info.renderPass = ctx.vulkan_swapchain.main_render_pass;
-    render_pass_info.framebuffer = ctx.vulkan_swapchain.framebuffers.items[ctx.image_index];
-    render_pass_info.renderArea.offset = .{ .x = 0, .y = 0 };
-    render_pass_info.renderArea.extent = ctx.vulkan_swapchain.extent;
-
-    var clear_values: [3]c.VkClearValue = undefined;
-    clear_values[0] = .{ .color = .{ .float32 = ctx.clear_color } };
-    clear_values[1] = .{ .depthStencil = .{ .depth = 0.0, .stencil = 0 } };
-
-    if (ctx.msaa_samples > 1) {
-        // For MSAA, we have 3 attachments, but only the first two (MSAA color/depth) need clearing.
-        // The third (resolve) is overwritten. However, some drivers expect a clear value for each attachment.
-        clear_values[2] = .{ .color = .{ .float32 = ctx.clear_color } };
-        render_pass_info.clearValueCount = 3;
-    } else {
-        render_pass_info.clearValueCount = 2;
-    }
-    render_pass_info.pClearValues = &clear_values[0];
+    if (!ctx.frame_in_progress) return;
 
     const command_buffer = ctx.command_buffers[ctx.current_sync_frame];
-    c.vkCmdBeginRenderPass(command_buffer, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
+    if (!ctx.main_pass_active) {
+        ensureNoRenderPassActive(ctx_ptr);
+
+        ctx.terrain_pipeline_bound = false;
+
+        var render_pass_info = std.mem.zeroes(c.VkRenderPassBeginInfo);
+        render_pass_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        render_pass_info.renderPass = ctx.vulkan_swapchain.main_render_pass;
+        render_pass_info.framebuffer = ctx.vulkan_swapchain.framebuffers.items[ctx.image_index];
+        render_pass_info.renderArea.offset = .{ .x = 0, .y = 0 };
+        render_pass_info.renderArea.extent = ctx.vulkan_swapchain.extent;
+
+        var clear_values: [3]c.VkClearValue = undefined;
+        clear_values[0] = .{ .color = .{ .float32 = ctx.clear_color } };
+        clear_values[1] = .{ .depthStencil = .{ .depth = 0.0, .stencil = 0 } };
+
+        if (ctx.msaa_samples > 1) {
+            // For MSAA, we have 3 attachments, but only the first two (MSAA color/depth) need clearing.
+            // The third (resolve) is overwritten. However, some drivers expect a clear value for each attachment.
+            clear_values[2] = .{ .color = .{ .float32 = ctx.clear_color } };
+            render_pass_info.clearValueCount = 3;
+        } else {
+            render_pass_info.clearValueCount = 2;
+        }
+        render_pass_info.pClearValues = &clear_values[0];
+
+        c.vkCmdBeginRenderPass(command_buffer, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
+        ctx.main_pass_active = true;
+    }
 
     var viewport = std.mem.zeroes(c.VkViewport);
     viewport.x = 0.0;
@@ -3350,8 +3353,6 @@ fn beginMainPass(ctx_ptr: *anyopaque) void {
     scissor.offset = .{ .x = 0, .y = 0 };
     scissor.extent = ctx.vulkan_swapchain.extent;
     c.vkCmdSetScissor(command_buffer, 0, 1, &scissor);
-
-    ctx.main_pass_active = true;
 }
 
 fn endMainPass(ctx_ptr: *anyopaque) void {
