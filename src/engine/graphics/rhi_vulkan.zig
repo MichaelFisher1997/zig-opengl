@@ -4753,7 +4753,7 @@ fn beginShadowPass(ctx_ptr: *anyopaque, cascade_index: u32, light_space_matrix: 
 
     ctx.shadow_pass_active = true;
     ctx.shadow_pass_index = cascade_index;
-    ctx.shadow_pass_matrix = Mat4.identity;
+    ctx.shadow_pass_matrix = light_space_matrix;
 
     var viewport = std.mem.zeroes(c.VkViewport);
     viewport.x = 0.0;
