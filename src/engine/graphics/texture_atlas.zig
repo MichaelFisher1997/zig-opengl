@@ -361,18 +361,22 @@ pub const TextureAtlas = struct {
 
         if (has_pbr) {
             // Normal maps must stay as linear (UNORM) - they contain direction data, not colors
-            normal_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
-                .min_filter = .linear_mipmap_linear,
-                .mag_filter = .linear,
-                .generate_mipmaps = true,
-            }, normal_pixels.?);
+            if (normal_pixels) |np| {
+                normal_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+                    .min_filter = .linear_mipmap_linear,
+                    .mag_filter = .linear,
+                    .generate_mipmaps = true,
+                }, np);
+            }
 
             // Roughness/displacement are linear data, not colors - use UNORM
-            roughness_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
-                .min_filter = .linear_mipmap_linear,
-                .mag_filter = .linear,
-                .generate_mipmaps = true,
-            }, roughness_pixels.?);
+            if (roughness_pixels) |rp| {
+                roughness_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+                    .min_filter = .linear_mipmap_linear,
+                    .mag_filter = .linear,
+                    .generate_mipmaps = true,
+                }, rp);
+            }
 
             log.log.info("PBR atlases created: {} textures with {} normal maps", .{ loaded_count, pbr_count });
         }

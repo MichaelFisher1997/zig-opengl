@@ -104,6 +104,9 @@ pub const ShadowPass = struct {
 
     fn execute(ptr: *anyopaque, ctx: SceneContext) void {
         const self: *ShadowPass = @ptrCast(@alignCast(ptr));
+        // Runtime verification to ensuring pointer safety in debug mode
+        std.debug.assert(self.cascade_index < rhi_pkg.SHADOW_CASCADE_COUNT);
+
         const cascade_idx = self.cascade_index;
         const rhi = ctx.rhi;
 

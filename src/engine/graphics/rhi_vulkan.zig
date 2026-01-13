@@ -2803,7 +2803,14 @@ fn recreateSwapchain(ctx: *VulkanContext) void {
     destroyGPassResources(ctx);
     destroySSAOResources(ctx);
 
+    // Reset pass state flags to prevent state confusion
+    ctx.main_pass_active = false;
+    ctx.shadow_pass_active = false;
+    ctx.g_pass_active = false;
+    ctx.ssao_pass_active = false;
+
     // 2. Recreate Swapchain (includes main RP and framebuffers)
+
     ctx.vulkan_swapchain.recreate(ctx.msaa_samples) catch |err| {
         std.log.err("Failed to recreate swapchain: {}", .{err});
         return;
