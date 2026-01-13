@@ -167,9 +167,9 @@ pub const App = struct {
     }
 
     pub fn deinit(self: *App) void {
-        self.screen_manager.deinit();
-
         if (self.ui) |*u| u.deinit();
+
+        self.screen_manager.deinit();
 
         self.render_graph.deinit();
         self.atmosphere_system.deinit();
