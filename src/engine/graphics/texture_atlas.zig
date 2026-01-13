@@ -356,26 +356,42 @@ pub const TextureAtlas = struct {
             .generate_mipmaps = true,
         }, diffuse_pixels);
 
+        if (diffuse_texture.handle == 0) {
+            log.log.err("Failed to create diffuse texture atlas", .{});
+            // diffuse_pixels, normal_pixels, roughness_pixels are freed by defer
+            return error.TextureCreationFailure;
+        }
+
         var normal_texture: ?Texture = null;
         var roughness_texture: ?Texture = null;
 
         if (has_pbr) {
             // Normal maps must stay as linear (UNORM) - they contain direction data, not colors
             if (normal_pixels) |np| {
-                normal_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+                const tex = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
                     .min_filter = .linear_mipmap_linear,
                     .mag_filter = .linear,
                     .generate_mipmaps = true,
                 }, np);
+                if (tex.handle != 0) {
+                    normal_texture = tex;
+                } else {
+                    log.log.warn("Failed to create normal map atlas", .{});
+                }
             }
 
             // Roughness/displacement are linear data, not colors - use UNORM
             if (roughness_pixels) |rp| {
-                roughness_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+                const tex = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
                     .min_filter = .linear_mipmap_linear,
                     .mag_filter = .linear,
                     .generate_mipmaps = true,
                 }, rp);
+                if (tex.handle != 0) {
+                    roughness_texture = tex;
+                } else {
+                    log.log.warn("Failed to create roughness map atlas", .{});
+                }
             }
 
             log.log.info("PBR atlases created: {} textures with {} normal maps", .{ loaded_count, pbr_count });
