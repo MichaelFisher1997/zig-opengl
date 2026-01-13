@@ -19,6 +19,7 @@ pub const InvalidShaderHandle: ShaderHandle = 0;
 pub const TextureHandle = u32;
 pub const InvalidTextureHandle: TextureHandle = 0;
 
+pub const MAX_FRAMES_IN_FLIGHT = 2;
 pub const SHADOW_CASCADE_COUNT = 3;
 
 pub const BufferUsage = enum {
@@ -235,7 +236,7 @@ pub const IRenderContext = struct {
         abortFrame: *const fn (ptr: *anyopaque) void,
         beginMainPass: *const fn (ptr: *anyopaque) void,
         endMainPass: *const fn (ptr: *anyopaque) void,
-        beginShadowPass: *const fn (ptr: *anyopaque, cascade_index: u32) void,
+        beginShadowPass: *const fn (ptr: *anyopaque, cascade_index: u32, light_space_matrix: Mat4) void,
         endShadowPass: *const fn (ptr: *anyopaque) void,
         beginGPass: *const fn (ptr: *anyopaque) void,
         endGPass: *const fn (ptr: *anyopaque) void,
@@ -448,8 +449,8 @@ pub const RHI = struct {
     pub fn drawClouds(self: RHI, params: CloudParams) void {
         self.vtable.render.drawClouds(self.ptr, params);
     }
-    pub fn beginShadowPass(self: RHI, cascade: u32) void {
-        self.vtable.render.beginShadowPass(self.ptr, cascade);
+    pub fn beginShadowPass(self: RHI, cascade: u32, matrix: Mat4) void {
+        self.vtable.render.beginShadowPass(self.ptr, cascade, matrix);
     }
     pub fn endShadowPass(self: RHI) void {
         self.vtable.render.endShadowPass(self.ptr);

@@ -150,7 +150,7 @@ pub const LODManager = struct {
     // MDI
     instance_data: std.ArrayListUnmanaged(rhi_mod.InstanceData),
     draw_list: std.ArrayListUnmanaged(*LODMesh),
-    instance_buffers: [2]rhi_mod.BufferHandle,
+    instance_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle,
     frame_index: usize,
 
     pub fn init(allocator: std.mem.Allocator, config: LODConfig, rhi: RHI, generator: *TerrainGenerator) !*LODManager {
@@ -168,9 +168,11 @@ pub const LODManager = struct {
 
         // Init MDI buffers (capacity for ~2048 LOD regions)
         const max_regions = 2048;
-        var instance_buffers: [2]rhi_mod.BufferHandle = undefined;
         const instance_buffer = rhi.createBuffer(max_regions * @sizeOf(rhi_mod.InstanceData), .storage);
-        instance_buffers = .{ instance_buffer, instance_buffer };
+        var instance_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle = undefined;
+        for (0..rhi_mod.MAX_FRAMES_IN_FLIGHT) |i| {
+            instance_buffers[i] = instance_buffer;
+        }
 
         mgr.* = .{
             .allocator = allocator,
@@ -301,8 +303,10 @@ pub const LODManager = struct {
         self.deletion_queue.deinit(self.allocator);
 
         if (self.instance_buffers[0] != 0) self.rhi.destroyBuffer(self.instance_buffers[0]);
-        if (self.instance_buffers[1] != 0 and self.instance_buffers[1] != self.instance_buffers[0]) {
-            self.rhi.destroyBuffer(self.instance_buffers[1]);
+        for (1..rhi_mod.MAX_FRAMES_IN_FLIGHT) |i| {
+            if (self.instance_buffers[i] != 0 and self.instance_buffers[i] != self.instance_buffers[0]) {
+                self.rhi.destroyBuffer(self.instance_buffers[i]);
+            }
         }
         self.instance_data.deinit(self.allocator);
         self.draw_list.deinit(self.allocator);

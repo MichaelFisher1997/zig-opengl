@@ -157,8 +157,8 @@ pub const World = struct {
     instance_data: std.ArrayListUnmanaged(rhi_mod.InstanceData),
     solid_commands: std.ArrayListUnmanaged(rhi_mod.DrawIndirectCommand),
     fluid_commands: std.ArrayListUnmanaged(rhi_mod.DrawIndirectCommand),
-    instance_buffers: [2]rhi_mod.BufferHandle,
-    indirect_buffers: [2]rhi_mod.BufferHandle,
+    instance_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle,
+    indirect_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle,
     frame_index: usize,
     mdi_instance_offset: usize,
     mdi_command_offset: usize,
@@ -180,14 +180,12 @@ pub const World = struct {
 
         // Init MDI buffers (capacity for ~16384 chunks to be safe for high render distances + shadows)
         const max_chunks = 16384;
-        var instance_buffers: [2]rhi_mod.BufferHandle = undefined;
-        var indirect_buffers: [2]rhi_mod.BufferHandle = undefined;
-        const instance_buffer0 = rhi.createBuffer(max_chunks * @sizeOf(rhi_mod.InstanceData), .storage);
-        const instance_buffer1 = rhi.createBuffer(max_chunks * @sizeOf(rhi_mod.InstanceData), .storage);
-        const indirect_buffer0 = rhi.createBuffer(max_chunks * @sizeOf(rhi_mod.DrawIndirectCommand) * 2, .indirect); // *2 for solid+fluid
-        const indirect_buffer1 = rhi.createBuffer(max_chunks * @sizeOf(rhi_mod.DrawIndirectCommand) * 2, .indirect); // *2 for solid+fluid
-        instance_buffers = .{ instance_buffer0, instance_buffer1 };
-        indirect_buffers = .{ indirect_buffer0, indirect_buffer1 };
+        var instance_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle = undefined;
+        var indirect_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle = undefined;
+        for (0..rhi_mod.MAX_FRAMES_IN_FLIGHT) |i| {
+            instance_buffers[i] = rhi.createBuffer(max_chunks * @sizeOf(rhi_mod.InstanceData), .storage);
+            indirect_buffers[i] = rhi.createBuffer(max_chunks * @sizeOf(rhi_mod.DrawIndirectCommand) * 2, .indirect); // *2 for solid+fluid
+        }
 
         world.* = .{
             .chunks = std.HashMap(ChunkKey, *ChunkData, ChunkKeyContext, 80).init(allocator),
@@ -267,13 +265,9 @@ pub const World = struct {
             lod_mgr.deinit();
         }
 
-        if (self.instance_buffers[0] != 0) self.rhi.destroyBuffer(self.instance_buffers[0]);
-        if (self.instance_buffers[1] != 0 and self.instance_buffers[1] != self.instance_buffers[0]) {
-            self.rhi.destroyBuffer(self.instance_buffers[1]);
-        }
-        if (self.indirect_buffers[0] != 0) self.rhi.destroyBuffer(self.indirect_buffers[0]);
-        if (self.indirect_buffers[1] != 0 and self.indirect_buffers[1] != self.indirect_buffers[0]) {
-            self.rhi.destroyBuffer(self.indirect_buffers[1]);
+        for (0..rhi_mod.MAX_FRAMES_IN_FLIGHT) |i| {
+            if (self.instance_buffers[i] != 0) self.rhi.destroyBuffer(self.instance_buffers[i]);
+            if (self.indirect_buffers[i] != 0) self.rhi.destroyBuffer(self.indirect_buffers[i]);
         }
         self.instance_data.deinit(self.allocator);
         self.solid_commands.deinit(self.allocator);

@@ -121,8 +121,7 @@ pub const ShadowPass = struct {
             .shadow_texel_sizes = cascades.texel_sizes,
         });
 
-        rhi.beginShadowPass(cascade_idx);
-        rhi.updateGlobalUniforms(light_space_matrix, ctx.camera.position, Vec3.zero, Vec3.zero, 0, Vec3.zero, 0, false, 0, 0, false, .{});
+        rhi.beginShadowPass(cascade_idx, light_space_matrix);
         ctx.world.renderShadowPass(light_space_matrix, ctx.camera.position);
         rhi.endShadowPass();
     }

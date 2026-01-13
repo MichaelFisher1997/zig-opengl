@@ -35,7 +35,6 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
 } global;
 
 layout(push_constant) uniform ModelUniforms {
-    mat4 view_proj;
     mat4 model;
     float mask_radius;
     float _pad0;
@@ -45,7 +44,7 @@ layout(push_constant) uniform ModelUniforms {
 
 void main() {
     vec4 worldPos = model_data.model * vec4(aPos, 1.0);
-    vec4 clipPos = model_data.view_proj * worldPos;
+    vec4 clipPos = global.view_proj * worldPos;
     
     // Vulkan has inverted Y in clip space compared to OpenGL
     gl_Position = clipPos;

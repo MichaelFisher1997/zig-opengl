@@ -31,7 +31,7 @@ const RenderDevice = @import("render_device.zig").RenderDevice;
 const Mat4 = @import("../math/mat4.zig").Mat4;
 const Vec3 = @import("../math/vec3.zig").Vec3;
 
-const MAX_FRAMES_IN_FLIGHT = 2;
+const MAX_FRAMES_IN_FLIGHT = rhi.MAX_FRAMES_IN_FLIGHT;
 const DEPTH_FORMAT = c.VK_FORMAT_D32_SFLOAT;
 
 /// Global uniform buffer layout (std140). Bound to descriptor set 0, binding 0.
@@ -68,10 +68,15 @@ const ShadowUniforms = extern struct {
 
 /// Per-draw model matrix, passed via push constants for efficiency.
 const ModelUniforms = extern struct {
-    view_proj: Mat4,
     model: Mat4,
     mask_radius: f32,
     padding: [3]f32,
+};
+
+/// Per-draw shadow matrix and model, passed via push constants.
+const ShadowModelUniforms = extern struct {
+    light_space_matrix: Mat4,
+    model: Mat4,
 };
 
 /// Push constants for procedural sky rendering.
@@ -824,9 +829,6 @@ fn createGPassResources(ctx: *VulkanContext) !void {
     }
 
     // 3. Create G-Pass depth image (separate from MSAA depth, 1x sampled for SSAO)
-    var g_depth_image: c.VkImage = null;
-    var g_depth_memory: c.VkDeviceMemory = null;
-    var g_depth_view: c.VkImageView = null;
     {
         var img_info = std.mem.zeroes(c.VkImageCreateInfo);
         img_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -841,36 +843,32 @@ fn createGPassResources(ctx: *VulkanContext) !void {
         img_info.samples = c.VK_SAMPLE_COUNT_1_BIT;
         img_info.sharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
 
-        try checkVk(c.vkCreateImage(ctx.vulkan_device.vk_device, &img_info, null, &g_depth_image));
+        try checkVk(c.vkCreateImage(ctx.vulkan_device.vk_device, &img_info, null, &ctx.g_depth_image));
 
         var mem_reqs: c.VkMemoryRequirements = undefined;
-        c.vkGetImageMemoryRequirements(ctx.vulkan_device.vk_device, g_depth_image, &mem_reqs);
+        c.vkGetImageMemoryRequirements(ctx.vulkan_device.vk_device, ctx.g_depth_image, &mem_reqs);
 
         var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc_info.allocationSize = mem_reqs.size;
         alloc_info.memoryTypeIndex = findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-        try checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &g_depth_memory));
-        try checkVk(c.vkBindImageMemory(ctx.vulkan_device.vk_device, g_depth_image, g_depth_memory, 0));
+        try checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &ctx.g_depth_memory));
+        try checkVk(c.vkBindImageMemory(ctx.vulkan_device.vk_device, ctx.g_depth_image, ctx.g_depth_memory, 0));
 
         var view_info = std.mem.zeroes(c.VkImageViewCreateInfo);
         view_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        view_info.image = g_depth_image;
+        view_info.image = ctx.g_depth_image;
         view_info.viewType = c.VK_IMAGE_VIEW_TYPE_2D;
         view_info.format = DEPTH_FORMAT;
         view_info.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
 
-        try checkVk(c.vkCreateImageView(ctx.vulkan_device.vk_device, &view_info, null, &g_depth_view));
+        try checkVk(c.vkCreateImageView(ctx.vulkan_device.vk_device, &view_info, null, &ctx.g_depth_view));
     }
-
-    // Store G-Pass depth resources in context (we need to add these fields)
-    // For now, store in ssao_* fields as a temporary measure - we'll sample this depth for SSAO
-    // Note: We're reusing ssao_image/memory/view to store the G-Pass depth for SSAO sampling
 
     // 4. Create G-Pass framebuffer
     {
-        const fb_attachments = [_]c.VkImageView{ ctx.g_normal_view, g_depth_view };
+        const fb_attachments = [_]c.VkImageView{ ctx.g_normal_view, ctx.g_depth_view };
 
         var fb_info = std.mem.zeroes(c.VkFramebufferCreateInfo);
         fb_info.sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -992,11 +990,6 @@ fn createGPassResources(ctx: *VulkanContext) !void {
 
         try checkVk(c.vkCreateGraphicsPipelines(ctx.vulkan_device.vk_device, null, 1, &pipe_info, null, &ctx.g_pipeline));
     }
-
-    // Store g_depth resources for SSAO sampling
-    ctx.g_depth_image = g_depth_image;
-    ctx.g_depth_memory = g_depth_memory;
-    ctx.g_depth_view = g_depth_view;
 
     std.log.info("G-Pass resources created ({}x{})", .{ ctx.vulkan_swapchain.extent.width, ctx.vulkan_swapchain.extent.height });
 }
@@ -1973,7 +1966,7 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
 
     var model_push_constant = std.mem.zeroes(c.VkPushConstantRange);
     model_push_constant.stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT;
-    model_push_constant.size = @sizeOf(ModelUniforms);
+    model_push_constant.size = @max(@sizeOf(ModelUniforms), @sizeOf(ShadowModelUniforms));
     var pipeline_layout_info = std.mem.zeroes(c.VkPipelineLayoutCreateInfo);
     pipeline_layout_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipeline_layout_info.setLayoutCount = 1;
@@ -2830,8 +2823,12 @@ fn ensureFrameReady(ctx: *VulkanContext) void {
 
     const fence = ctx.in_flight_fences[ctx.current_sync_frame];
 
-    // Wait for the frame to be available
-    _ = c.vkWaitForFences(ctx.vulkan_device.vk_device, 1, &fence, c.VK_TRUE, std.math.maxInt(u64));
+    // Wait for the frame to be available (timeout after 2 seconds to avoid system lockup)
+    const timeout_ns = 2_000_000_000;
+    const wait_res = c.vkWaitForFences(ctx.vulkan_device.vk_device, 1, &fence, c.VK_TRUE, timeout_ns);
+    if (wait_res == c.VK_TIMEOUT) {
+        std.log.err("Vulkan GPU timeout! Possible GPU hang detected. System lockup prevented.", .{});
+    }
 
     // Reset fence
     _ = c.vkResetFences(ctx.vulkan_device.vk_device, 1, &fence);
@@ -3362,11 +3359,6 @@ fn waitIdle(ctx_ptr: *anyopaque) void {
 fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, sun_color: Vec3, time_val: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32, use_texture: bool, cloud_params: rhi.CloudParams) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frame_in_progress) return;
-
-    if (ctx.shadow_pass_active) {
-        ctx.shadow_pass_matrix = view_proj;
-        return;
-    }
 
     ctx.current_view_proj = view_proj;
 
@@ -4291,13 +4283,20 @@ fn drawIndirect(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, command_buffer: r
                 &ctx.descriptor_sets[ctx.current_sync_frame];
             c.vkCmdBindDescriptorSets(cb, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, descriptor_set, 0, null);
 
-            const uniforms = ModelUniforms{
-                .view_proj = if (use_shadow) ctx.shadow_pass_matrix else ctx.current_view_proj,
-                .model = Mat4.identity,
-                .mask_radius = 0,
-                .padding = .{ 0, 0, 0 },
-            };
-            c.vkCmdPushConstants(cb, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
+            if (use_shadow) {
+                const shadow_uniforms = ShadowModelUniforms{
+                    .light_space_matrix = ctx.shadow_pass_matrix,
+                    .model = Mat4.identity,
+                };
+                c.vkCmdPushConstants(cb, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
+            } else {
+                const uniforms = ModelUniforms{
+                    .model = Mat4.identity,
+                    .mask_radius = 0,
+                    .padding = .{ 0, 0, 0 },
+                };
+                c.vkCmdPushConstants(cb, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
+            }
 
             const offset_vals = [_]c.VkDeviceSize{0};
             c.vkCmdBindVertexBuffers(cb, 0, 1, &vbo.buffer, &offset_vals);
@@ -4384,13 +4383,20 @@ fn drawInstance(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, insta
             &ctx.descriptor_sets[ctx.current_sync_frame];
         c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, descriptor_set, 0, null);
 
-        const uniforms = ModelUniforms{
-            .view_proj = if (use_shadow) ctx.shadow_pass_matrix else ctx.current_view_proj,
-            .model = Mat4.identity,
-            .mask_radius = 0,
-            .padding = .{ 0, 0, 0 },
-        };
-        c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
+        if (use_shadow) {
+            const shadow_uniforms = ShadowModelUniforms{
+                .light_space_matrix = ctx.shadow_pass_matrix,
+                .model = Mat4.identity,
+            };
+            c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
+        } else {
+            const uniforms = ModelUniforms{
+                .model = Mat4.identity,
+                .mask_radius = 0,
+                .padding = .{ 0, 0, 0 },
+            };
+            c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
+        }
 
         const offset: c.VkDeviceSize = 0;
         c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &vbo.buffer, &offset);
@@ -4456,13 +4462,20 @@ fn drawOffset(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: r
             c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, descriptor_set, 0, null);
         }
 
-        const uniforms = ModelUniforms{
-            .view_proj = if (use_shadow) ctx.shadow_pass_matrix else ctx.current_view_proj,
-            .model = ctx.current_model,
-            .mask_radius = ctx.current_mask_radius,
-            .padding = .{ 0, 0, 0 },
-        };
-        c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
+        if (use_shadow) {
+            const shadow_uniforms = ShadowModelUniforms{
+                .light_space_matrix = ctx.shadow_pass_matrix,
+                .model = ctx.current_model,
+            };
+            c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
+        } else {
+            const uniforms = ModelUniforms{
+                .model = ctx.current_model,
+                .mask_radius = ctx.current_mask_radius,
+                .padding = .{ 0, 0, 0 },
+            };
+            c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
+        }
 
         const offset_vbo: c.VkDeviceSize = @intCast(offset);
         c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &vbo.buffer, &offset_vbo);
@@ -4651,14 +4664,13 @@ fn ensureNoRenderPassActive(ctx_ptr: *anyopaque) void {
     if (ctx.g_pass_active) endGPass(ctx_ptr);
 }
 
-fn beginShadowPass(ctx_ptr: *anyopaque, cascade_index: u32) void {
+fn beginShadowPass(ctx_ptr: *anyopaque, cascade_index: u32, light_space_matrix: Mat4) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frame_in_progress) return;
-    if (cascade_index >= rhi.SHADOW_CASCADE_COUNT) return;
 
-    ensureNoRenderPassActive(ctx_ptr);
-
-    // Reset pipeline state when switching passes
+    ctx.shadow_pass_active = true;
+    ctx.shadow_pass_index = cascade_index;
+    ctx.shadow_pass_matrix = light_space_matrix;
     ctx.shadow_pipeline_bound = false;
 
     if (ctx.shadow_framebuffers[cascade_index] == null) return;
@@ -4874,6 +4886,8 @@ const vtable = rhi.RHI.VTable{
 
 pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_device: ?*RenderDevice, shadow_resolution: u32, msaa_samples: u8, anisotropic_filtering: u8) !rhi.RHI {
     const ctx = try allocator.create(VulkanContext);
+    @memset(std.mem.asBytes(ctx), 0);
+
     // Initialize all fields to safe defaults
     ctx.allocator = allocator;
     ctx.render_device = render_device;
