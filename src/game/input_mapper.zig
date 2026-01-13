@@ -414,7 +414,7 @@ pub const InputMapper = struct {
         });
         defer parsed.deinit();
 
-        self.bindings = parsed.value;
+        @memcpy(&self.bindings, &parsed.value);
     }
 };
 

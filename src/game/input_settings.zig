@@ -16,7 +16,10 @@ pub const InputSettings = struct {
 
     pub const SETTINGS_FILENAME = "settings.json";
     pub const APP_NAME = "zigcraft";
+    /// Maximum size of the settings file (1MB).
     pub const MAX_SETTINGS_SIZE = 1024 * 1024;
+    /// Current version of the settings schema.
+    /// Version 2 introduced GameAction enum-based mapping.
     pub const CURRENT_VERSION = 2;
 
     /// Initialize a new InputSettings instance with default bindings.
@@ -46,11 +49,9 @@ pub const InputSettings = struct {
     /// If the settings file is missing, corrupt, or an error occurs during loading,
     /// it will return an InputSettings instance with default bindings and log a warning.
     pub fn load(allocator: std.mem.Allocator) InputSettings {
-        var settings = InputSettings.init(allocator);
-
         const path = getSettingsPath(allocator) catch |err| {
             log.log.warn("Could not determine settings path: {}. Using default bindings.", .{err});
-            return settings;
+            return init(allocator);
         };
         defer allocator.free(path);
 
@@ -58,16 +59,26 @@ pub const InputSettings = struct {
             if (err != error.FileNotFound) {
                 log.log.warn("Failed to read settings file at {s}: {}. Using default bindings.", .{ path, err });
             }
-            return settings;
+            return init(allocator);
         };
         defer allocator.free(data);
 
+        var settings = init(allocator);
         // Parse and apply settings
         settings.parseJson(data) catch |err| {
-            log.log.warn("Failed to parse settings file at {s}: {}. Error details: {s}. Using default bindings.", .{ path, err, @errorName(err) });
+            log.log.warn("Failed to parse settings file at {s}: {s} ({}). Custom bindings may be lost. Using defaults where necessary.", .{ path, @errorName(err), err });
+            // Reset to defaults if parsing fails to ensure clean state
+            settings.input_mapper.resetToDefaults();
         };
 
         return settings;
+    }
+
+    /// Convenience helper to load bindings directly into an InputMapper.
+    pub fn loadAndReturnMapper(allocator: std.mem.Allocator) InputMapper {
+        var settings = load(allocator);
+        defer settings.deinit();
+        return settings.input_mapper;
     }
 
     /// Save current settings to disk.
@@ -120,8 +131,6 @@ pub const InputSettings = struct {
             return std.fmt.allocPrint(allocator, "{s}\\{s}\\{s}", .{ appdata, APP_NAME, SETTINGS_FILENAME });
         } else {
             // Fallback for other platforms (e.g. Android)
-            // On Android, we should ideally use the app's internal storage path.
-            // For now, fallback to current directory if writable, or a generic name.
             return std.fmt.allocPrint(allocator, "./{s}", .{SETTINGS_FILENAME});
         }
     }
@@ -142,7 +151,7 @@ pub const InputSettings = struct {
     fn parseJson(self: *InputSettings, data: []const u8) !void {
         const Schema = struct {
             version: u32,
-            bindings: [GameAction.count]ActionBinding,
+            bindings: []ActionBinding,
         };
 
         var parsed = try std.json.parseFromSlice(Schema, self.allocator, data, .{
@@ -154,10 +163,16 @@ pub const InputSettings = struct {
         if (parsed.value.version < 2) {
             log.log.info("Migrating input settings from version {} to {}", .{ parsed.value.version, CURRENT_VERSION });
             // Version 1 used a different format or had fewer actions.
-            // For now, we just accept the bindings we can and let defaults handle the rest.
+            // If we have actual migration logic, it would go here.
+            // For now, we just copy whatever matches the new schema.
         }
 
-        self.input_mapper.bindings = parsed.value.bindings;
+        if (parsed.value.bindings.len != GameAction.count) {
+            log.log.warn("Settings file has {} bindings, but engine expected {}. Some bindings will remain at defaults.", .{ parsed.value.bindings.len, GameAction.count });
+        }
+
+        const count = @min(parsed.value.bindings.len, GameAction.count);
+        @memcpy(self.input_mapper.bindings[0..count], parsed.value.bindings[0..count]);
     }
 };
 
@@ -171,13 +186,37 @@ test "InputSettings.load handles corrupt file" {
     file.close();
     defer std.fs.cwd().deleteFile(test_filename) catch {};
 
-    // Mocking getSettingsPath for test is hard without refactoring,
-    // but we can test parseJson directly.
     var settings = InputSettings.init(allocator);
     defer settings.deinit();
 
-    // This should fail internally but not crash
-    settings.parseJson("invalid json") catch |err| {
-        try std.testing.expect(err == error.UnexpectedToken);
-    };
+    // This should fail
+    try std.testing.expectError(error.UnexpectedToken, settings.parseJson("invalid json"));
+}
+
+test "InputSettings version migration" {
+    const allocator = std.testing.allocator;
+
+    // Simulating a version 1 file (if it had fewer bindings or just old version tag)
+    const v1_json =
+        \\{
+        \\  "version": 1,
+        \\  "bindings": [
+        \\    { "primary": { "key": 119 }, "alternate": { "none": {} } }
+        \\  ]
+        \\}
+    ;
+
+    var settings = InputSettings.init(allocator);
+    defer settings.deinit();
+
+    // Reset to defaults first
+    settings.input_mapper.resetToDefaults();
+
+    // Parse V1
+    try settings.parseJson(v1_json);
+
+    // Verify move_forward (index 0) was updated to W (119)
+    try std.testing.expect(settings.input_mapper.getBinding(.move_forward).primary.key == .w);
+    // Other bindings should still be default
+    try std.testing.expect(settings.input_mapper.getBinding(.jump).primary.key == .space);
 }
