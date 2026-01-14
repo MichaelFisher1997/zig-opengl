@@ -7,16 +7,15 @@ const backend = @import("../backend.zig");
 const Vec3 = @import("../../math/vec3.zig").Vec3;
 const log = @import("../../core/log.zig");
 
-// Constants - configurable?
-const MAX_VOICES = 64;
-const MIX_RATE = 44100;
-const MIX_CHANNELS = 2; // Stereo
-const MIX_FORMAT = c.SDL_AUDIO_S16;
+pub const MAX_VOICES = 64;
+pub const MIX_RATE = 44100;
+pub const MIX_CHANNELS = 2; // Stereo
+pub const MIX_FORMAT = c.SDL_AUDIO_S16;
 
 const Voice = struct {
     active: bool = false,
     sound_data: ?*const types.SoundData = null,
-    cursor: usize = 0, // Sample index
+    cursor: f32 = 0.0, // Sample index (float for pitch shifting)
 
     // Playback properties
     loop: bool = false,
@@ -84,7 +83,7 @@ const Mixer = struct {
         voice.* = .{
             .active = true,
             .sound_data = sound,
-            .cursor = 0,
+            .cursor = 0.0,
             .loop = config.loop,
             .pitch = config.pitch,
             .base_volume = std.math.clamp(config.volume, 0.0, 1.0),
@@ -207,20 +206,31 @@ const Mixer = struct {
 
             var i: usize = 0;
             while (i < SAMPLES_TO_MIX) : (i += 1) {
+                // Nearest-neighbor resampling
+                const pos_idx = @as(usize, @intFromFloat(voice.cursor));
+
                 // Critical Issue 2: Fix OOB check
                 // We need 2 bytes for a sample
-                if (voice.cursor * 2 + 2 > u8_buf.len) {
+                if (pos_idx * 2 + 2 > u8_buf.len) {
                     if (voice.loop) {
-                        voice.cursor = 0;
+                        voice.cursor = 0.0;
                     } else {
                         voice.active = false;
                         break;
                     }
                 }
 
+                // Re-calculate pos after potential loop wrap
+                const valid_pos_idx = @as(usize, @intFromFloat(voice.cursor));
+                if (valid_pos_idx * 2 + 2 > u8_buf.len) {
+                    // Double check in case pitch incremented past end exactly at loop point
+                    voice.active = false;
+                    break;
+                }
+
                 // Read sample (Mono S16)
-                const lo = u8_buf[voice.cursor * 2];
-                const hi = u8_buf[voice.cursor * 2 + 1];
+                const lo = u8_buf[valid_pos_idx * 2];
+                const hi = u8_buf[valid_pos_idx * 2 + 1];
 
                 // Bug Risk 4: Endianness
                 // SDL defines MIX_FORMAT as SDL_AUDIO_S16 (Little Endian usually)
@@ -232,7 +242,8 @@ const Mixer = struct {
                 mix_buf[i * 2] += @intFromFloat(@as(f32, @floatFromInt(sample)) * voice.effective_volume_l);
                 mix_buf[i * 2 + 1] += @intFromFloat(@as(f32, @floatFromInt(sample)) * voice.effective_volume_r);
 
-                voice.cursor += 1; // Basic playback rate (no pitch shifting yet)
+                // Advance cursor by pitch
+                voice.cursor += voice.pitch;
             }
         }
 
