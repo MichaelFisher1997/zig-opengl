@@ -68,6 +68,10 @@ pub const WorldScreen = struct {
             ctx.rhi.setVSync(ctx.settings.vsync);
         }
 
+        // Update Audio Listener
+        const cam = &self.session.player.camera;
+        ctx.audio_system.setListener(cam.position, cam.forward, cam.up);
+
         try self.session.update(dt, ctx.time.elapsed, ctx.input, ctx.input_mapper, ctx.atlas, ctx.window_manager.window, false);
 
         if (self.session.world.render_distance != ctx.settings.render_distance) {

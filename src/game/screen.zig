@@ -12,6 +12,7 @@ const RenderGraph = @import("../engine/graphics/render_graph.zig").RenderGraph;
 const AtmosphereSystem = @import("../engine/graphics/atmosphere_system.zig").AtmosphereSystem;
 const MaterialSystem = @import("../engine/graphics/material_system.zig").MaterialSystem;
 const Texture = @import("../engine/graphics/texture.zig").Texture;
+const AudioSystem = @import("../engine/audio/system.zig").AudioSystem;
 const rhi_pkg = @import("../engine/graphics/rhi.zig");
 
 pub const EngineContext = struct {
@@ -23,6 +24,7 @@ pub const EngineContext = struct {
     render_graph: *RenderGraph,
     atmosphere_system: *AtmosphereSystem,
     material_system: *MaterialSystem,
+    audio_system: *AudioSystem,
     env_map_ptr: ?*?Texture,
     shader: rhi_pkg.ShaderHandle,
 
