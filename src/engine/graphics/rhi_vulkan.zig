@@ -3308,6 +3308,7 @@ fn transitionShadowImage(ctx: *VulkanContext, cascade_index: u32, new_layout: c.
 fn beginMainPass(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frame_in_progress) return;
+    if (ctx.vulkan_swapchain.extent.width == 0 or ctx.vulkan_swapchain.extent.height == 0) return;
 
     const command_buffer = ctx.command_buffers[ctx.current_sync_frame];
     if (!ctx.main_pass_active) {
