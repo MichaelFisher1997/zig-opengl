@@ -93,7 +93,12 @@ const Mixer = struct {
         // Voice stealing if full (or just picking the free one found)
         const voice = &self.voices[oldest_idx];
         const gen = self.voice_generation_counter;
-        self.voice_generation_counter += 1;
+        // Check for overflow (extremely unlikely with u64, but for correctness)
+        if (self.voice_generation_counter == std.math.maxInt(u64)) {
+            self.voice_generation_counter = 1;
+        } else {
+            self.voice_generation_counter += 1;
+        }
 
         voice.* = .{
             .active = true,
@@ -126,6 +131,8 @@ const Mixer = struct {
 
         if (voice.active and voice.generation == handle.generation) {
             voice.active = false;
+        } else if (voice.active) {
+            log.log.debug("stopVoice: generation mismatch (req: {}, act: {}), ignoring.", .{ handle.generation, voice.generation });
         }
     }
 
@@ -156,8 +163,11 @@ const Mixer = struct {
             // Panning
             var pan: f32 = 0.0; // -1.0 left, 1.0 right
             if (dist > 0.001) {
-                const dir = to_sound.normalize();
-                if (dir.lengthSquared() > 0) {
+                // Normalize manually to avoid edge cases if vec3 implementation is not robust
+                // But we checked dist > 0.001, so to_sound length is safe.
+                // However, double check before normalize is good practice.
+                if (to_sound.lengthSquared() > 0.000001) {
+                    const dir = to_sound.normalize();
                     pan = dir.dot(self.listener_right);
                 }
             }
