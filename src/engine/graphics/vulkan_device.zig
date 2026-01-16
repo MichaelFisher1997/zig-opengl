@@ -18,7 +18,7 @@ pub const VulkanDevice = struct {
     draw_indirect_first_instance: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, window: *c.SDL_Window) !VulkanDevice {
-        var self: VulkanDevice = undefined;
+        var self = std.mem.zeroes(VulkanDevice);
         self.allocator = allocator;
 
         // 1. Create Instance
@@ -274,7 +274,7 @@ pub const VulkanDevice = struct {
         c.vkDestroyInstance(self.instance, null);
     }
 
-    pub fn findMemoryType(self: VulkanDevice, type_filter: u32, properties: c.VkMemoryPropertyFlags) u32 {
+    pub fn findMemoryType(self: VulkanDevice, type_filter: u32, properties: c.VkMemoryPropertyFlags) !u32 {
         var mem_properties: c.VkPhysicalDeviceMemoryProperties = undefined;
         c.vkGetPhysicalDeviceMemoryProperties(self.physical_device, &mem_properties);
 
@@ -286,7 +286,7 @@ pub const VulkanDevice = struct {
                 return i;
             }
         }
-        return 0;
+        return error.NoMatchingMemoryType;
     }
 };
 

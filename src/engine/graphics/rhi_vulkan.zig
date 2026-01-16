@@ -125,7 +125,7 @@ const StagingBuffer = struct {
     mapped_ptr: ?*anyopaque,
 
     fn init(ctx: *VulkanContext, size: u64) !StagingBuffer {
-        const buf = createVulkanBuffer(ctx, size, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        const buf = try createVulkanBuffer(ctx, size, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         if (buf.buffer == null) return error.VulkanError;
 
         var mapped: ?*anyopaque = null;
@@ -497,7 +497,7 @@ fn createShaderModule(device: c.VkDevice, code: []const u8) !c.VkShaderModule {
 }
 
 /// Finds memory type index matching filter and properties (e.g., HOST_VISIBLE).
-fn findMemoryType(physical_device: c.VkPhysicalDevice, type_filter: u32, properties: c.VkMemoryPropertyFlags) u32 {
+fn findMemoryType(physical_device: c.VkPhysicalDevice, type_filter: u32, properties: c.VkMemoryPropertyFlags) !u32 {
     var mem_properties: c.VkPhysicalDeviceMemoryProperties = undefined;
     c.vkGetPhysicalDeviceMemoryProperties(physical_device, &mem_properties);
 
@@ -509,7 +509,7 @@ fn findMemoryType(physical_device: c.VkPhysicalDevice, type_filter: u32, propert
             return i;
         }
     }
-    return 0;
+    return error.NoMatchingMemoryType;
 }
 
 /// Transitions an array of images to SHADER_READ_ONLY_OPTIMAL layout.
@@ -572,7 +572,7 @@ fn getMSAASampleCountFlag(samples: u8) c.VkSampleCountFlagBits {
 }
 
 /// Creates a buffer with specified usage and memory properties.
-fn createVulkanBuffer(ctx: *VulkanContext, size: usize, usage: c.VkBufferUsageFlags, properties: c.VkMemoryPropertyFlags) VulkanBuffer {
+fn createVulkanBuffer(ctx: *VulkanContext, size: usize, usage: c.VkBufferUsageFlags, properties: c.VkMemoryPropertyFlags) !VulkanBuffer {
     var buffer_info = std.mem.zeroes(c.VkBufferCreateInfo);
     buffer_info.sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     buffer_info.size = @intCast(size);
@@ -580,7 +580,7 @@ fn createVulkanBuffer(ctx: *VulkanContext, size: usize, usage: c.VkBufferUsageFl
     buffer_info.sharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
 
     var buffer: c.VkBuffer = null;
-    _ = c.vkCreateBuffer(ctx.vulkan_device.vk_device, &buffer_info, null, &buffer);
+    try checkVk(c.vkCreateBuffer(ctx.vulkan_device.vk_device, &buffer_info, null, &buffer));
 
     var mem_reqs: c.VkMemoryRequirements = undefined;
     c.vkGetBufferMemoryRequirements(ctx.vulkan_device.vk_device, buffer, &mem_reqs);
@@ -588,19 +588,18 @@ fn createVulkanBuffer(ctx: *VulkanContext, size: usize, usage: c.VkBufferUsageFl
     var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
     alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     alloc_info.allocationSize = mem_reqs.size;
-    alloc_info.memoryTypeIndex = findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, properties);
+    alloc_info.memoryTypeIndex = try try findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, properties);
 
     var memory: c.VkDeviceMemory = null;
-    // If allocation fails, we return null memory/buffer (handled by caller hopefully, or we should log/panic?)
-    // Existing code ignored errors here mostly. Ideally we check result.
-    if (c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &memory) != c.VK_SUCCESS) {
-        c.vkDestroyBuffer(ctx.vulkan_device.vk_device, buffer, null);
-        return .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
-    }
-    _ = c.vkBindBufferMemory(ctx.vulkan_device.vk_device, buffer, memory, 0);
+    try checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &memory));
+    try checkVk(c.vkBindBufferMemory(ctx.vulkan_device.vk_device, buffer, memory, 0));
 
-    const is_host_visible = (properties & c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
-    return .{ .buffer = buffer, .memory = memory, .size = mem_reqs.size, .is_host_visible = is_host_visible };
+    return .{
+        .buffer = buffer,
+        .memory = memory,
+        .size = mem_reqs.size,
+        .is_host_visible = (properties & c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0,
+    };
 }
 
 /// Helper to create a texture sampler based on config and global anisotropy.
@@ -882,7 +881,7 @@ fn createGPassResources(ctx: *VulkanContext) !void {
         var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc_info.allocationSize = mem_reqs.size;
-        alloc_info.memoryTypeIndex = findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        alloc_info.memoryTypeIndex = try findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         try checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &ctx.g_normal_memory));
         try checkVk(c.vkBindImageMemory(ctx.vulkan_device.vk_device, ctx.g_normal_image, ctx.g_normal_memory, 0));
@@ -920,7 +919,7 @@ fn createGPassResources(ctx: *VulkanContext) !void {
         var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc_info.allocationSize = mem_reqs.size;
-        alloc_info.memoryTypeIndex = findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        alloc_info.memoryTypeIndex = try findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         try checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &ctx.g_depth_memory));
         try checkVk(c.vkBindImageMemory(ctx.vulkan_device.vk_device, ctx.g_depth_image, ctx.g_depth_memory, 0));
@@ -1141,7 +1140,7 @@ fn createSSAOResources(ctx: *VulkanContext) !void {
         var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc_info.allocationSize = mem_reqs.size;
-        alloc_info.memoryTypeIndex = findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        alloc_info.memoryTypeIndex = try findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         try checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &ctx.ssao_memory));
         try checkVk(c.vkBindImageMemory(ctx.vulkan_device.vk_device, ctx.ssao_image, ctx.ssao_memory, 0));
@@ -1179,7 +1178,7 @@ fn createSSAOResources(ctx: *VulkanContext) !void {
         var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc_info.allocationSize = mem_reqs.size;
-        alloc_info.memoryTypeIndex = findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        alloc_info.memoryTypeIndex = try findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         try checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &ctx.ssao_blur_memory));
         try checkVk(c.vkBindImageMemory(ctx.vulkan_device.vk_device, ctx.ssao_blur_image, ctx.ssao_blur_memory, 0));
@@ -1229,7 +1228,7 @@ fn createSSAOResources(ctx: *VulkanContext) !void {
         var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc_info.allocationSize = mem_reqs.size;
-        alloc_info.memoryTypeIndex = findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        alloc_info.memoryTypeIndex = try findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         try checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &ctx.ssao_noise_memory));
         try checkVk(c.vkBindImageMemory(ctx.vulkan_device.vk_device, ctx.ssao_noise_image, ctx.ssao_noise_memory, 0));
@@ -1244,7 +1243,7 @@ fn createSSAOResources(ctx: *VulkanContext) !void {
         try checkVk(c.vkCreateImageView(ctx.vulkan_device.vk_device, &view_info, null, &ctx.ssao_noise_view));
 
         // Upload noise data via staging buffer
-        const staging = createVulkanBuffer(ctx, 16 * 4, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        const staging = try createVulkanBuffer(ctx, 16 * 4, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         defer {
             c.vkDestroyBuffer(ctx.vulkan_device.vk_device, staging.buffer, null);
             c.vkFreeMemory(ctx.vulkan_device.vk_device, staging.memory, null);
@@ -1310,7 +1309,7 @@ fn createSSAOResources(ctx: *VulkanContext) !void {
 
     // 5. Create SSAO kernel UBO with hemisphere samples
     {
-        ctx.ssao_kernel_ubo = createVulkanBuffer(ctx, @sizeOf(SSAOParams), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        ctx.ssao_kernel_ubo = try createVulkanBuffer(ctx, @sizeOf(SSAOParams), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
         // Generate hemisphere samples
         var rng = std.Random.DefaultPrng.init(67890);
@@ -2177,7 +2176,7 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
 
     var mem_reqs: c.VkMemoryRequirements = undefined;
     c.vkGetImageMemoryRequirements(ctx.vulkan_device.vk_device, ctx.shadow_image, &mem_reqs);
-    var alloc_info = c.VkMemoryAllocateInfo{ .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = mem_reqs.size, .memoryTypeIndex = findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) };
+    var alloc_info = c.VkMemoryAllocateInfo{ .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = mem_reqs.size, .memoryTypeIndex = try findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) };
     try checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &ctx.shadow_image_memory));
     try checkVk(c.vkBindImageMemory(ctx.vulkan_device.vk_device, ctx.shadow_image, ctx.shadow_image_memory, 0));
 
@@ -2291,18 +2290,18 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
     try createMainPipelines(ctx);
 
     for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        ctx.global_ubos[i] = createVulkanBuffer(ctx, @sizeOf(GlobalUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        ctx.shadow_ubos[i] = createVulkanBuffer(ctx, @sizeOf(ShadowUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        ctx.ui_vbos[i] = createVulkanBuffer(ctx, 1024 * 1024, c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        ctx.global_ubos[i] = try createVulkanBuffer(ctx, @sizeOf(GlobalUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        ctx.shadow_ubos[i] = try createVulkanBuffer(ctx, @sizeOf(ShadowUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        ctx.ui_vbos[i] = try createVulkanBuffer(ctx, 1024 * 1024, c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
         // Persistent mapping for UBOs
         _ = c.vkMapMemory(ctx.vulkan_device.vk_device, ctx.global_ubos[i].memory, 0, @sizeOf(GlobalUniforms), 0, &ctx.global_ubos_mapped[i]);
         _ = c.vkMapMemory(ctx.vulkan_device.vk_device, ctx.shadow_ubos[i].memory, 0, @sizeOf(ShadowUniforms), 0, &ctx.shadow_ubos_mapped[i]);
         ctx.descriptors_dirty[i] = true;
     }
-    ctx.model_ubo = createVulkanBuffer(ctx, @sizeOf(ModelUniforms) * 1000, c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ctx.model_ubo = try createVulkanBuffer(ctx, @sizeOf(ModelUniforms) * 1000, c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
-    ctx.dummy_instance_buffer = createVulkanBuffer(
+    ctx.dummy_instance_buffer = try createVulkanBuffer(
         ctx,
         @sizeOf(rhi.InstanceData),
         c.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -2398,7 +2397,7 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
     try checkVk(c.vkCreateSampler(ctx.vulkan_device.vk_device, &shadow_sampler_info, null, &ctx.shadow_sampler));
 
     // Create Debug Shadow VBO (6 vertices for fullscreen quad)
-    ctx.debug_shadow_vbo = createVulkanBuffer(ctx, 6 * 4 * @sizeOf(f32), c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ctx.debug_shadow_vbo = try createVulkanBuffer(ctx, 6 * 4 * @sizeOf(f32), c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     // Create cloud mesh (large quad centered on camera)
     ctx.cloud_mesh_size = 10000.0;
@@ -2410,8 +2409,8 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
     };
     const cloud_indices = [_]u16{ 0, 1, 2, 0, 2, 3 };
 
-    ctx.cloud_vbo = createVulkanBuffer(ctx, @sizeOf(@TypeOf(cloud_vertices)), c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    ctx.cloud_ebo = createVulkanBuffer(ctx, @sizeOf(@TypeOf(cloud_indices)), c.VK_BUFFER_USAGE_INDEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ctx.cloud_vbo = try createVulkanBuffer(ctx, @sizeOf(@TypeOf(cloud_vertices)), c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ctx.cloud_ebo = try createVulkanBuffer(ctx, @sizeOf(@TypeOf(cloud_indices)), c.VK_BUFFER_USAGE_INDEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     // Upload cloud vertex data
     var cloud_vbo_ptr: ?*anyopaque = null;
@@ -2456,7 +2455,7 @@ fn init(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*Rend
 
         var dummy_mem_reqs: c.VkMemoryRequirements = undefined;
         c.vkGetImageMemoryRequirements(ctx.vulkan_device.vk_device, ctx.dummy_shadow_image, &dummy_mem_reqs);
-        var dummy_alloc_info = c.VkMemoryAllocateInfo{ .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = dummy_mem_reqs.size, .memoryTypeIndex = findMemoryType(ctx.vulkan_device.physical_device, dummy_mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) };
+        var dummy_alloc_info = c.VkMemoryAllocateInfo{ .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = dummy_mem_reqs.size, .memoryTypeIndex = try findMemoryType(ctx.vulkan_device.physical_device, dummy_mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) };
         try checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &dummy_alloc_info, null, &ctx.dummy_shadow_memory));
         try checkVk(c.vkBindImageMemory(ctx.vulkan_device.vk_device, ctx.dummy_shadow_image, ctx.dummy_shadow_memory, 0));
 
@@ -2820,7 +2819,7 @@ fn createBuffer(ctx_ptr: *anyopaque, size: usize, usage: rhi.BufferUsage) rhi.Bu
         .uniform, .storage, .indirect => c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
     };
 
-    const buf = createVulkanBuffer(ctx, size, vk_usage, props);
+    const buf = createVulkanBuffer(ctx, size, vk_usage, props) catch return 0;
 
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
@@ -2898,7 +2897,10 @@ fn destroyBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle) void {
         // (i.e., after MAX_FRAMES_IN_FLIGHT frames have elapsed).
         const delete_frame = ctx.current_sync_frame;
         ctx.buffer_deletion_queue[delete_frame].append(ctx.allocator, .{ .buffer = entry.value.buffer, .memory = entry.value.memory }) catch {
-            std.log.err("Failed to queue buffer deletion (OOM). Leaking buffer.", .{});
+            std.log.warn("Failed to queue buffer deletion (OOM). Reverting to synchronous cleanup.", .{});
+            _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
+            c.vkDestroyBuffer(ctx.vulkan_device.vk_device, entry.value.buffer, null);
+            c.vkFreeMemory(ctx.vulkan_device.vk_device, entry.value.memory, null);
         };
     }
 }
@@ -3423,8 +3425,8 @@ fn endFrame(ctx_ptr: *anyopaque) void {
 
     const submit_result = c.vkQueueSubmit(ctx.vulkan_device.queue, 1, &submit_info, ctx.in_flight_fences[ctx.current_sync_frame]);
     if (submit_result == c.VK_ERROR_DEVICE_LOST) {
-        std.log.err("Vulkan device lost during vkQueueSubmit", .{});
-        @panic("Vulkan device lost");
+        std.log.err("Vulkan device lost during vkQueueSubmit. Please restart the application.", .{});
+        return;
     } else if (submit_result != c.VK_SUCCESS) {
         std.log.err("vkQueueSubmit failed with result: {d}", .{submit_result});
         _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
@@ -3448,8 +3450,8 @@ fn endFrame(ctx_ptr: *anyopaque) void {
     const present_result = c.vkQueuePresentKHR(ctx.vulkan_device.queue, &present_info);
 
     if (present_result == c.VK_ERROR_DEVICE_LOST) {
-        std.log.err("Vulkan device lost during vkQueuePresentKHR", .{});
-        @panic("Vulkan device lost");
+        std.log.err("Vulkan device lost during vkQueuePresentKHR. Please restart the application.", .{});
+        return;
     }
 
     if (present_result == c.VK_ERROR_SURFACE_LOST_KHR) {
@@ -3879,7 +3881,7 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
     var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
     alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     alloc_info.allocationSize = mem_reqs.size;
-    alloc_info.memoryTypeIndex = findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    alloc_info.memoryTypeIndex = try findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     if (c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &memory) != c.VK_SUCCESS) {
         c.vkDestroyImage(ctx.vulkan_device.vk_device, image, null);
@@ -3993,7 +3995,7 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
             }
         } else {
             // Fallback (Sync)
-            const staging_buffer = createVulkanBuffer(ctx, data.len, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            const staging_buffer = createVulkanBuffer(ctx, data.len, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch return;
             defer {
                 c.vkDestroyBuffer(ctx.vulkan_device.vk_device, staging_buffer.buffer, null);
                 c.vkFreeMemory(ctx.vulkan_device.vk_device, staging_buffer.memory, null);
@@ -4259,7 +4261,7 @@ fn updateTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u
         c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
     } else {
         // Fallback (Sync)
-        const staging_buffer = createVulkanBuffer(ctx, data.len, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        const staging_buffer = createVulkanBuffer(ctx, data.len, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch return;
         defer {
             c.vkDestroyBuffer(ctx.vulkan_device.vk_device, staging_buffer.buffer, null);
             c.vkFreeMemory(ctx.vulkan_device.vk_device, staging_buffer.memory, null);
