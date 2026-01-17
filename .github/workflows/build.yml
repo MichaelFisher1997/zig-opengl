@@ -3,10 +3,6 @@ name: Build
 on:
   push:
     branches: [ main ]
-    paths:
-      - '.github/workflows/**'
-      - 'flake.nix'
-      - 'flake.lock'
   pull_request:
     branches: [ main ]
 
