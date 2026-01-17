@@ -159,6 +159,18 @@ pub const Settings = struct {
             .label = "SSAO",
             .kind = .toggle,
         };
+        pub const volumetric_density = SettingMetadata{
+            .label = "FOG DENSITY",
+            .kind = .{ .slider = .{ .min = 0.0, .max = 0.5, .step = 0.05 } },
+        };
+        pub const volumetric_steps = SettingMetadata{
+            .label = "VOLUMETRIC STEPS",
+            .kind = .{ .int_range = .{ .min = 4, .max = 32, .step = 4 } },
+        };
+        pub const volumetric_scattering = SettingMetadata{
+            .label = "VOLUMETRIC SCATTERING",
+            .kind = .{ .slider = .{ .min = 0.0, .max = 1.0, .step = 0.05 } },
+        };
     };
 
     pub fn getShadowResolution(self: *const Settings) u32 {

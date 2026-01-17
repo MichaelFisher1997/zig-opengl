@@ -62,6 +62,7 @@ pub const GraphicsScreen = struct {
         const mouse_x: f32 = @floatFromInt(mouse_pos.x);
         const mouse_y: f32 = @floatFromInt(mouse_pos.y);
         const mouse_clicked = ctx.input.isMouseButtonPressed(.left);
+        const mouse_clicked_right = ctx.input.isMouseButtonPressed(.right);
 
         const screen_w: f32 = @floatFromInt(ctx.input.window_width);
         const screen_h: f32 = @floatFromInt(ctx.input.window_height);
@@ -90,15 +91,22 @@ pub const GraphicsScreen = struct {
 
         // Quality Preset
         Font.drawText(ui, "OVERALL QUALITY", lx, sy, label_scale, Color.rgba(0.4, 0.8, 1.0, 1.0));
-        const preset_idx = settings_pkg.json_presets.getIndex(settings);
-        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getPresetLabel(preset_idx), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-            const next_idx = (preset_idx + 1) % (settings_pkg.json_presets.graphics_presets.items.len + 1);
-            if (next_idx < settings_pkg.json_presets.graphics_presets.items.len) {
-                settings_pkg.json_presets.apply(settings, next_idx);
-                ctx.rhi.*.setAnisotropicFiltering(settings.anisotropic_filtering);
-                ctx.rhi.*.setMSAA(settings.msaa_samples);
-                ctx.rhi.*.setTexturesEnabled(settings.textures_enabled);
+
+        if (settings_pkg.json_presets.graphics_presets.items.len > 0) {
+            const preset_idx = settings_pkg.json_presets.getIndex(settings);
+            if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getPresetLabel(preset_idx), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+                const next_idx = (preset_idx + 1) % (settings_pkg.json_presets.graphics_presets.items.len + 1);
+                if (next_idx < settings_pkg.json_presets.graphics_presets.items.len) {
+                    settings_pkg.json_presets.apply(settings, next_idx);
+                    ctx.rhi.*.setAnisotropicFiltering(settings.anisotropic_filtering);
+                    ctx.rhi.*.setMSAA(settings.msaa_samples);
+                    ctx.rhi.*.setTexturesEnabled(settings.textures_enabled);
+                } else {
+                    // Custom selected, nothing changes in values but UI label updates to CUSTOM (via getPresetIndex next frame)
+                }
             }
+        } else {
+            _ = Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, "ERROR", btn_scale, mouse_x, mouse_y, false);
         }
         sy += row_height + 10.0 * ui_scale;
 
@@ -148,21 +156,50 @@ pub const GraphicsScreen = struct {
                 },
                 .slider => |slider| {
                     const val_str = std.fmt.bufPrint(&buf, "{d:.1}", .{val_ptr.*}) catch "ERR";
+                    var interacted = false;
                     if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, val_str, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-                        if (val_ptr.* + slider.step > slider.max) {
+                        interacted = true;
+                        if (val_ptr.* + slider.step > slider.max + 0.001) {
                             val_ptr.* = slider.min;
                         } else {
                             val_ptr.* += slider.step;
                         }
                     }
+
+                    // Correct approach without redrawing:
+                    // We need to know if the button was hovered. Widgets.drawButton returns true if clicked.
+                    // We can check hover manually using the same rect logic.
+                    const rect = .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height };
+                    const is_hovered = (mouse_x >= rect.x and mouse_x <= rect.x + rect.width and mouse_y >= rect.y and mouse_y <= rect.y + rect.height);
+
+                    if (is_hovered and !interacted and mouse_clicked_right) {
+                        if (val_ptr.* - slider.step < slider.min - 0.001) {
+                            val_ptr.* = slider.max;
+                        } else {
+                            val_ptr.* -= slider.step;
+                        }
+                    }
                 },
                 .int_range => |range| {
                     const val_str = std.fmt.bufPrint(&buf, "{d}", .{val_ptr.*}) catch "ERR";
+                    var interacted = false;
                     if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, val_str, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+                        interacted = true;
                         if (val_ptr.* + range.step > range.max) {
                             val_ptr.* = range.min;
                         } else {
                             val_ptr.* += range.step;
+                        }
+                    }
+
+                    const rect = .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height };
+                    const is_hovered = (mouse_x >= rect.x and mouse_x <= rect.x + rect.width and mouse_y >= rect.y and mouse_y <= rect.y + rect.height);
+
+                    if (is_hovered and !interacted and mouse_clicked_right) {
+                        if (val_ptr.* - range.step < range.min) {
+                            val_ptr.* = range.max;
+                        } else {
+                            val_ptr.* -= range.step;
                         }
                     }
                 },
@@ -176,6 +213,10 @@ pub const GraphicsScreen = struct {
                     ctx.rhi.*.setMSAA(settings.msaa_samples);
                 } else if (std.mem.eql(u8, decl.name, "textures_enabled")) {
                     ctx.rhi.*.setTexturesEnabled(settings.textures_enabled);
+                } else if (std.mem.eql(u8, decl.name, "vsync")) {
+                    ctx.rhi.*.setVSync(settings.vsync);
+                } else if (std.mem.eql(u8, decl.name, "volumetric_density")) {
+                    ctx.rhi.*.setVolumetricDensity(settings.volumetric_density);
                 }
             }
 
