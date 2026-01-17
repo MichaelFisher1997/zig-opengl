@@ -9,8 +9,13 @@ pub fn applyToRHI(settings: *const Settings, rhi: *RHI) void {
     rhi.setTexturesEnabled(settings.textures_enabled);
     rhi.setAnisotropicFiltering(settings.anisotropic_filtering);
     rhi.setMSAA(settings.msaa_samples);
-    // Note: Shadow resolution, PBR quality, etc might be handled during pipeline creation
-    // or uniform updates rather than direct RHI setters, checking available methods.
 
-    // Some settings (resolution, render distance) are handled by WindowManager or RenderGraph/Camera.
+    // Note:
+    // - Shadow resolution, PBR quality, and cloud shadows are primarily used during pipeline configuration
+    //   or uniform updates in RenderGraph/Systems, not through direct RHI setters.
+    // - Render distance is handled by Camera/World.
+    // - FOV/Sensitivity are handled by Input/Camera.
+    // - Window size is handled by WindowManager.
+
+    // Future expansion: If RHI exposes more setters (e.g. setShadowResolution), add them here.
 }
