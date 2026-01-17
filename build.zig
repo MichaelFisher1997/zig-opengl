@@ -63,6 +63,9 @@ pub fn build(b: *std.Build) void {
         .root_module = test_root_module,
     });
     exe_tests.linkLibC();
+    exe_tests.linkSystemLibrary("sdl3");
+    exe_tests.linkSystemLibrary("vulkan");
+    exe_tests.addIncludePath(b.path("libs/stb"));
 
     const test_step = b.step("test", "Run unit tests");
     const run_exe_tests = b.addRunArtifact(exe_tests);

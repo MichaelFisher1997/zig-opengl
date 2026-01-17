@@ -37,6 +37,8 @@ pub const VulkanDevice = struct {
         pFaultInfo: *c.VkDeviceFaultInfoEXT,
     ) callconv(.c) c.VkResult = null,
 
+    fault_count: u32 = 0,
+
     // Limits and capabilities
     max_anisotropy: f32 = 0.0,
     max_msaa_samples: u8 = 1,
@@ -333,7 +335,8 @@ pub const VulkanDevice = struct {
         const result = c.vkQueueSubmit(self.queue, 1, &submit_info, fence);
 
         if (result == c.VK_ERROR_DEVICE_LOST) {
-            std.log.err("GPU reset triggered voluntarily (VK_ERROR_DEVICE_LOST)", .{});
+            self.fault_count += 1;
+            std.log.err("GPU reset triggered voluntarily (VK_ERROR_DEVICE_LOST). Total faults: {d}", .{self.fault_count});
             self.logDeviceFaults();
             return error.GpuLost;
         }
@@ -365,5 +368,27 @@ pub const VulkanDevice = struct {
 };
 
 fn checkVk(result: c.VkResult) !void {
+    if (result == c.VK_ERROR_DEVICE_LOST) return error.GpuLost;
     if (result != c.VK_SUCCESS) return error.VulkanError;
+}
+
+test "VulkanDevice.submitGuarded initialization state" {
+    const testing = @import("std").testing;
+
+    const device = VulkanDevice{
+        .allocator = testing.allocator,
+        .vk_device = null,
+        .queue = null,
+    };
+
+    try testing.expectEqual(@as(u32, 0), device.fault_count);
+    try testing.expect(!device.supports_device_fault);
+}
+
+test "VulkanDevice checkVk mapping" {
+    const testing = @import("std").testing;
+
+    try testing.expectError(error.GpuLost, checkVk(c.VK_ERROR_DEVICE_LOST));
+    try testing.expectError(error.VulkanError, checkVk(c.VK_ERROR_INITIALIZATION_FAILED));
+    try checkVk(c.VK_SUCCESS);
 }
