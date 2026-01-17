@@ -53,6 +53,7 @@ pub const GraphicsScreen = struct {
         const settings = ctx.settings;
         const helpers = settings_pkg.ui_helpers;
         const presets = settings_pkg.presets;
+        const apply_logic = settings_pkg.apply_logic;
 
         // Draw background screen if it exists
         try ctx.screen_manager.drawParentScreen(ptr, ui);
@@ -97,10 +98,10 @@ pub const GraphicsScreen = struct {
             const next_idx = (preset_idx + 1) % (settings_pkg.GRAPHICS_PRESETS.len + 1);
             if (next_idx < settings_pkg.GRAPHICS_PRESETS.len) {
                 presets.apply(settings, next_idx);
-                ctx.rhi.*.setAnisotropicFiltering(settings.anisotropic_filtering);
-                ctx.rhi.*.setMSAA(settings.msaa_samples);
-                ctx.rhi.*.setTexturesEnabled(settings.textures_enabled);
             }
+            // Apply settings to RHI regardless of whether it's a preset or custom
+            // (though hitting the button only cycles to valid presets or back to low)
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height + 10.0 * ui_scale;
 
@@ -160,7 +161,7 @@ pub const GraphicsScreen = struct {
         Font.drawText(ui, "ANISOTROPIC FILTER", lx, sy, label_scale, Color.white);
         if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, helpers.getAnisotropyLabel(settings.anisotropic_filtering), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             settings.anisotropic_filtering = helpers.cycleAnisotropy(settings.anisotropic_filtering);
-            ctx.rhi.*.setAnisotropicFiltering(settings.anisotropic_filtering);
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height;
 
@@ -168,7 +169,7 @@ pub const GraphicsScreen = struct {
         Font.drawText(ui, "ANTI-ALIASING (MSAA)", lx, sy, label_scale, Color.white);
         if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, helpers.getMSAALabel(settings.msaa_samples), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             settings.msaa_samples = helpers.cycleMSAA(settings.msaa_samples);
-            ctx.rhi.*.setMSAA(settings.msaa_samples);
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height;
 

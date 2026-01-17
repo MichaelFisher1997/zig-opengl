@@ -2,6 +2,7 @@ pub const data = @import("settings/data.zig");
 pub const presets = @import("settings/presets.zig");
 pub const persistence = @import("settings/persistence.zig");
 pub const ui_helpers = @import("settings/ui_helpers.zig");
+pub const apply_logic = @import("settings/apply.zig");
 
 // Re-export core types for convenience
 pub const Settings = data.Settings;

@@ -11,17 +11,28 @@ pub fn load(allocator: std.mem.Allocator) Settings {
     const home = std.posix.getenv("HOME") orelse return .{};
 
     // Open home directory
-    var home_dir = std.fs.openDirAbsolute(home, .{}) catch return .{};
+    var home_dir = std.fs.openDirAbsolute(home, .{}) catch |err| {
+        std.log.warn("Failed to open home directory '{s}': {}", .{ home, err });
+        return .{};
+    };
     defer home_dir.close();
 
     // Try to open the config file relative to home
     const config_path = CONFIG_DIR ++ "/" ++ CONFIG_FILE;
-    const content = home_dir.readFileAlloc(config_path, allocator, @enumFromInt(16 * 1024)) catch return .{};
+    const content = home_dir.readFileAlloc(config_path, allocator, @enumFromInt(16 * 1024)) catch |err| {
+        if (err != error.FileNotFound) {
+            std.log.warn("Failed to read settings file '{s}': {}", .{ config_path, err });
+        }
+        return .{};
+    };
     defer allocator.free(content);
 
     const parsed = std.json.parseFromSlice(Settings, allocator, content, .{
         .ignore_unknown_fields = true,
-    }) catch return .{};
+    }) catch |err| {
+        std.log.warn("Failed to parse settings JSON: {}. Using defaults.", .{err});
+        return .{};
+    };
     defer parsed.deinit();
 
     var settings = parsed.value;

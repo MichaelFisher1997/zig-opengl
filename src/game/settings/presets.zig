@@ -69,21 +69,27 @@ pub fn apply(settings: *Settings, preset_idx: usize) void {
 
 pub fn getIndex(settings: *const Settings) usize {
     for (GRAPHICS_PRESETS, 0..) |preset, i| {
-        if (settings.shadow_quality == preset.shadow_quality and
-            settings.shadow_pcf_samples == preset.shadow_pcf_samples and
-            settings.shadow_cascade_blend == preset.shadow_cascade_blend and
-            settings.pbr_enabled == preset.pbr_enabled and
-            settings.pbr_quality == preset.pbr_quality and
-            settings.msaa_samples == preset.msaa_samples and
-            settings.anisotropic_filtering == preset.anisotropic_filtering and
-            settings.max_texture_resolution == preset.max_texture_resolution and
-            settings.cloud_shadows_enabled == preset.cloud_shadows_enabled and
-            settings.exposure == preset.exposure and
-            settings.saturation == preset.saturation and
-            settings.render_distance == preset.render_distance)
-        {
-            return i;
-        }
+        if (matches(settings, preset)) return i;
     }
     return GRAPHICS_PRESETS.len; // Custom
+}
+
+fn matches(settings: *const Settings, preset: PresetConfig) bool {
+    return settings.shadow_quality == preset.shadow_quality and
+        settings.shadow_pcf_samples == preset.shadow_pcf_samples and
+        settings.shadow_cascade_blend == preset.shadow_cascade_blend and
+        settings.pbr_enabled == preset.pbr_enabled and
+        settings.pbr_quality == preset.pbr_quality and
+        settings.msaa_samples == preset.msaa_samples and
+        settings.anisotropic_filtering == preset.anisotropic_filtering and
+        settings.max_texture_resolution == preset.max_texture_resolution and
+        settings.cloud_shadows_enabled == preset.cloud_shadows_enabled and
+        settings.exposure == preset.exposure and
+        settings.saturation == preset.saturation and
+        settings.render_distance == preset.render_distance and
+        settings.volumetric_lighting_enabled == preset.volumetric_lighting_enabled and
+        settings.volumetric_density == preset.volumetric_density and
+        settings.volumetric_steps == preset.volumetric_steps and
+        settings.volumetric_scattering == preset.volumetric_scattering and
+        settings.ssao_enabled == preset.ssao_enabled;
 }
