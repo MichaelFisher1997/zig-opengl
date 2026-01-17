@@ -69,8 +69,8 @@ const ShadowUniforms = extern struct {
 /// Per-draw model matrix, passed via push constants for efficiency.
 const ModelUniforms = extern struct {
     model: Mat4,
+    color: [3]f32,
     mask_radius: f32,
-    padding: [3]f32,
 };
 
 /// Per-draw shadow matrix and model, passed via push constants.
@@ -327,6 +327,7 @@ const VulkanContext = struct {
     shadow_pass_matrix: Mat4,
     current_view_proj: Mat4,
     current_model: Mat4,
+    current_color: [3]f32,
     current_mask_radius: f32,
     mutex: std.Thread.Mutex,
     clear_color: [4]f32,
@@ -2784,6 +2785,14 @@ fn deinit(ctx_ptr: *anyopaque) void {
                 if (zombie.memory != null) c.vkFreeMemory(ctx.vulkan_device.vk_device, zombie.memory, null);
             }
             ctx.buffer_deletion_queue[i].deinit(ctx.allocator);
+
+            for (ctx.image_deletion_queue[i].items) |zombie| {
+                if (zombie.sampler != null) c.vkDestroySampler(ctx.vulkan_device.vk_device, zombie.sampler, null);
+                if (zombie.view != null) c.vkDestroyImageView(ctx.vulkan_device.vk_device, zombie.view, null);
+                if (zombie.image != null) c.vkDestroyImage(ctx.vulkan_device.vk_device, zombie.image, null);
+                if (zombie.memory != null) c.vkFreeMemory(ctx.vulkan_device.vk_device, zombie.memory, null);
+            }
+            ctx.image_deletion_queue[i].deinit(ctx.allocator);
         }
 
         var buf_iter = ctx.buffers.iterator();
@@ -3645,9 +3654,10 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
     }
 }
 
-fn setModelMatrix(ctx_ptr: *anyopaque, model: Mat4, mask_radius: f32) void {
+fn setModelMatrix(ctx_ptr: *anyopaque, model: Mat4, color: Vec3, mask_radius: f32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.current_model = model;
+    ctx.current_color = .{ color.x, color.y, color.z };
     ctx.current_mask_radius = mask_radius;
 }
 
@@ -4614,8 +4624,8 @@ fn drawIndirect(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, command_buffer: r
             } else {
                 const uniforms = ModelUniforms{
                     .model = Mat4.identity,
+                    .color = .{ 1.0, 1.0, 1.0 },
                     .mask_radius = 0,
-                    .padding = .{ 0, 0, 0 },
                 };
                 c.vkCmdPushConstants(cb, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
             }
@@ -4714,8 +4724,8 @@ fn drawInstance(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, insta
         } else {
             const uniforms = ModelUniforms{
                 .model = Mat4.identity,
+                .color = .{ 1.0, 1.0, 1.0 },
                 .mask_radius = 0,
-                .padding = .{ 0, 0, 0 },
             };
             c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
         }
@@ -4803,8 +4813,8 @@ fn drawOffset(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: r
         } else {
             const uniforms = ModelUniforms{
                 .model = ctx.current_model,
+                .color = ctx.current_color,
                 .mask_radius = ctx.current_mask_radius,
-                .padding = .{ 0, 0, 0 },
             };
             c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
         }
@@ -5385,21 +5395,6 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
         std.log.warn("ZIGCRAFT_SAFE_MODE enabled: throttling uploads and forcing GPU idle each frame", .{});
     }
 
-    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        for (ctx.buffer_deletion_queue[i].items) |zombie| {
-            c.vkDestroyBuffer(ctx.vulkan_device.vk_device, zombie.buffer, null);
-            c.vkFreeMemory(ctx.vulkan_device.vk_device, zombie.memory, null);
-        }
-        ctx.buffer_deletion_queue[i].deinit(ctx.allocator);
-
-        for (ctx.image_deletion_queue[i].items) |zombie| {
-            c.vkDestroySampler(ctx.vulkan_device.vk_device, zombie.sampler, null);
-            c.vkDestroyImageView(ctx.vulkan_device.vk_device, zombie.view, null);
-            c.vkDestroyImage(ctx.vulkan_device.vk_device, zombie.image, null);
-            c.vkFreeMemory(ctx.vulkan_device.vk_device, zombie.memory, null);
-        }
-        ctx.image_deletion_queue[i].deinit(ctx.allocator);
-    }
     ctx.command_pool = null;
     ctx.transfer_command_pool = null;
     ctx.transfer_ready = false;
@@ -5471,6 +5466,7 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
             ctx.debug_shadow_descriptor_pool[i][j] = null;
         }
         ctx.buffer_deletion_queue[i] = .empty;
+        ctx.image_deletion_queue[i] = .empty;
     }
     ctx.model_ubo = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
     ctx.dummy_instance_buffer = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
@@ -5482,6 +5478,9 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.dummy_shadow_image = null;
     ctx.dummy_shadow_memory = null;
     ctx.dummy_shadow_view = null;
+    ctx.current_model = Mat4.identity;
+    ctx.current_color = .{ 1.0, 1.0, 1.0 };
+    ctx.current_mask_radius = 0;
 
     return rhi.RHI{
         .ptr = ctx,

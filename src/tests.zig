@@ -39,8 +39,10 @@ const SurfaceBuilder = @import("world/worldgen/surface_builder.zig").SurfaceBuil
 const CoastalSurfaceType = @import("world/worldgen/surface_builder.zig").CoastalSurfaceType;
 const BiomeSource = @import("world/worldgen/biome.zig").BiomeSource;
 
-// ============================================================================
-// Vec3 Tests
+// ECS tests
+test {
+    _ = @import("ecs_tests.zig");
+}
 // ============================================================================
 
 test "Vec3 addition" {
