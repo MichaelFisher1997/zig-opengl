@@ -158,9 +158,9 @@ pub const GraphicsScreen = struct {
                     const val_str = std.fmt.bufPrint(&buf, "{d:.1}", .{val_ptr.*}) catch "ERR";
 
                     if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, val_str, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-                        // Left-click: increment with wrap to min
+                        // Left-click: increment with wrap to max-step for step alignment
                         if (val_ptr.* + slider.step > slider.max + 0.001) {
-                            val_ptr.* = slider.min;
+                            val_ptr.* = slider.max - slider.step;
                         } else {
                             val_ptr.* += slider.step;
                         }
@@ -168,9 +168,9 @@ pub const GraphicsScreen = struct {
                         const button_rect = .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height };
                         const is_hovered = (mouse_x >= button_rect.x and mouse_x <= button_rect.x + button_rect.width and mouse_y >= button_rect.y and mouse_y <= button_rect.y + button_rect.height);
                         if (is_hovered and mouse_clicked_right) {
-                            // Right-click: decrement with wrap to max
+                            // Right-click: decrement with wrap to max-step for step alignment
                             if (val_ptr.* - slider.step < slider.min - 0.001) {
-                                val_ptr.* = slider.max;
+                                val_ptr.* = slider.max - slider.step;
                             } else {
                                 val_ptr.* -= slider.step;
                             }
@@ -181,9 +181,9 @@ pub const GraphicsScreen = struct {
                     const val_str = std.fmt.bufPrint(&buf, "{d}", .{val_ptr.*}) catch "ERR";
 
                     if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, val_str, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-                        // Left-click: increment with wrap to min
+                        // Left-click: increment with wrap to max-step for step alignment
                         if (val_ptr.* + range.step > range.max) {
-                            val_ptr.* = range.min;
+                            val_ptr.* = range.max - range.step;
                         } else {
                             val_ptr.* += range.step;
                         }
@@ -191,9 +191,9 @@ pub const GraphicsScreen = struct {
                         const button_rect = .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height };
                         const is_hovered = (mouse_x >= button_rect.x and mouse_x <= button_rect.x + button_rect.width and mouse_y >= button_rect.y and mouse_y <= button_rect.y + button_rect.height);
                         if (is_hovered and mouse_clicked_right) {
-                            // Right-click: decrement with wrap to max
+                            // Right-click: decrement with wrap to max-step for step alignment
                             if (val_ptr.* - range.step < range.min) {
-                                val_ptr.* = range.max;
+                                val_ptr.* = range.max - range.step;
                             } else {
                                 val_ptr.* -= range.step;
                             }
