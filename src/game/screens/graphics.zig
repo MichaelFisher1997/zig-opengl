@@ -6,7 +6,8 @@ const Widgets = @import("../../engine/ui/widgets.zig");
 const Screen = @import("../screen.zig");
 const IScreen = Screen.IScreen;
 const EngineContext = Screen.EngineContext;
-const Settings = @import("../state.zig").Settings;
+const settings_pkg = @import("../settings.zig");
+const Settings = settings_pkg.Settings;
 
 const PANEL_WIDTH_MAX = 850.0;
 const PANEL_HEIGHT_BASE = 850.0;
@@ -50,6 +51,9 @@ pub const GraphicsScreen = struct {
         const self: *@This() = @ptrCast(@alignCast(ptr));
         const ctx = self.context;
         const settings = ctx.settings;
+        const helpers = settings_pkg.ui_helpers;
+        const presets = settings_pkg.presets;
+        const apply_logic = settings_pkg.apply_logic;
 
         // Draw background screen if it exists
         try ctx.screen_manager.drawParentScreen(ptr, ui);
@@ -89,15 +93,21 @@ pub const GraphicsScreen = struct {
 
         // Quality Preset
         Font.drawText(ui, "OVERALL QUALITY", lx, sy, label_scale, Color.rgba(0.4, 0.8, 1.0, 1.0));
-        const preset_idx = settings.getPresetIndex();
-        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getPresetLabel(preset_idx), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-            const next_idx = (preset_idx + 1) % (Settings.GRAPHICS_PRESETS.len + 1);
-            if (next_idx < Settings.GRAPHICS_PRESETS.len) {
-                settings.applyPreset(next_idx);
-                ctx.rhi.*.setAnisotropicFiltering(settings.anisotropic_filtering);
-                ctx.rhi.*.setMSAA(settings.msaa_samples);
-                ctx.rhi.*.setTexturesEnabled(settings.textures_enabled);
+        const preset_idx = presets.getIndex(settings);
+        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, helpers.getPresetLabel(preset_idx), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+            // Cycle presets: Low -> Medium -> High -> Ultra -> Custom -> Low (5-state)
+            // preset_idx == GRAPHICS_PRESETS.len means "Custom" (no preset matches)
+            const total_states = settings_pkg.GRAPHICS_PRESETS.len + 1; // 4 presets + 1 custom
+            const next_idx = (preset_idx + 1) % total_states;
+
+            // Only apply preset if not cycling to Custom (Custom means "keep current settings")
+            if (next_idx < settings_pkg.GRAPHICS_PRESETS.len) {
+                presets.apply(settings, next_idx);
             }
+
+            // Apply settings to RHI regardless of whether it's a preset or custom
+
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height + 10.0 * ui_scale;
 
@@ -105,25 +115,28 @@ pub const GraphicsScreen = struct {
 
         // Shadows
         Font.drawText(ui, "SHADOW RESOLUTION", lx, sy, label_scale, Color.white);
-        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getShadowQualityLabel(settings.shadow_quality), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-            settings.shadow_quality = (settings.shadow_quality + 1) % @as(u32, @intCast(Settings.SHADOW_QUALITIES.len));
+        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, helpers.getShadowQualityLabel(settings.shadow_quality), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+            settings.shadow_quality = (settings.shadow_quality + 1) % @as(u32, @intCast(settings_pkg.SHADOW_QUALITIES.len));
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height;
 
         Font.drawText(ui, "SHADOW SOFTNESS", lx, sy, label_scale, Color.white);
-        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getShadowSamplesLabel(settings.shadow_pcf_samples, &buf), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, helpers.getShadowSamplesLabel(settings.shadow_pcf_samples, &buf), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             settings.shadow_pcf_samples = switch (settings.shadow_pcf_samples) {
                 4 => 8,
                 8 => 12,
                 12 => 16,
                 else => 4,
             };
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height;
 
         Font.drawText(ui, "CASCADE BLENDING", lx, sy, label_scale, Color.white);
         if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, if (settings.shadow_cascade_blend) "ENABLED" else "DISABLED", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             settings.shadow_cascade_blend = !settings.shadow_cascade_blend;
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height + 10.0 * ui_scale;
 
@@ -131,18 +144,20 @@ pub const GraphicsScreen = struct {
         Font.drawText(ui, "PBR RENDERING", lx, sy, label_scale, Color.rgba(1.0, 0.8, 0.4, 1.0));
         if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, if (settings.pbr_enabled) "ENABLED" else "DISABLED", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             settings.pbr_enabled = !settings.pbr_enabled;
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height;
 
         Font.drawText(ui, "PBR QUALITY", lx, sy, label_scale, Color.white);
-        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getPBRQualityLabel(settings.pbr_quality), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, helpers.getPBRQualityLabel(settings.pbr_quality), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             settings.pbr_quality = (settings.pbr_quality + 1) % 3;
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height + 10.0 * ui_scale;
 
         // Textures
         Font.drawText(ui, "MAX TEXTURE RES", lx, sy, label_scale, Color.white);
-        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getTextureResLabel(settings.max_texture_resolution, &buf), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, helpers.getTextureResLabel(settings.max_texture_resolution, &buf), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             settings.max_texture_resolution = switch (settings.max_texture_resolution) {
                 16 => 32,
                 32 => 64,
@@ -151,27 +166,29 @@ pub const GraphicsScreen = struct {
                 256 => 512,
                 else => 16,
             };
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height;
 
         Font.drawText(ui, "ANISOTROPIC FILTER", lx, sy, label_scale, Color.white);
-        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getAnisotropyLabel(settings.anisotropic_filtering), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-            settings.anisotropic_filtering = cycleAnisotropy(settings.anisotropic_filtering);
-            ctx.rhi.*.setAnisotropicFiltering(settings.anisotropic_filtering);
+        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, helpers.getAnisotropyLabel(settings.anisotropic_filtering), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+            settings.anisotropic_filtering = helpers.cycleAnisotropy(settings.anisotropic_filtering);
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height;
 
         // Misc
         Font.drawText(ui, "ANTI-ALIASING (MSAA)", lx, sy, label_scale, Color.white);
-        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, getMSAALabel(settings.msaa_samples), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-            settings.msaa_samples = cycleMSAA(settings.msaa_samples);
-            ctx.rhi.*.setMSAA(settings.msaa_samples);
+        if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, helpers.getMSAALabel(settings.msaa_samples), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
+            settings.msaa_samples = helpers.cycleMSAA(settings.msaa_samples);
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height;
 
         Font.drawText(ui, "CLOUD SHADOWS", lx, sy, label_scale, Color.white);
         if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, if (settings.cloud_shadows_enabled) "ENABLED" else "DISABLED", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             settings.cloud_shadows_enabled = !settings.cloud_shadows_enabled;
+            apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height;
 
@@ -191,78 +208,3 @@ pub const GraphicsScreen = struct {
         return Screen.makeScreen(@This(), self);
     }
 };
-
-fn getAnisotropyLabel(level: u8) []const u8 {
-    return switch (level) {
-        0, 1 => "OFF",
-        2 => "2X",
-        4 => "4X",
-        8 => "8X",
-        16 => "16X",
-        else => "ON",
-    };
-}
-
-fn cycleAnisotropy(current: u8) u8 {
-    return switch (current) {
-        0, 1 => 2,
-        2 => 4,
-        4 => 8,
-        8 => 16,
-        else => 1,
-    };
-}
-
-fn getMSAALabel(samples: u8) []const u8 {
-    return switch (samples) {
-        0, 1 => "OFF",
-        2 => "2X",
-        4 => "4X",
-        8 => "8X",
-        else => "ON",
-    };
-}
-
-fn cycleMSAA(current: u8) u8 {
-    return switch (current) {
-        0, 1 => 2,
-        2 => 4,
-        4 => 8,
-        else => 1,
-    };
-}
-
-fn getShadowQualityLabel(quality_idx: u32) []const u8 {
-    if (quality_idx < Settings.SHADOW_QUALITIES.len) {
-        return Settings.SHADOW_QUALITIES[quality_idx].label;
-    }
-    return Settings.SHADOW_QUALITIES[2].label;
-}
-
-fn getPBRQualityLabel(quality: u8) []const u8 {
-    return switch (quality) {
-        0 => "OFF",
-        1 => "LOW",
-        2 => "FULL",
-        else => "UNKNOWN",
-    };
-}
-
-fn getShadowSamplesLabel(samples: u8, buffer: []u8) []const u8 {
-    return std.fmt.bufPrint(buffer, "{} SAMPLES", .{samples}) catch "8 SAMPLES";
-}
-
-fn getTextureResLabel(res: u32, buffer: []u8) []const u8 {
-    return std.fmt.bufPrint(buffer, "{} PX", .{res}) catch "256 PX";
-}
-
-fn getPresetLabel(idx: usize) []const u8 {
-    if (idx >= Settings.GRAPHICS_PRESETS.len) return "CUSTOM";
-    return switch (Settings.GRAPHICS_PRESETS[idx].preset) {
-        .low => "LOW",
-        .medium => "MEDIUM",
-        .high => "HIGH",
-        .ultra => "ULTRA",
-        .custom => "CUSTOM",
-    };
-}

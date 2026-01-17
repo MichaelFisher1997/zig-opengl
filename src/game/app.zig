@@ -21,7 +21,8 @@ const MaterialSystem = @import("../engine/graphics/material_system.zig").Materia
 const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").ResourcePackManager;
 const AudioSystem = @import("../engine/audio/system.zig").AudioSystem;
 
-const Settings = @import("state.zig").Settings;
+const settings_pkg = @import("settings.zig");
+const Settings = settings_pkg.Settings;
 const InputSettings = @import("input_settings.zig").InputSettings;
 
 const screen_pkg = @import("screen.zig");
@@ -68,7 +69,7 @@ pub const App = struct {
     pub fn init(allocator: std.mem.Allocator) !*App {
         // Load settings first to get window resolution
         log.log.info("Initializing engine systems...", .{});
-        const settings = Settings.load(allocator);
+        const settings = settings_pkg.persistence.load(allocator);
 
         const wm = try WindowManager.init(allocator, true, settings.window_width, settings.window_height);
 
@@ -266,7 +267,7 @@ pub const App = struct {
         self.atlas.deinit();
         if (self.env_map) |*t| t.deinit();
         self.resource_pack_manager.deinit();
-        self.settings.deinit(self.allocator);
+        settings_pkg.persistence.deinit(&self.settings, self.allocator);
         if (self.shader != rhi_pkg.InvalidShaderHandle) self.rhi.destroyShader(self.shader);
         self.rhi.deinit();
 
@@ -305,7 +306,7 @@ pub const App = struct {
     }
 
     pub fn saveAllSettings(self: *const App) void {
-        self.settings.save(self.allocator);
+        settings_pkg.persistence.save(&self.settings, self.allocator);
         InputSettings.saveFromMapper(self.allocator, self.input_mapper) catch |err| {
             log.log.err("Failed to save input settings: {}", .{err});
         };

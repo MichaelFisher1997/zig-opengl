@@ -6,7 +6,8 @@ const Widgets = @import("../../engine/ui/widgets.zig");
 const Screen = @import("../screen.zig");
 const IScreen = Screen.IScreen;
 const EngineContext = Screen.EngineContext;
-const Settings = @import("../state.zig").Settings;
+const settings_pkg = @import("../settings.zig");
+const Settings = settings_pkg.Settings;
 const Texture = @import("../../engine/graphics/texture.zig").Texture;
 const log = @import("../../engine/core/log.zig");
 
@@ -92,7 +93,7 @@ pub const EnvironmentScreen = struct {
 
         if (Widgets.drawButton(ui, .{ .x = btn_x, .y = sy, .width = btn_width, .height = btn_height }, def_label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             if (!is_default) {
-                try settings.setEnvironmentMap(ctx.allocator, "default");
+                try settings_pkg.persistence.setEnvironmentMap(settings, ctx.allocator, "default");
                 try self.reloadEnvMap();
             }
         }
@@ -118,7 +119,7 @@ pub const EnvironmentScreen = struct {
 
             if (Widgets.drawButton(ui, .{ .x = btn_x, .y = sy, .width = btn_width, .height = btn_height }, label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
                 if (!is_selected) {
-                    try settings.setEnvironmentMap(ctx.allocator, entry.name);
+                    try settings_pkg.persistence.setEnvironmentMap(settings, ctx.allocator, entry.name);
                     try self.reloadEnvMap();
                 }
             }

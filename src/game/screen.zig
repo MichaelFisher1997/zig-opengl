@@ -6,7 +6,8 @@ const Time = @import("../engine/core/time.zig").Time;
 const WindowManager = @import("../engine/core/window.zig").WindowManager;
 const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").ResourcePackManager;
 const RHI = @import("../engine/graphics/rhi.zig").RHI;
-const Settings = @import("state.zig").Settings;
+const settings_pkg = @import("settings.zig");
+const Settings = settings_pkg.Settings;
 const TextureAtlas = @import("../engine/graphics/texture_atlas.zig").TextureAtlas;
 const RenderGraph = @import("../engine/graphics/render_graph.zig").RenderGraph;
 const AtmosphereSystem = @import("../engine/graphics/atmosphere_system.zig").AtmosphereSystem;
@@ -45,7 +46,7 @@ pub const EngineContext = struct {
     /// Saves all persistent application settings.
     /// Screens should call this when settings are modified, typically on a 'Back' action.
     pub fn saveSettings(self: EngineContext) void {
-        self.settings.save(self.allocator);
+        settings_pkg.persistence.save(self.settings, self.allocator);
         @import("input_settings.zig").InputSettings.saveFromMapper(self.allocator, self.input_mapper.*) catch |err| {
             @import("../engine/core/log.zig").log.err("Failed to save input settings: {}", .{err});
         };
