@@ -10,6 +10,7 @@ pub const RhiError = error{
     OutOfMemory,
     ResourceNotFound,
     InvalidState,
+    GpuLost,
 };
 
 pub const BufferHandle = u32;

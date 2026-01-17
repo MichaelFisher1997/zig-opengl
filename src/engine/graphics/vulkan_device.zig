@@ -1,3 +1,21 @@
+//! Vulkan Logical Device and Queue Management
+//!
+//! This module handles:
+//! - Physical device selection and feature discovery
+//! - Logical device creation with robustness extensions
+//! - Guarded command submission with device loss detection
+//! - Device fault reporting via VK_EXT_device_fault
+//!
+//! ## Robustness Layer
+//! The engine enables `VK_EXT_robustness2` to prevent GPU hangs from out-of-bounds
+//! buffer or image accesses. Shader accesses are clamped or return zero instead
+//! of triggering a TDR or system freeze.
+//!
+//! ## Thread Safety
+//! `VulkanDevice` uses an internal mutex for `submitGuarded` to ensure queue
+//! submissions are synchronized. However, most RHI operations are still restricted
+//! to the main thread by engine convention.
+
 const std = @import("std");
 const c = @import("../../c.zig").c;
 const rhi = @import("rhi.zig");
@@ -11,6 +29,13 @@ pub const VulkanDevice = struct {
     queue: c.VkQueue = null,
     graphics_family: u32 = 0,
     supports_device_fault: bool = false,
+    mutex: std.Thread.Mutex = .{},
+
+    // Extension function pointers
+    vkGetDeviceFaultInfoEXT: ?*const fn (
+        device: c.VkDevice,
+        pFaultInfo: *c.VkDeviceFaultInfoEXT,
+    ) callconv(.c) c.VkResult = null,
 
     // Limits and capabilities
     max_anisotropy: f32 = 0.0,
@@ -266,6 +291,15 @@ pub const VulkanDevice = struct {
         try checkVk(create_result);
         c.vkGetDeviceQueue(self.vk_device, self.graphics_family, 0, &self.queue);
 
+        if (self.supports_device_fault) {
+            const proc = c.vkGetDeviceProcAddr(self.vk_device, "vkGetDeviceFaultInfoEXT");
+            if (proc != null) {
+                self.vkGetDeviceFaultInfoEXT = @ptrCast(proc);
+            } else {
+                self.supports_device_fault = false;
+            }
+        }
+
         return self;
     }
 
@@ -291,7 +325,11 @@ pub const VulkanDevice = struct {
     }
 
     /// Submits command buffers to the graphics queue with device loss protection.
-    pub fn submitGuarded(self: VulkanDevice, submit_info: c.VkSubmitInfo, fence: c.VkFence) !void {
+    /// Thread-safe via internal mutex.
+    pub fn submitGuarded(self: *VulkanDevice, submit_info: c.VkSubmitInfo, fence: c.VkFence) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         const result = c.vkQueueSubmit(self.queue, 1, &submit_info, fence);
 
         if (result == c.VK_ERROR_DEVICE_LOST) {
@@ -305,20 +343,24 @@ pub const VulkanDevice = struct {
 
     /// Logs detailed fault information if VK_EXT_device_fault is enabled and supported.
     pub fn logDeviceFaults(self: VulkanDevice) void {
-        if (!self.supports_device_fault) return;
+        const func = self.vkGetDeviceFaultInfoEXT orelse {
+            std.log.warn("VK_EXT_device_fault not available; review system logs (dmesg) for GPU errors.", .{});
+            return;
+        };
 
-        // Note: vkGetDeviceFaultInfoEXT is an extension function, we would typically load it via vkGetDeviceProcAddr
-        // However, if it's in the headers and we link against Vulkan, we can try to call it.
-        // For simplicity in this implementation, we log that fault reporting is enabled.
-        std.log.info("Checking VK_EXT_device_fault for detailed hang info...", .{});
+        std.log.info("Querying VK_EXT_device_fault for detailed hang info...", .{});
 
         var fault_info = std.mem.zeroes(c.VkDeviceFaultInfoEXT);
         fault_info.sType = c.VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT;
 
-        // In a full implementation, we'd call:
-        // c.vkGetDeviceFaultInfoEXT(self.vk_device, &fault_info);
-        // And parse fault_info.pAddressInfos / fault_info.pVendorInfos
-        std.log.warn("Device fault detected. Review system logs (dmesg/journalctl) for kernel-level GPU driver errors.", .{});
+        const result = func(self.vk_device, &fault_info);
+        if (result == c.VK_SUCCESS) {
+            const desc: [*:0]const u8 = @ptrCast(&fault_info.description);
+            std.log.err("GPU Fault Detected: {s}", .{desc});
+        } else {
+            std.log.warn("Failed to retrieve device fault info: {d}", .{result});
+        }
+        std.log.warn("Review system logs (dmesg/journalctl) for kernel-level GPU driver errors.", .{});
     }
 };
 

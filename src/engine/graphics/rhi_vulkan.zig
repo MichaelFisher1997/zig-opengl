@@ -4150,7 +4150,11 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
             submit_info.commandBufferCount = 1;
             submit_info.pCommandBuffers = &temp_cb;
 
-            _ = ctx.vulkan_device.submitGuarded(submit_info, null) catch {};
+            ctx.vulkan_device.submitGuarded(submit_info, null) catch |err| {
+                if (err != error.GpuLost) {
+                    std.log.err("Async layout transition submit failed: {}", .{err});
+                }
+            };
             _ = c.vkQueueWaitIdle(ctx.vulkan_device.queue);
 
             c.vkFreeCommandBuffers(ctx.vulkan_device.vk_device, ctx.transfer_command_pool, 1, &temp_cb);
@@ -4368,7 +4372,11 @@ fn updateTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &temp_cb;
 
-        _ = ctx.vulkan_device.submitGuarded(submit_info, null) catch {};
+        ctx.vulkan_device.submitGuarded(submit_info, null) catch |err| {
+            if (err != error.GpuLost) {
+                std.log.err("One-time transfer submit failed: {}", .{err});
+            }
+        };
         _ = c.vkQueueWaitIdle(ctx.vulkan_device.queue);
 
         c.vkFreeCommandBuffers(ctx.vulkan_device.vk_device, ctx.transfer_command_pool, 1, &temp_cb);

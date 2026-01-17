@@ -74,6 +74,8 @@ pub fn main() !void {
 
     const oob_offset: u64 = 1024;
     std.debug.print("Buffer size: {d} bytes, attempting fill at offset {d} (OOB!)\n", .{ buffer_size, oob_offset });
+    std.debug.print("Note: With VK_EXT_robustness2, this should be SILENTLY CLAMPED by the driver\n", .{});
+    std.debug.print("and should NOT trigger a device loss or system freeze.\n", .{});
     c.vkCmdFillBuffer(cmd, buffer, oob_offset, 64, 0xDEADBEEF);
 
     _ = c.vkEndCommandBuffer(cmd);
