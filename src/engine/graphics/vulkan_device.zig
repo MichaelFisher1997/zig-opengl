@@ -39,6 +39,8 @@ pub const VulkanDevice = struct {
 
     fault_count: u32 = 0,
     recovery_count: u32 = 0,
+    recovery_success_count: u32 = 0,
+    recovery_fail_count: u32 = 0,
     max_recovery_attempts: u32 = 5,
 
     // Limits and capabilities

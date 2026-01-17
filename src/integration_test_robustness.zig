@@ -23,6 +23,11 @@ pub fn main() !void {
 
     try child.spawn();
 
+    // Read stdout
+    var stdout_buf: [4096]u8 = undefined;
+    const stdout_len = try child.stdout.?.readAll(&stdout_buf);
+    const stdout = stdout_buf[0..stdout_len];
+
     const result = try child.wait();
 
     // Check exit code
@@ -30,6 +35,7 @@ pub fn main() !void {
         .Exited => |code| {
             if (code != 0) {
                 std.debug.print("robust-demo failed with exit code {d}\n", .{code});
+                std.debug.print("Output:\n{s}\n", .{stdout});
                 return error.DemoFailed;
             }
         },
@@ -39,7 +45,15 @@ pub fn main() !void {
         },
     }
 
-    std.debug.print("robust-demo exited successfully.\n", .{});
+    // Verify expected output
+    const expected_msg = "[SUCCESS] Command completed successfully. Robustness2 prevented device loss.";
+    if (std.mem.indexOf(u8, stdout, expected_msg) == null) {
+        std.debug.print("robust-demo did not output expected success message.\n", .{});
+        std.debug.print("Output:\n{s}\n", .{stdout});
+        return error.VerificationFailed;
+    }
+
+    std.debug.print("robust-demo exited successfully and verified robustness.\n", .{});
 }
 
 fn findExecutable(allocator: std.mem.Allocator, name: []const u8) ![]u8 {

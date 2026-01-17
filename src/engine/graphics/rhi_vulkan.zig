@@ -3059,6 +3059,7 @@ fn resetRenderFinishedSemaphore(ctx: *VulkanContext) void {
 
 fn beginFrame(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (ctx.gpu_fault_detected) return;
 
     if (ctx.frame_in_progress) return;
 
@@ -4172,7 +4173,9 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
             ctx.vulkan_device.submitGuarded(submit_info, ctx.transfer_fence) catch |err| {
                 if (err == error.GpuLost) {
                     ctx.gpu_fault_detected = true;
-                    // fault_count is already incremented by submitGuarded
+                    // Resource leak note: The vkImage/vkImageView/vkDeviceMemory created above are not destroyed here.
+                    // This is acceptable because GpuLost implies the device is in a fatal state where specific resource cleanup is moot
+                    // or will be handled by device destruction/recovery.
                     return 0;
                 }
                 std.log.err("Async layout transition submit failed: {}", .{err});
@@ -4475,16 +4478,23 @@ fn recover(ctx_ptr: *anyopaque) anyerror!void {
     // For now, we reset the flag and recreate the swapchain.
     // Limitation: If the device is truly lost (VK_ERROR_DEVICE_LOST returned everywhere),
     // this soft recovery will likely fail or loop. Full engine restart is recommended for true TDRs.
+    // TODO: Implement hard recovery (recreateDevice) which would:
+    // 1. Destroy logical device and all resources
+    // 2. Re-initialize device via VulkanDevice.init
+    // 3. Re-create all RHI resources (buffers, textures, pipelines)
+    // 4. Restore application state
     ctx.gpu_fault_detected = false;
     recreateSwapchain(ctx);
 
     // Basic verification: Check if device is responsive
     if (c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device) != c.VK_SUCCESS) {
         std.log.err("RHI: Device unresponsive after recovery. Recovery failed.", .{});
+        ctx.vulkan_device.recovery_fail_count += 1;
         ctx.gpu_fault_detected = true; // Re-flag to prevent further submissions
         return error.GpuLost;
     }
 
+    ctx.vulkan_device.recovery_success_count += 1;
     std.log.info("RHI: Recovery step complete. If issues persist, please restart.", .{});
 }
 
