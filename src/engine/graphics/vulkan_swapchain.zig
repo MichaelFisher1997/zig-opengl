@@ -226,7 +226,7 @@ pub const VulkanSwapchain = struct {
         var depth_alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         depth_alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         depth_alloc_info.allocationSize = depth_mem_reqs.size;
-        depth_alloc_info.memoryTypeIndex = self.device.findMemoryType(depth_mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        depth_alloc_info.memoryTypeIndex = try self.device.findMemoryType(depth_mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         try checkVk(c.vkAllocateMemory(self.device.vk_device, &depth_alloc_info, null, &self.depth_image_memory));
         try checkVk(c.vkBindImageMemory(self.device.vk_device, self.depth_image, self.depth_image_memory, 0));
 
@@ -267,12 +267,8 @@ pub const VulkanSwapchain = struct {
         var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc_info.allocationSize = mem_reqs.size;
-        const lazy_mem_type = self.device.findMemoryType(mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT | c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        if (lazy_mem_type != 0) {
-            alloc_info.memoryTypeIndex = lazy_mem_type;
-        } else {
-            alloc_info.memoryTypeIndex = self.device.findMemoryType(mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        }
+        alloc_info.memoryTypeIndex = self.device.findMemoryType(mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT | c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) catch
+            try self.device.findMemoryType(mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         try checkVk(c.vkAllocateMemory(self.device.vk_device, &alloc_info, null, &self.msaa_color_memory));
         try checkVk(c.vkBindImageMemory(self.device.vk_device, self.msaa_color_image, self.msaa_color_memory, 0));

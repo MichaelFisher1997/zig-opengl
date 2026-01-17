@@ -588,7 +588,7 @@ fn createVulkanBuffer(ctx: *VulkanContext, size: usize, usage: c.VkBufferUsageFl
     var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
     alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     alloc_info.allocationSize = mem_reqs.size;
-    alloc_info.memoryTypeIndex = try try findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, properties);
+    alloc_info.memoryTypeIndex = try findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, properties);
 
     var memory: c.VkDeviceMemory = null;
     try checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &memory));
@@ -3881,7 +3881,10 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
     var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
     alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     alloc_info.allocationSize = mem_reqs.size;
-    alloc_info.memoryTypeIndex = try findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    alloc_info.memoryTypeIndex = findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) catch {
+        c.vkDestroyImage(ctx.vulkan_device.vk_device, image, null);
+        return 0;
+    };
 
     if (c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &memory) != c.VK_SUCCESS) {
         c.vkDestroyImage(ctx.vulkan_device.vk_device, image, null);
@@ -3995,7 +3998,7 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
             }
         } else {
             // Fallback (Sync)
-            const staging_buffer = createVulkanBuffer(ctx, data.len, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch return;
+            const staging_buffer = createVulkanBuffer(ctx, data.len, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch return 0;
             defer {
                 c.vkDestroyBuffer(ctx.vulkan_device.vk_device, staging_buffer.buffer, null);
                 c.vkFreeMemory(ctx.vulkan_device.vk_device, staging_buffer.memory, null);

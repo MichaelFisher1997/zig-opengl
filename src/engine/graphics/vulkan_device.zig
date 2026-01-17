@@ -18,8 +18,7 @@ pub const VulkanDevice = struct {
     draw_indirect_first_instance: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, window: *c.SDL_Window) !VulkanDevice {
-        var self = std.mem.zeroes(VulkanDevice);
-        self.allocator = allocator;
+        var self = VulkanDevice{ .allocator = allocator };
 
         // 1. Create Instance
         var count: u32 = 0;
