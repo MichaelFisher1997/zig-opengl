@@ -38,7 +38,7 @@ pub const DECORATIONS = [_]Decoration{
     // === Flower Patches (Variant < -0.6) ===
     .{
         .simple = .{
-            .block = .flower_yellow, // Use yellow for density? Or mixed.
+            .block = .flower_yellow,
             .place_on = &.{.grass},
             .biomes = &.{ .plains, .forest },
             .probability = 0.4, // Dense!
@@ -65,7 +65,7 @@ pub const DECORATIONS = [_]Decoration{
     // === Boulders (Rocky Patches: Variant > 0.6) ===
     .{
         .simple = .{
-            .block = .cobblestone, // Boulders
+            .block = .cobblestone,
             .place_on = &.{.grass},
             .biomes = &.{ .plains, .mountains, .taiga },
             .probability = 0.05,

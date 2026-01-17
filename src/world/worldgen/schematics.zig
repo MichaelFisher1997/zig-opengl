@@ -5,7 +5,7 @@ const decoration_types = @import("decoration_types.zig");
 const Schematic = decoration_types.Schematic;
 const SchematicBlock = decoration_types.SchematicBlock;
 
-const LOG = BlockType.wood; // "wood" is likely Oak Log
+const LOG = BlockType.wood;
 const LEAVES = BlockType.leaves;
 
 pub const OAK_TREE = Schematic{
@@ -42,3 +42,11 @@ pub const OAK_TREE = Schematic{
     .center_x = 0,
     .center_z = 0,
 };
+
+test "OAK_TREE properties" {
+    const std = @import("std");
+    try std.testing.expectEqual(@as(i32, 5), OAK_TREE.size_x);
+    try std.testing.expectEqual(@as(i32, 6), OAK_TREE.size_y);
+    try std.testing.expectEqual(@as(i32, 5), OAK_TREE.size_z);
+    try std.testing.expect(OAK_TREE.blocks.len == 21); // 4 logs + 17 leaves
+}

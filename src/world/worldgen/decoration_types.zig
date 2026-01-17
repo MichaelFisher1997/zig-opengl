@@ -21,8 +21,6 @@ pub const SimpleDecoration = struct {
     // Range -1.0 to 1.0. Decoration only spawns if variant noise is within range.
     variant_min: f32 = -1.0,
     variant_max: f32 = 1.0,
-
-    // Optional: required neighbor blocks (like cactus needs sand around?)
 };
 
 pub const SchematicBlock = struct {
