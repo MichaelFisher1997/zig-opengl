@@ -11,6 +11,8 @@ pub const RhiError = error{
     ResourceNotFound,
     InvalidState,
     GpuLost,
+    SurfaceLost,
+    InitializationFailed,
 };
 
 pub const BufferHandle = u32;

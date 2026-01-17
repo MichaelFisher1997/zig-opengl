@@ -368,8 +368,14 @@ pub const VulkanDevice = struct {
 };
 
 fn checkVk(result: c.VkResult) !void {
-    if (result == c.VK_ERROR_DEVICE_LOST) return error.GpuLost;
-    if (result != c.VK_SUCCESS) return error.VulkanError;
+    switch (result) {
+        c.VK_SUCCESS => return,
+        c.VK_ERROR_DEVICE_LOST => return error.GpuLost,
+        c.VK_ERROR_OUT_OF_HOST_MEMORY, c.VK_ERROR_OUT_OF_DEVICE_MEMORY => return error.OutOfMemory,
+        c.VK_ERROR_SURFACE_LOST_KHR => return error.SurfaceLost,
+        c.VK_ERROR_INITIALIZATION_FAILED => return error.InitializationFailed,
+        else => return error.VulkanError,
+    }
 }
 
 test "VulkanDevice.submitGuarded initialization state" {
@@ -389,6 +395,10 @@ test "VulkanDevice checkVk mapping" {
     const testing = @import("std").testing;
 
     try testing.expectError(error.GpuLost, checkVk(c.VK_ERROR_DEVICE_LOST));
-    try testing.expectError(error.VulkanError, checkVk(c.VK_ERROR_INITIALIZATION_FAILED));
+    try testing.expectError(error.OutOfMemory, checkVk(c.VK_ERROR_OUT_OF_HOST_MEMORY));
+    try testing.expectError(error.OutOfMemory, checkVk(c.VK_ERROR_OUT_OF_DEVICE_MEMORY));
+    try testing.expectError(error.SurfaceLost, checkVk(c.VK_ERROR_SURFACE_LOST_KHR));
+    try testing.expectError(error.InitializationFailed, checkVk(c.VK_ERROR_INITIALIZATION_FAILED));
+    try testing.expectError(error.VulkanError, checkVk(c.VK_ERROR_UNKNOWN));
     try checkVk(c.VK_SUCCESS);
 }
