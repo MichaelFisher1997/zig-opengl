@@ -75,6 +75,7 @@ pub fn getIndex(settings: *const Settings) usize {
 }
 
 fn matches(settings: *const Settings, preset: PresetConfig) bool {
+    const epsilon = 0.0001;
     return settings.shadow_quality == preset.shadow_quality and
         settings.shadow_pcf_samples == preset.shadow_pcf_samples and
         settings.shadow_cascade_blend == preset.shadow_cascade_blend and
@@ -84,12 +85,12 @@ fn matches(settings: *const Settings, preset: PresetConfig) bool {
         settings.anisotropic_filtering == preset.anisotropic_filtering and
         settings.max_texture_resolution == preset.max_texture_resolution and
         settings.cloud_shadows_enabled == preset.cloud_shadows_enabled and
-        settings.exposure == preset.exposure and
-        settings.saturation == preset.saturation and
+        std.math.approxEqAbs(f32, settings.exposure, preset.exposure, epsilon) and
+        std.math.approxEqAbs(f32, settings.saturation, preset.saturation, epsilon) and
         settings.render_distance == preset.render_distance and
         settings.volumetric_lighting_enabled == preset.volumetric_lighting_enabled and
-        settings.volumetric_density == preset.volumetric_density and
+        std.math.approxEqAbs(f32, settings.volumetric_density, preset.volumetric_density, epsilon) and
         settings.volumetric_steps == preset.volumetric_steps and
-        settings.volumetric_scattering == preset.volumetric_scattering and
+        std.math.approxEqAbs(f32, settings.volumetric_scattering, preset.volumetric_scattering, epsilon) and
         settings.ssao_enabled == preset.ssao_enabled;
 }
