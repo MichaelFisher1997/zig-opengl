@@ -95,11 +95,14 @@ pub const GraphicsScreen = struct {
         Font.drawText(ui, "OVERALL QUALITY", lx, sy, label_scale, Color.rgba(0.4, 0.8, 1.0, 1.0));
         const preset_idx = presets.getIndex(settings);
         if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, helpers.getPresetLabel(preset_idx), btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-            // Cycle presets: Low -> Medium -> High -> Ultra -> Low (skips Custom)
-            const next_idx = (preset_idx + 1) % settings_pkg.GRAPHICS_PRESETS.len;
+            // Cycle presets: Low -> Medium -> High -> Ultra -> Low
+            // If current state is Custom (no match), reset to Low.
+            const next_idx = if (preset_idx >= settings_pkg.GRAPHICS_PRESETS.len) 0 else (preset_idx + 1) % settings_pkg.GRAPHICS_PRESETS.len;
+
             presets.apply(settings, next_idx);
 
             // Apply settings to RHI regardless of whether it's a preset or custom
+
             apply_logic.applyToRHI(settings, ctx.rhi);
         }
         sy += row_height + 10.0 * ui_scale;

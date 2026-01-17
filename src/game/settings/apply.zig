@@ -1,21 +1,27 @@
 const Settings = @import("data.zig").Settings;
 const RHI = @import("../../engine/graphics/rhi.zig").RHI;
 
-/// Applies all relevant settings to the Render Hardware Interface.
-/// This ensures the RHI state matches the Settings data.
+/// Applies all relevant settings to the Render Hardware Interface (RHI).
+/// This ensures the RHI state matches the Settings data for values it directly controls.
 pub fn applyToRHI(settings: *const Settings, rhi: *RHI) void {
+    // These settings map directly to RHI state setters
     rhi.setVSync(settings.vsync);
     rhi.setWireframe(settings.wireframe_enabled);
     rhi.setTexturesEnabled(settings.textures_enabled);
     rhi.setAnisotropicFiltering(settings.anisotropic_filtering);
     rhi.setMSAA(settings.msaa_samples);
 
-    // Note:
-    // - Shadow resolution, PBR quality, and cloud shadows are primarily used during pipeline configuration
-    //   or uniform updates in RenderGraph/Systems, not through direct RHI setters.
-    // - Render distance is handled by Camera/World.
-    // - FOV/Sensitivity are handled by Input/Camera.
-    // - Window size is handled by WindowManager.
+    // NOTE: The following settings are NOT applied here because RHI does not expose setters for them.
+    // Instead, they are consumed by other systems frame-by-frame or during resource creation:
+    //
+    // - Shadow Resolution: Used in RenderGraph setup / ShadowPass init.
+    // - PBR Enabled/Quality: Passed via updateGlobalUniforms() in App.runSingleFrame().
+    // - Cloud Shadows: Passed via CloudParams in updateGlobalUniforms().
+    // - Volumetric Lighting: Consumed by AtmosphereSystem/VolumetricPass.
+    // - SSAO: Consumed by SSAOPass.
+    // - Render Distance: Handled by World/ChunkManager.
+    // - FOV/Sensitivity: Handled by Camera/Input.
+    // - Window Size: Handled by WindowManager.
 
-    // Future expansion: If RHI exposes more setters (e.g. setShadowResolution), add them here.
+    // Calling this function ensures that any RHI-managed state is consistent with the Settings struct.
 }
