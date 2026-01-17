@@ -4172,6 +4172,7 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
             ctx.vulkan_device.submitGuarded(submit_info, ctx.transfer_fence) catch |err| {
                 if (err == error.GpuLost) {
                     ctx.gpu_fault_detected = true;
+                    ctx.vulkan_device.fault_count += 1;
                     return 0;
                 }
                 std.log.err("Async layout transition submit failed: {}", .{err});
@@ -4398,6 +4399,7 @@ fn updateTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u
         ctx.vulkan_device.submitGuarded(submit_info, ctx.transfer_fence) catch |err| {
             if (err == error.GpuLost) {
                 ctx.gpu_fault_detected = true;
+                ctx.vulkan_device.fault_count += 1;
                 return;
             }
             std.log.err("One-time transfer submit failed: {}", .{err});
@@ -4457,7 +4459,8 @@ fn recover(ctx_ptr: *anyopaque) anyerror!void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.gpu_fault_detected) return;
 
-    std.log.info("RHI: Attempting GPU recovery...", .{});
+    ctx.vulkan_device.recovery_count += 1;
+    std.log.info("RHI: Attempting GPU recovery (Attempt {d})...", .{ctx.vulkan_device.recovery_count});
 
     // Best effort: wait for idle
     _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
@@ -4466,8 +4469,17 @@ fn recover(ctx_ptr: *anyopaque) anyerror!void {
     // but we might have hit a corner case.
     // Full recovery requires recreating the logical device and all resources.
     // For now, we reset the flag and recreate the swapchain.
+    // Limitation: If the device is truly lost (VK_ERROR_DEVICE_LOST returned everywhere),
+    // this soft recovery will likely fail or loop. Full engine restart is recommended for true TDRs.
     ctx.gpu_fault_detected = false;
     recreateSwapchain(ctx);
+
+    // Basic verification: Check if device is responsive
+    if (c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device) != c.VK_SUCCESS) {
+        std.log.err("RHI: Device unresponsive after recovery. Recovery failed.", .{});
+        ctx.gpu_fault_detected = true; // Re-flag to prevent further submissions
+        return error.GpuLost;
+    }
 
     std.log.info("RHI: Recovery step complete. If issues persist, please restart.", .{});
 }

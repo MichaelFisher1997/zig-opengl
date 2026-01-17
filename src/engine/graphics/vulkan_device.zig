@@ -38,6 +38,7 @@ pub const VulkanDevice = struct {
     ) callconv(.c) c.VkResult = null,
 
     fault_count: u32 = 0,
+    recovery_count: u32 = 0,
 
     // Limits and capabilities
     max_anisotropy: f32 = 0.0,

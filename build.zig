@@ -111,6 +111,24 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(robust_demo);
 
+    const integration_robustness = b.addExecutable(.{
+        .name = "test-robustness",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/integration_test_robustness.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    integration_robustness.linkLibC();
+    integration_robustness.linkSystemLibrary("sdl3"); // Needed for C imports if any
+
+    const test_robustness_run = b.addRunArtifact(integration_robustness);
+    // Ensure robust-demo is built first
+    test_robustness_run.step.dependOn(&b.addInstallArtifact(robust_demo, .{}).step);
+
+    const test_robustness_step = b.step("test-robustness", "Run robustness integration test");
+    test_robustness_step.dependOn(&test_robustness_run.step);
+
     const run_robust_cmd = b.addRunArtifact(robust_demo);
     run_robust_cmd.step.dependOn(b.getInstallStep());
 
