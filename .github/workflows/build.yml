@@ -51,6 +51,29 @@ jobs:
         path: dist/
         retention-days: 7
 
+  unit-test:
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@v16
+
+    - name: Cache Nix Store
+      uses: nix-community/cache-nix-action@v7
+      with:
+        primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-prefixes-first-match: nix-${{ runner.os }}-
+        nix-store-path: /nix
+        use-gha-cache: true
+
+    - name: Run unit tests
+      run: nix develop --command zig build test
+
   integration-test:
     permissions:
       contents: read
