@@ -4169,7 +4169,7 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
             ctx.vulkan_device.submitGuarded(submit_info, ctx.transfer_fence) catch |err| {
                 if (err == error.GpuLost) {
                     ctx.gpu_fault_detected = true;
-                    // Early exit, resources will be cleaned up on recovery or app shutdown
+                    ctx.fault_count += 1;
                     return 0;
                 }
                 std.log.err("Async layout transition submit failed: {}", .{err});
@@ -4396,6 +4396,7 @@ fn updateTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u
         ctx.vulkan_device.submitGuarded(submit_info, ctx.transfer_fence) catch |err| {
             if (err == error.GpuLost) {
                 ctx.gpu_fault_detected = true;
+                ctx.fault_count += 1;
                 return;
             }
             std.log.err("One-time transfer submit failed: {}", .{err});
