@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const Registry = @import("../manager.zig").Registry;
+const components = @import("../components.zig");
 const rhi_pkg = @import("../../graphics/rhi.zig");
 const RHI = rhi_pkg.RHI;
 const Mat4 = @import("../../math/mat4.zig").Mat4;
@@ -13,6 +14,20 @@ const wireframe = @import("../../graphics/wireframe_cube.zig");
 const OutlineVertexCount = wireframe.line_vertices.len;
 const outline_vertices = wireframe.line_vertices;
 const outline_vertex_count: u32 = wireframe.line_vertex_count;
+
+/// Create a vertex with the given position (color is overwritten at draw time).
+fn makeVertex(x: f32, y: f32, z: f32) Vertex {
+    return .{
+        .pos = .{ x, y, z },
+        .color = .{ 0, 0, 0 },
+        .normal = .{ 0, 1, 0 },
+        .uv = .{ 0, 0 },
+        .tile_id = 0,
+        .skylight = 15,
+        .blocklight = .{ 15, 15, 15 },
+        .ao = 1.0,
+    };
+}
 
 fn colorEquals(a: Vec3, b: Vec3) bool {
     const epsilon: f32 = 0.0001;
@@ -50,21 +65,26 @@ pub const RenderSystem = struct {
     }
 
     pub fn render(self: *RenderSystem, registry: *Registry, camera_pos: Vec3) void {
-        const meshes = &registry.meshes;
+        const logger = @import("../../core/log.zig").log;
 
-        const log = @import("../../core/log.zig").log;
-
-        for (meshes.components.items, meshes.entities.items) |*mesh, entity_id| {
-            if (!mesh.visible) continue;
-
-            // Ensure entity has a transform
-            const transform = registry.transforms.getPtr(entity_id) orelse {
-                if (!self.missing_transform_logged) {
-                    log.warn("ECS render skip: entity missing Transform (id={})", .{entity_id});
+        // Check for entities with Mesh but no Transform (potential configuration error)
+        if (!self.missing_transform_logged) {
+            for (registry.meshes.entities.items) |entity_id| {
+                if (!registry.transforms.has(entity_id)) {
+                    logger.warn("ECS render skip: entity missing Transform (id={})", .{entity_id});
                     self.missing_transform_logged = true;
+                    break;
                 }
-                continue;
-            };
+            }
+        }
+
+        var q = registry.query(.{ components.Mesh, components.Transform });
+        while (q.next()) |row| {
+            const mesh = row.components[0];
+            const transform = row.components[1];
+            const entity_id = row.entity;
+
+            if (!mesh.visible) continue;
 
             // Determine size from physics if available, otherwise default 1x1x1
             var size = Vec3.one;
