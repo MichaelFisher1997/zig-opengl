@@ -6,7 +6,8 @@ const Widgets = @import("../../engine/ui/widgets.zig");
 const Screen = @import("../screen.zig");
 const IScreen = Screen.IScreen;
 const EngineContext = Screen.EngineContext;
-const Settings = @import("../state.zig").Settings;
+const settings_pkg = @import("../settings.zig");
+const Settings = settings_pkg.Settings;
 const GraphicsScreen = @import("graphics.zig").GraphicsScreen;
 
 const PANEL_WIDTH_MAX = 750.0;
@@ -91,9 +92,9 @@ pub const SettingsScreen = struct {
         // Resolution
         Font.drawText(ui, "RESOLUTION", lx, sy, label_scale, Color.white);
         const res_idx = settings.getResolutionIndex();
-        const res_label = Settings.RESOLUTIONS[res_idx].label;
+        const res_label = settings_pkg.RESOLUTIONS[res_idx].label;
         if (Widgets.drawButton(ui, .{ .x = vx - 20.0, .y = sy - 5.0, .width = 180.0 * ui_scale, .height = btn_height }, res_label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-            const new_idx = (res_idx + 1) % Settings.RESOLUTIONS.len;
+            const new_idx = (res_idx + 1) % settings_pkg.RESOLUTIONS.len;
             settings.setResolutionByIndex(new_idx);
             ctx.window_manager.setSize(settings.window_width, settings.window_height);
         }
@@ -150,9 +151,9 @@ pub const SettingsScreen = struct {
 
         // UI Scale
         Font.drawText(ui, "UI SCALE", lx, sy, label_scale, Color.white);
-        const ui_scale_label = getUIScaleLabel(settings.ui_scale);
+        const ui_scale_label = settings_pkg.ui_helpers.getUIScaleLabel(settings.ui_scale);
         if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, ui_scale_label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-            settings.ui_scale = cycleUIScale(settings.ui_scale);
+            settings.ui_scale = settings_pkg.ui_helpers.cycleUIScale(settings.ui_scale);
         }
         sy += row_height;
 
@@ -195,21 +196,3 @@ pub const SettingsScreen = struct {
         return Screen.makeScreen(@This(), self);
     }
 };
-
-fn getUIScaleLabel(scale: f32) []const u8 {
-    if (scale <= 0.55) return "0.5X";
-    if (scale <= 0.8) return "0.75X";
-    if (scale <= 1.1) return "1.0X";
-    if (scale <= 1.3) return "1.25X";
-    if (scale <= 1.6) return "1.5X";
-    return "2.0X";
-}
-
-fn cycleUIScale(current: f32) f32 {
-    if (current <= 0.55) return 0.75;
-    if (current <= 0.8) return 1.0;
-    if (current <= 1.1) return 1.25;
-    if (current <= 1.3) return 1.5;
-    if (current <= 1.6) return 2.0;
-    return 0.5;
-}

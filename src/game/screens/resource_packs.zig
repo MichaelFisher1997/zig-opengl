@@ -6,7 +6,8 @@ const Widgets = @import("../../engine/ui/widgets.zig");
 const Screen = @import("../screen.zig");
 const IScreen = Screen.IScreen;
 const EngineContext = Screen.EngineContext;
-const Settings = @import("../state.zig").Settings;
+const settings_pkg = @import("../settings.zig");
+const Settings = settings_pkg.Settings;
 const TextureAtlas = @import("../../engine/graphics/texture_atlas.zig").TextureAtlas;
 
 const PANEL_WIDTH_MAX = 750.0;
@@ -93,7 +94,7 @@ pub const ResourcePacksScreen = struct {
         if (Widgets.drawButton(ui, .{ .x = btn_x, .y = sy, .width = btn_width, .height = btn_height }, def_label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             const prev_pack = settings.texture_pack;
             if (!std.mem.eql(u8, prev_pack, "default")) {
-                try settings.setTexturePack(ctx.allocator, "default");
+                try settings_pkg.persistence.setTexturePack(settings, ctx.allocator, "default");
                 try manager.setActivePack("default");
                 try self.reloadAtlas();
             }
@@ -109,7 +110,7 @@ pub const ResourcePacksScreen = struct {
 
             if (Widgets.drawButton(ui, .{ .x = btn_x, .y = sy, .width = btn_width, .height = btn_height }, label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
                 if (!is_selected) {
-                    try settings.setTexturePack(ctx.allocator, pack.name);
+                    try settings_pkg.persistence.setTexturePack(settings, ctx.allocator, pack.name);
                     try manager.setActivePack(pack.name);
                     try self.reloadAtlas();
                 }
