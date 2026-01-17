@@ -6,12 +6,20 @@ on:
   pull_request:
     branches: [ main ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
 
@@ -42,10 +50,14 @@ jobs:
         path: dist/
 
   integration-test:
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
 
