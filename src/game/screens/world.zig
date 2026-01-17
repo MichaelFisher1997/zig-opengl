@@ -164,6 +164,7 @@ pub const WorldScreen = struct {
 
             if (!ctx.safe_render_mode) {
                 if (self.session.player.target_block) |target| self.session.block_outline.draw(target.x, target.y, target.z, camera.position);
+                self.session.renderEntities(camera.position);
                 self.session.hand_renderer.draw(camera.position, camera.yaw, camera.pitch);
             }
         }

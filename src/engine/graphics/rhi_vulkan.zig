@@ -5385,21 +5385,6 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
         std.log.warn("ZIGCRAFT_SAFE_MODE enabled: throttling uploads and forcing GPU idle each frame", .{});
     }
 
-    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        for (ctx.buffer_deletion_queue[i].items) |zombie| {
-            c.vkDestroyBuffer(ctx.vulkan_device.vk_device, zombie.buffer, null);
-            c.vkFreeMemory(ctx.vulkan_device.vk_device, zombie.memory, null);
-        }
-        ctx.buffer_deletion_queue[i].deinit(ctx.allocator);
-
-        for (ctx.image_deletion_queue[i].items) |zombie| {
-            c.vkDestroySampler(ctx.vulkan_device.vk_device, zombie.sampler, null);
-            c.vkDestroyImageView(ctx.vulkan_device.vk_device, zombie.view, null);
-            c.vkDestroyImage(ctx.vulkan_device.vk_device, zombie.image, null);
-            c.vkFreeMemory(ctx.vulkan_device.vk_device, zombie.memory, null);
-        }
-        ctx.image_deletion_queue[i].deinit(ctx.allocator);
-    }
     ctx.command_pool = null;
     ctx.transfer_command_pool = null;
     ctx.transfer_ready = false;
@@ -5471,6 +5456,7 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
             ctx.debug_shadow_descriptor_pool[i][j] = null;
         }
         ctx.buffer_deletion_queue[i] = .empty;
+        ctx.image_deletion_queue[i] = .empty;
     }
     ctx.model_ubo = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
     ctx.dummy_instance_buffer = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };

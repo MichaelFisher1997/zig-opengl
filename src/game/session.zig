@@ -30,6 +30,12 @@ const hotbar = @import("ui/hotbar.zig");
 const worldToChunk = @import("../world/chunk.zig").worldToChunk;
 const TerrainGenerator = @import("../world/worldgen/generator.zig").TerrainGenerator;
 
+const ECSManager = @import("../engine/ecs/manager.zig");
+const ECSRegistry = ECSManager.Registry;
+const ECSComponents = @import("../engine/ecs/components.zig");
+const ECSPhysicsSystem = @import("../engine/ecs/systems/physics.zig").PhysicsSystem;
+const ECSRenderSystem = @import("../engine/ecs/systems/render.zig").RenderSystem;
+
 pub const AtmosphereState = struct {
     world_ticks: u64 = 0,
     tick_accumulator: f32 = 0.0,
@@ -241,6 +247,9 @@ pub const GameSession = struct {
     hand_renderer: HandRenderer,
     camera: Camera, // References player camera, but we might want a decoupled camera if player is null (e.g. spectator) - for now keep it simple and match App
 
+    ecs_registry: ECSRegistry,
+    ecs_render_system: ECSRenderSystem,
+
     atmosphere: AtmosphereState,
     clouds: CloudState,
 
@@ -288,6 +297,8 @@ pub const GameSession = struct {
 
         const world_map = WorldMap.init(rhi, 256, 256);
 
+        // ecs_registry and ecs_render_system are initialized directly in the struct
+
         const player = Player.init(Vec3.init(8, 100, 8), true); // Default creative for now
 
         var atmosphere = AtmosphereState{};
@@ -304,6 +315,8 @@ pub const GameSession = struct {
             .block_outline = BlockOutline.init(rhi),
             .hand_renderer = HandRenderer.init(rhi),
             .camera = player.camera,
+            .ecs_registry = ECSRegistry.init(allocator),
+            .ecs_render_system = ECSRenderSystem.init(rhi),
             .atmosphere = atmosphere,
             .clouds = CloudState{},
             .creative_mode = true,
@@ -312,10 +325,28 @@ pub const GameSession = struct {
         // Force map update initially
         session.map_controller.map_needs_update = true;
 
+        // Spawn a test entity (Uncomment to test ECS)
+        // const test_entity = session.ecs_registry.create();
+        // try session.ecs_registry.transforms.set(test_entity, .{
+        //     .position = Vec3.init(10, 120, 10), // Start high up
+        //     .scale = Vec3.one,
+        // });
+        // try session.ecs_registry.physics.set(test_entity, .{
+        //     .velocity = Vec3.zero,
+        //     .aabb_size = Vec3.init(1.0, 1.0, 1.0),
+        //     .use_gravity = true,
+        // });
+        // try session.ecs_registry.meshes.set(test_entity, .{
+        //     .visible = true,
+        //     .color = Vec3.init(1.0, 0.0, 0.0), // Red
+        // });
+
         return session;
     }
 
     pub fn deinit(self: *GameSession) void {
+        self.ecs_render_system.deinit();
+        self.ecs_registry.deinit();
         self.world.deinit();
         self.world_map.deinit();
         self.block_outline.deinit();
@@ -393,8 +424,15 @@ pub const GameSession = struct {
 
             if (!skip_world) {
                 try self.world.update(self.player.camera.position, dt);
+
+                // ECS Updates
+                ECSPhysicsSystem.update(&self.ecs_registry, self.world, dt);
             }
         }
+    }
+
+    pub fn renderEntities(self: *GameSession, camera_pos: Vec3) void {
+        self.ecs_render_system.render(&self.ecs_registry, camera_pos);
     }
 
     pub fn drawHUD(self: *GameSession, ui: *UISystem, active_pack: ?[]const u8, fps: f32, screen_w: f32, screen_h: f32, mouse_x: f32, mouse_y: f32, mouse_clicked: bool) !void {
