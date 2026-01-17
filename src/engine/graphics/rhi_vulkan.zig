@@ -4163,6 +4163,7 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
             ctx.vulkan_device.submitGuarded(submit_info, ctx.transfer_fence) catch |err| {
                 if (err == error.GpuLost) {
                     ctx.gpu_fault_detected = true;
+                    // Early exit, resources will be cleaned up on recovery or app shutdown
                     return 0;
                 }
                 std.log.err("Async layout transition submit failed: {}", .{err});
