@@ -32,7 +32,7 @@ pub fn initPresets(allocator: std.mem.Allocator) !void {
     // Load from assets/config/presets.json
     const content = std.fs.cwd().readFileAlloc("assets/config/presets.json", allocator, @enumFromInt(1024 * 1024)) catch |err| {
         std.log.warn("Failed to open presets.json: {}", .{err});
-        return;
+        return err;
     };
     defer allocator.free(content);
 

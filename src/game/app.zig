@@ -69,7 +69,9 @@ pub const App = struct {
     pub fn init(allocator: std.mem.Allocator) !*App {
         // Load settings first to get window resolution
         log.log.info("Initializing engine systems...", .{});
-        try settings_pkg.initPresets(allocator);
+        settings_pkg.initPresets(allocator) catch |err| {
+            log.log.warn("Failed to initialize presets: {}, proceeding with defaults", .{err});
+        };
         const settings = settings_pkg.persistence.load(allocator);
 
         const wm = try WindowManager.init(allocator, true, settings.window_width, settings.window_height);

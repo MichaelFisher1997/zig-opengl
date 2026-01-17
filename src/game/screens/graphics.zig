@@ -139,6 +139,8 @@ pub const GraphicsScreen = struct {
                                     break;
                                 }
                             }
+                            // Cycle: Left click forward, Right click backward (if we had right click)
+                            // For now, standard cycle
                             const next_idx = (current_idx + 1) % values.len;
                             val_ptr.* = @as(val_type, @intCast(values[next_idx]));
                         }
@@ -147,15 +149,21 @@ pub const GraphicsScreen = struct {
                 .slider => |slider| {
                     const val_str = std.fmt.bufPrint(&buf, "{d:.1}", .{val_ptr.*}) catch "ERR";
                     if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, val_str, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-                        val_ptr.* += slider.step;
-                        if (val_ptr.* > slider.max) val_ptr.* = slider.min;
+                        if (val_ptr.* + slider.step > slider.max) {
+                            val_ptr.* = slider.min;
+                        } else {
+                            val_ptr.* += slider.step;
+                        }
                     }
                 },
                 .int_range => |range| {
                     const val_str = std.fmt.bufPrint(&buf, "{d}", .{val_ptr.*}) catch "ERR";
                     if (Widgets.drawButton(ui, .{ .x = vx, .y = sy - 5.0, .width = toggle_width, .height = btn_height }, val_str, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
-                        val_ptr.* += range.step;
-                        if (val_ptr.* > range.max) val_ptr.* = range.min;
+                        if (val_ptr.* + range.step > range.max) {
+                            val_ptr.* = range.min;
+                        } else {
+                            val_ptr.* += range.step;
+                        }
                     }
                 },
             }

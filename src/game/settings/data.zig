@@ -93,6 +93,10 @@ pub const Settings = struct {
             .label = "FOV",
             .kind = .{ .slider = .{ .min = 30.0, .max = 120.0, .step = 1.0 } },
         };
+        pub const vsync = SettingMetadata{
+            .label = "VSYNC",
+            .kind = .toggle,
+        };
         pub const textures_enabled = SettingMetadata{
             .label = "TEXTURES",
             .kind = .toggle,
