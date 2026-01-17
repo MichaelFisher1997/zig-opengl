@@ -4172,7 +4172,7 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
             ctx.vulkan_device.submitGuarded(submit_info, ctx.transfer_fence) catch |err| {
                 if (err == error.GpuLost) {
                     ctx.gpu_fault_detected = true;
-                    ctx.vulkan_device.fault_count += 1;
+                    // fault_count is already incremented by submitGuarded
                     return 0;
                 }
                 std.log.err("Async layout transition submit failed: {}", .{err});
@@ -4399,7 +4399,6 @@ fn updateTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u
         ctx.vulkan_device.submitGuarded(submit_info, ctx.transfer_fence) catch |err| {
             if (err == error.GpuLost) {
                 ctx.gpu_fault_detected = true;
-                ctx.vulkan_device.fault_count += 1;
                 return;
             }
             std.log.err("One-time transfer submit failed: {}", .{err});
@@ -4459,8 +4458,13 @@ fn recover(ctx_ptr: *anyopaque) anyerror!void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.gpu_fault_detected) return;
 
+    if (ctx.vulkan_device.recovery_count >= ctx.vulkan_device.max_recovery_attempts) {
+        std.log.err("RHI: Max recovery attempts ({d}) exceeded. GPU is unstable.", .{ctx.vulkan_device.max_recovery_attempts});
+        return error.GpuLost;
+    }
+
     ctx.vulkan_device.recovery_count += 1;
-    std.log.info("RHI: Attempting GPU recovery (Attempt {d})...", .{ctx.vulkan_device.recovery_count});
+    std.log.info("RHI: Attempting GPU recovery (Attempt {d}/{d})...", .{ ctx.vulkan_device.recovery_count, ctx.vulkan_device.max_recovery_attempts });
 
     // Best effort: wait for idle
     _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);

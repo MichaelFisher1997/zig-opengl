@@ -97,5 +97,11 @@ pub fn main() !void {
 
     _ = c.vkDeviceWaitIdle(device.vk_device);
 
-    std.debug.print("\n[SUCCESS] Command completed (clamped by robustness2).\n", .{});
+    if (device.fault_count != 0) {
+        std.debug.print("\n[UNEXPECTED] Device was lost! Robustness2 failed to prevent it. Fault count: {d}\n", .{device.fault_count});
+        // This is technically a "success" for the safety layer (it caught the crash), but a failure for robustness2.
+        // For this demo, we want to prove robustness2 works.
+    } else {
+        std.debug.print("\n[SUCCESS] Command completed successfully. Robustness2 prevented device loss.\n", .{});
+    }
 }

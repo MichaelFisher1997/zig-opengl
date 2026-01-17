@@ -39,6 +39,7 @@ pub const VulkanDevice = struct {
 
     fault_count: u32 = 0,
     recovery_count: u32 = 0,
+    max_recovery_attempts: u32 = 5,
 
     // Limits and capabilities
     max_anisotropy: f32 = 0.0,
