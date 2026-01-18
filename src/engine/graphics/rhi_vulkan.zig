@@ -174,6 +174,16 @@ const StagingBuffer = struct {
 
 const ShadowSystem = @import("shadow_system.zig").ShadowSystem;
 
+const DebugShadowResources = if (build_options.debug_shadows) struct {
+    pipeline: ?c.VkPipeline = null,
+    pipeline_layout: ?c.VkPipelineLayout = null,
+    descriptor_set_layout: ?c.VkDescriptorSetLayout = null,
+    descriptor_sets: [MAX_FRAMES_IN_FLIGHT]?c.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
+    descriptor_pool: [MAX_FRAMES_IN_FLIGHT][8]?c.VkDescriptorSet = .{.{null} ** 8} ** MAX_FRAMES_IN_FLIGHT,
+    descriptor_next: [MAX_FRAMES_IN_FLIGHT]u32 = .{0} ** MAX_FRAMES_IN_FLIGHT,
+    vbo: VulkanBuffer = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false },
+} else struct {};
+
 /// Core Vulkan context containing all renderer state.
 /// Owns Vulkan objects and manages their lifecycle.
 const VulkanContext = struct {
@@ -356,15 +366,7 @@ const VulkanContext = struct {
     cloud_mesh_size: f32,
     cloud_vao: c.VkBuffer,
 
-    // Debug Shadow Pipeline
-    debug_shadow_pipeline: ?c.VkPipeline = null,
-    debug_shadow_pipeline_layout: ?c.VkPipelineLayout = null,
-    debug_shadow_descriptor_set_layout: ?c.VkDescriptorSetLayout = null,
-    debug_shadow_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]?c.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
-    debug_shadow_descriptor_pool: [MAX_FRAMES_IN_FLIGHT][8]?c.VkDescriptorSet = .{.{null} ** 8} ** MAX_FRAMES_IN_FLIGHT,
-    debug_shadow_descriptor_next: [MAX_FRAMES_IN_FLIGHT]u32 = .{0} ** MAX_FRAMES_IN_FLIGHT,
-    debug_shadow_vbo: VulkanBuffer = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false },
-    debug_shadow_vao: ?c.VkBuffer = null,
+    debug_shadow: DebugShadowResources = .{},
 };
 
 fn destroyGPassResources(ctx: *VulkanContext) void {
@@ -1846,7 +1848,7 @@ fn createMainPipelines(ctx: *VulkanContext) !void {
     }
 
     // Debug Shadow
-    if (build_options.debug_shadows) {
+    if (comptime build_options.debug_shadows) {
         const vert_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/debug_shadow.vert.spv", ctx.allocator, @enumFromInt(1024 * 1024));
         defer ctx.allocator.free(vert_code);
         const frag_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/debug_shadow.frag.spv", ctx.allocator, @enumFromInt(1024 * 1024));
@@ -1884,10 +1886,10 @@ fn createMainPipelines(ctx: *VulkanContext) !void {
         pipeline_info.pDepthStencilState = &ui_depth_stencil;
         pipeline_info.pColorBlendState = &ui_color_blending;
         pipeline_info.pDynamicState = &dynamic_state;
-        pipeline_info.layout = ctx.debug_shadow_pipeline_layout orelse return error.InitializationFailed;
+        pipeline_info.layout = ctx.debug_shadow.pipeline_layout orelse return error.InitializationFailed;
         pipeline_info.renderPass = ctx.vulkan_swapchain.main_render_pass;
         pipeline_info.subpass = 0;
-        try checkVk(c.vkCreateGraphicsPipelines(ctx.vulkan_device.vk_device, null, 1, &pipeline_info, null, &ctx.debug_shadow_pipeline));
+        try checkVk(c.vkCreateGraphicsPipelines(ctx.vulkan_device.vk_device, null, 1, &pipeline_info, null, &ctx.debug_shadow.pipeline));
     }
 
     // Cloud
@@ -1963,9 +1965,9 @@ fn destroyMainRenderPassAndPipelines(ctx: *VulkanContext) void {
         c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.ui_tex_pipeline, null);
         ctx.ui_tex_pipeline = null;
     }
-    if (build_options.debug_shadows) {
-        if (ctx.debug_shadow_pipeline) |pipeline| c.vkDestroyPipeline(ctx.vulkan_device.vk_device, pipeline, null);
-        ctx.debug_shadow_pipeline = null;
+    if (comptime build_options.debug_shadows) {
+        if (ctx.debug_shadow.pipeline) |pipeline| c.vkDestroyPipeline(ctx.vulkan_device.vk_device, pipeline, null);
+        ctx.debug_shadow.pipeline = null;
     }
 
     if (ctx.cloud_pipeline != null) {
@@ -2038,15 +2040,16 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
     ui_tex_layout_info.pBindings = &ui_tex_layout_bindings[0];
     try checkVk(c.vkCreateDescriptorSetLayout(ctx.vulkan_device.vk_device, &ui_tex_layout_info, null, &ctx.ui_tex_descriptor_set_layout));
 
-    if (build_options.debug_shadows) {
+    if (comptime build_options.debug_shadows) {
         var debug_shadow_layout_bindings = [_]c.VkDescriptorSetLayoutBinding{
             .{ .binding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
         };
-        var debug_shadow_layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
+        var debug_shadow_layout_info: c.VkDescriptorSetLayoutCreateInfo = undefined;
+        @memset(std.mem.asBytes(&debug_shadow_layout_info), 0);
         debug_shadow_layout_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         debug_shadow_layout_info.bindingCount = 1;
         debug_shadow_layout_info.pBindings = &debug_shadow_layout_bindings[0];
-        try checkVk(c.vkCreateDescriptorSetLayout(ctx.vulkan_device.vk_device, &debug_shadow_layout_info, null, &ctx.debug_shadow_descriptor_set_layout));
+        try checkVk(c.vkCreateDescriptorSetLayout(ctx.vulkan_device.vk_device, &debug_shadow_layout_info, null, &ctx.debug_shadow.descriptor_set_layout));
     }
 
     var model_push_constant = std.mem.zeroes(c.VkPushConstantRange);
@@ -2089,17 +2092,16 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
     ui_tex_layout_full_info.pPushConstantRanges = &ui_push_constant;
     try checkVk(c.vkCreatePipelineLayout(ctx.vulkan_device.vk_device, &ui_tex_layout_full_info, null, &ctx.ui_tex_pipeline_layout));
 
-    if (build_options.debug_shadows) {
-        var debug_shadow_layout_full_info = std.mem.zeroes(c.VkPipelineLayoutCreateInfo);
+    if (comptime build_options.debug_shadows) {
+        var debug_shadow_layout_full_info: c.VkPipelineLayoutCreateInfo = undefined;
+        @memset(std.mem.asBytes(&debug_shadow_layout_full_info), 0);
         debug_shadow_layout_full_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         debug_shadow_layout_full_info.setLayoutCount = 1;
-        const debug_layout = ctx.debug_shadow_descriptor_set_layout orelse return error.InitializationFailed;
+        const debug_layout = ctx.debug_shadow.descriptor_set_layout orelse return error.InitializationFailed;
         debug_shadow_layout_full_info.pSetLayouts = &debug_layout;
         debug_shadow_layout_full_info.pushConstantRangeCount = 1;
         debug_shadow_layout_full_info.pPushConstantRanges = &ui_push_constant;
-        try checkVk(c.vkCreatePipelineLayout(ctx.vulkan_device.vk_device, &debug_shadow_layout_full_info, null, &ctx.debug_shadow_pipeline_layout));
-    } else {
-        ctx.debug_shadow_pipeline_layout = null;
+        try checkVk(c.vkCreatePipelineLayout(ctx.vulkan_device.vk_device, &debug_shadow_layout_full_info, null, &ctx.debug_shadow.pipeline_layout));
     }
 
     var cloud_layout_info = std.mem.zeroes(c.VkPipelineLayoutCreateInfo);
@@ -2360,8 +2362,8 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
         try checkVk(c.vkAllocateDescriptorSets(ctx.vulkan_device.vk_device, &ui_ds_alloc, &ctx.ui_tex_descriptor_pool[i][0]));
         ctx.ui_tex_descriptor_sets[i] = ctx.ui_tex_descriptor_pool[i][0];
 
-        if (build_options.debug_shadows) {
-            const layout = ctx.debug_shadow_descriptor_set_layout orelse return error.InitializationFailed;
+        if (comptime build_options.debug_shadows) {
+            const layout = ctx.debug_shadow.descriptor_set_layout orelse return error.InitializationFailed;
             var debug_layouts: [8]c.VkDescriptorSetLayout = undefined;
             for (&debug_layouts) |*dst| {
                 dst.* = layout;
@@ -2372,9 +2374,9 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
                 .descriptorSetCount = debug_layouts.len,
                 .pSetLayouts = &debug_layouts[0],
             };
-            try checkVk(c.vkAllocateDescriptorSets(ctx.vulkan_device.vk_device, &ds_ds_alloc, &ctx.debug_shadow_descriptor_pool[i][0]));
-            ctx.debug_shadow_descriptor_sets[i] = ctx.debug_shadow_descriptor_pool[i][0];
-            ctx.debug_shadow_descriptor_next[i] = 0;
+            try checkVk(c.vkAllocateDescriptorSets(ctx.vulkan_device.vk_device, &ds_ds_alloc, &ctx.debug_shadow.descriptor_pool[i][0]));
+            ctx.debug_shadow.descriptor_sets[i] = ctx.debug_shadow.descriptor_pool[i][0];
+            ctx.debug_shadow.descriptor_next[i] = 0;
         }
     }
 
@@ -2395,11 +2397,9 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
     shadow_sampler_info.compareOp = c.VK_COMPARE_OP_GREATER_OR_EQUAL;
     try checkVk(c.vkCreateSampler(ctx.vulkan_device.vk_device, &shadow_sampler_info, null, &ctx.shadow_system.shadow_sampler));
 
-    if (build_options.debug_shadows) {
+    if (comptime build_options.debug_shadows) {
         // Create Debug Shadow VBO (6 vertices for fullscreen quad)
-        ctx.debug_shadow_vbo = try createVulkanBuffer(ctx, 6 * 4 * @sizeOf(f32), c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    } else {
-        ctx.debug_shadow_vbo = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
+        ctx.debug_shadow.vbo = try createVulkanBuffer(ctx, 6 * 4 * @sizeOf(f32), c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     }
 
     // Create cloud mesh (large quad centered on camera)
@@ -2741,15 +2741,16 @@ fn deinit(ctx_ptr: *anyopaque) void {
         if (ctx.sky_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.sky_pipeline_layout, null);
         if (ctx.ui_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.ui_pipeline_layout, null);
         if (ctx.ui_tex_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.ui_tex_pipeline_layout, null);
-        if (build_options.debug_shadows) {
-            if (ctx.debug_shadow_pipeline_layout) |layout| c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, layout, null);
+        if (comptime build_options.debug_shadows) {
+            if (ctx.debug_shadow.pipeline) |pipeline| c.vkDestroyPipeline(ctx.vulkan_device.vk_device, pipeline, null);
+            if (ctx.debug_shadow.pipeline_layout) |layout| c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, layout, null);
         }
         if (ctx.cloud_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.cloud_pipeline_layout, null);
 
         if (ctx.descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(ctx.vulkan_device.vk_device, ctx.descriptor_set_layout, null);
         if (ctx.ui_tex_descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(ctx.vulkan_device.vk_device, ctx.ui_tex_descriptor_set_layout, null);
-        if (build_options.debug_shadows) {
-            if (ctx.debug_shadow_descriptor_set_layout) |layout| c.vkDestroyDescriptorSetLayout(ctx.vulkan_device.vk_device, layout, null);
+        if (comptime build_options.debug_shadows) {
+            if (ctx.debug_shadow.descriptor_set_layout) |layout| c.vkDestroyDescriptorSetLayout(ctx.vulkan_device.vk_device, layout, null);
         }
 
         if (ctx.dummy_shadow_view != null) c.vkDestroyImageView(ctx.vulkan_device.vk_device, ctx.dummy_shadow_view, null);
@@ -2760,9 +2761,9 @@ fn deinit(ctx_ptr: *anyopaque) void {
         if (ctx.model_ubo.memory != null) c.vkFreeMemory(ctx.vulkan_device.vk_device, ctx.model_ubo.memory, null);
         if (ctx.dummy_instance_buffer.buffer != null) c.vkDestroyBuffer(ctx.vulkan_device.vk_device, ctx.dummy_instance_buffer.buffer, null);
         if (ctx.dummy_instance_buffer.memory != null) c.vkFreeMemory(ctx.vulkan_device.vk_device, ctx.dummy_instance_buffer.memory, null);
-        if (build_options.debug_shadows) {
-            if (ctx.debug_shadow_vbo.buffer != null) c.vkDestroyBuffer(ctx.vulkan_device.vk_device, ctx.debug_shadow_vbo.buffer, null);
-            if (ctx.debug_shadow_vbo.memory != null) c.vkFreeMemory(ctx.vulkan_device.vk_device, ctx.debug_shadow_vbo.memory, null);
+        if (comptime build_options.debug_shadows) {
+            if (ctx.debug_shadow.vbo.buffer != null) c.vkDestroyBuffer(ctx.vulkan_device.vk_device, ctx.debug_shadow.vbo.buffer, null);
+            if (ctx.debug_shadow.vbo.memory != null) c.vkFreeMemory(ctx.vulkan_device.vk_device, ctx.debug_shadow.vbo.memory, null);
         }
         if (ctx.cloud_vbo.buffer != null) c.vkDestroyBuffer(ctx.vulkan_device.vk_device, ctx.cloud_vbo.buffer, null);
         if (ctx.cloud_vbo.memory != null) c.vkFreeMemory(ctx.vulkan_device.vk_device, ctx.cloud_vbo.memory, null);
@@ -2817,8 +2818,6 @@ fn deinit(ctx_ptr: *anyopaque) void {
             c.vkDestroyImage(ctx.vulkan_device.vk_device, entry.value_ptr.image, null);
         }
         ctx.textures.deinit();
-
-        if (ctx.transfer_fence != null) c.vkDestroyFence(ctx.vulkan_device.vk_device, ctx.transfer_fence, null);
 
         if (ctx.command_pool != null) c.vkDestroyCommandPool(ctx.vulkan_device.vk_device, ctx.command_pool, null);
         if (ctx.transfer_command_pool != null) c.vkDestroyCommandPool(ctx.vulkan_device.vk_device, ctx.transfer_command_pool, null);
@@ -3132,8 +3131,8 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
     ctx.ui_vertex_offset = 0;
     ctx.ui_flushed_vertex_count = 0;
     ctx.ui_tex_descriptor_next[ctx.current_sync_frame] = 0;
-    if (build_options.debug_shadows) {
-        ctx.debug_shadow_descriptor_next[ctx.current_sync_frame] = 0;
+    if (comptime build_options.debug_shadows) {
+        ctx.debug_shadow.descriptor_next[ctx.current_sync_frame] = 0;
     }
 
     // Static descriptor updates (Atlases & Shadow maps)
@@ -3786,17 +3785,19 @@ fn beginCloudPass(ctx_ptr: *anyopaque, params: rhi.CloudParams) void {
 }
 
 fn drawDebugShadowMap(ctx_ptr: *anyopaque, cascade_index: usize, depth_map_handle: rhi.TextureHandle) void {
+    if (comptime !build_options.debug_shadows) return;
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frame_in_progress) return;
     if (!ctx.main_pass_active) beginMainPass(ctx_ptr);
+    if (!ctx.main_pass_active) return;
 
-    // Use dedicated debug shadow pipeline if available
-    if (!build_options.debug_shadows or ctx.debug_shadow_pipeline == null) return;
+    if (ctx.debug_shadow.pipeline == null) return;
 
     const command_buffer = ctx.command_buffers[ctx.current_sync_frame];
+    // ...
 
     // Bind debug shadow pipeline
-    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.debug_shadow_pipeline.?);
+    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.debug_shadow.pipeline.?);
 
     ctx.terrain_pipeline_bound = false;
 
@@ -3809,7 +3810,7 @@ fn drawDebugShadowMap(ctx_ptr: *anyopaque, cascade_index: usize, depth_map_handl
     const width_f32 = @as(f32, @floatFromInt(ctx.vulkan_swapchain.extent.width));
     const height_f32 = @as(f32, @floatFromInt(ctx.vulkan_swapchain.extent.height));
     const proj = Mat4.orthographic(0, width_f32, height_f32, 0, -1, 1);
-    c.vkCmdPushConstants(command_buffer, ctx.debug_shadow_pipeline_layout.?, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
+    c.vkCmdPushConstants(command_buffer, ctx.debug_shadow.pipeline_layout.?, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
 
     // Update descriptor set with the depth texture
     ctx.mutex.lock();
@@ -3823,10 +3824,10 @@ fn drawDebugShadowMap(ctx_ptr: *anyopaque, cascade_index: usize, depth_map_handl
         image_info.sampler = tex.sampler;
 
         const frame = ctx.current_sync_frame;
-        const idx = ctx.debug_shadow_descriptor_next[frame];
-        const pool_len = ctx.debug_shadow_descriptor_pool[frame].len;
-        ctx.debug_shadow_descriptor_next[frame] = @intCast((idx + 1) % pool_len);
-        const ds = ctx.debug_shadow_descriptor_pool[frame][idx] orelse return;
+        const idx = ctx.debug_shadow.descriptor_next[frame];
+        const pool_len = ctx.debug_shadow.descriptor_pool[frame].len;
+        ctx.debug_shadow.descriptor_next[frame] = @intCast((idx + 1) % pool_len);
+        const ds = ctx.debug_shadow.descriptor_pool[frame][idx] orelse return;
 
         var write_set = std.mem.zeroes(c.VkWriteDescriptorSet);
         write_set.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -3838,7 +3839,7 @@ fn drawDebugShadowMap(ctx_ptr: *anyopaque, cascade_index: usize, depth_map_handl
 
         c.vkUpdateDescriptorSets(ctx.vulkan_device.vk_device, 1, &write_set, 0, null);
 
-        c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.debug_shadow_pipeline_layout.?, 0, 1, &ds, 0, null);
+        c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.debug_shadow.pipeline_layout.?, 0, 1, &ds, 0, null);
     }
 
     // Create debug quad vertices (position + texCoord) - 4 floats per vertex
@@ -3854,12 +3855,12 @@ fn drawDebugShadowMap(ctx_ptr: *anyopaque, cascade_index: usize, depth_map_handl
 
     // Map and copy vertices to debug shadow VBO
     var map_ptr: ?*anyopaque = null;
-    if (c.vkMapMemory(ctx.vulkan_device.vk_device, ctx.debug_shadow_vbo.memory, 0, @sizeOf(@TypeOf(debug_vertices)), 0, &map_ptr) == c.VK_SUCCESS) {
+    if (c.vkMapMemory(ctx.vulkan_device.vk_device, ctx.debug_shadow.vbo.memory, 0, @sizeOf(@TypeOf(debug_vertices)), 0, &map_ptr) == c.VK_SUCCESS) {
         @memcpy(@as([*]u8, @ptrCast(map_ptr.?))[0..@sizeOf(@TypeOf(debug_vertices))], std.mem.asBytes(&debug_vertices));
-        c.vkUnmapMemory(ctx.vulkan_device.vk_device, ctx.debug_shadow_vbo.memory);
+        c.vkUnmapMemory(ctx.vulkan_device.vk_device, ctx.debug_shadow.vbo.memory);
 
         const offset: c.VkDeviceSize = 0;
-        c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &ctx.debug_shadow_vbo.buffer, &offset);
+        c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &ctx.debug_shadow.vbo.buffer, &offset);
         c.vkCmdDraw(command_buffer, 6, 1, 0, 0);
     }
 }
@@ -5355,7 +5356,7 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.render_device = render_device;
     ctx.shadow_resolution = shadow_resolution;
     ctx.window = window;
-    ctx.shadow_system = ShadowSystem.init(allocator, shadow_resolution);
+    ctx.shadow_system = try ShadowSystem.init(allocator, shadow_resolution);
     ctx.vulkan_device = .{
         .allocator = allocator,
     };
@@ -5445,11 +5446,13 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.ui_tex_pipeline = null;
     ctx.ui_tex_pipeline_layout = null;
     ctx.ui_tex_descriptor_set_layout = null;
-    ctx.debug_shadow_pipeline = null;
-    ctx.debug_shadow_pipeline_layout = null;
-    ctx.debug_shadow_descriptor_set_layout = null;
-    ctx.debug_shadow_vbo = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
-    ctx.debug_shadow_descriptor_next = .{ 0, 0 };
+    if (comptime build_options.debug_shadows) {
+        ctx.debug_shadow.pipeline = null;
+        ctx.debug_shadow.pipeline_layout = null;
+        ctx.debug_shadow.descriptor_set_layout = null;
+        ctx.debug_shadow.vbo = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
+        ctx.debug_shadow.descriptor_next = .{ 0, 0 };
+    }
     ctx.cloud_pipeline = null;
     ctx.cloud_pipeline_layout = null;
     ctx.cloud_vbo = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
@@ -5490,10 +5493,12 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
         for (0..ctx.ui_tex_descriptor_pool[i].len) |j| {
             ctx.ui_tex_descriptor_pool[i][j] = null;
         }
-        ctx.debug_shadow_descriptor_sets[i] = null;
-        ctx.debug_shadow_descriptor_next[i] = 0;
-        for (0..ctx.debug_shadow_descriptor_pool[i].len) |j| {
-            ctx.debug_shadow_descriptor_pool[i][j] = null;
+        if (comptime build_options.debug_shadows) {
+            ctx.debug_shadow.descriptor_sets[i] = null;
+            ctx.debug_shadow.descriptor_next[i] = 0;
+            for (0..ctx.debug_shadow.descriptor_pool[i].len) |j| {
+                ctx.debug_shadow.descriptor_pool[i][j] = null;
+            }
         }
         ctx.buffer_deletion_queue[i] = .empty;
         ctx.image_deletion_queue[i] = .empty;
@@ -5504,7 +5509,6 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.ui_screen_height = 0;
     ctx.ui_flushed_vertex_count = 0;
     ctx.cloud_vao = null;
-    ctx.debug_shadow_vao = null;
     ctx.dummy_shadow_image = null;
     ctx.dummy_shadow_memory = null;
     ctx.dummy_shadow_view = null;

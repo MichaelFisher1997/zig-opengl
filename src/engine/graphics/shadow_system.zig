@@ -26,8 +26,9 @@ pub const ShadowSystem = struct {
     pass_matrix: Mat4 = Mat4.identity,
     pipeline_bound: bool = false,
 
-    pub fn init(allocator: Allocator, resolution: u32) ShadowSystem {
-        return .{
+    pub fn init(allocator: Allocator, resolution: u32) !ShadowSystem {
+        if (resolution == 0) return error.InvalidResolution;
+        return ShadowSystem{
             .allocator = allocator,
             .shadow_extent = .{ .width = resolution, .height = resolution },
         };
@@ -47,13 +48,38 @@ pub const ShadowSystem = struct {
         if (self.shadow_image != null) c.vkDestroyImage(device, self.shadow_image, null);
         if (self.shadow_image_memory != null) c.vkFreeMemory(device, self.shadow_image_memory, null);
 
-        self.* = undefined;
+        // Reset to safe defaults rather than using zeroes on a struct with non-nullable pointers
+        self.shadow_image = null;
+        self.shadow_image_memory = null;
+        self.shadow_image_view = null;
+        inline for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
+            self.shadow_image_views[i] = null;
+            self.shadow_image_layouts[i] = c.VK_IMAGE_LAYOUT_UNDEFINED;
+            self.shadow_framebuffers[i] = null;
+        }
+        self.shadow_sampler = null;
+        self.shadow_render_pass = null;
+        self.shadow_pipeline = null;
+        self.pass_active = false;
+        self.pass_index = 0;
+        self.pass_matrix = Mat4.identity;
+        self.pipeline_bound = false;
     }
 
     pub fn beginPass(self: *ShadowSystem, command_buffer: c.VkCommandBuffer, cascade_index: u32, light_space_matrix: Mat4) void {
         // Safety: Ensure shadow resources are available
-        if (self.shadow_render_pass == null) return;
-        if (self.shadow_framebuffers[cascade_index] == null) return;
+        if (self.shadow_render_pass == null) {
+            @import("../core/log.zig").log.err("ShadowSystem: cannot begin pass, shadow_render_pass is null", .{});
+            return;
+        }
+        if (cascade_index >= rhi.SHADOW_CASCADE_COUNT) {
+            @import("../core/log.zig").log.err("ShadowSystem: cascade index {} out of bounds", .{cascade_index});
+            return;
+        }
+        if (self.shadow_framebuffers[cascade_index] == null) {
+            @import("../core/log.zig").log.err("ShadowSystem: framebuffer for cascade {} is null", .{cascade_index});
+            return;
+        }
 
         self.pass_active = true;
         self.pass_index = cascade_index;
@@ -63,14 +89,16 @@ pub const ShadowSystem = struct {
         // Render pass handles transition from UNDEFINED to DEPTH_STENCIL_ATTACHMENT_OPTIMAL
         self.shadow_image_layouts[cascade_index] = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-        var render_pass_info = std.mem.zeroes(c.VkRenderPassBeginInfo);
+        var render_pass_info: c.VkRenderPassBeginInfo = undefined;
+        @memset(std.mem.asBytes(&render_pass_info), 0);
         render_pass_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         render_pass_info.renderPass = self.shadow_render_pass;
         render_pass_info.framebuffer = self.shadow_framebuffers[cascade_index];
         render_pass_info.renderArea.offset = .{ .x = 0, .y = 0 };
         render_pass_info.renderArea.extent = self.shadow_extent;
 
-        var clear_value = std.mem.zeroes(c.VkClearValue);
+        var clear_value: c.VkClearValue = undefined;
+        @memset(std.mem.asBytes(&clear_value), 0);
         clear_value.depthStencil = .{ .depth = 0.0, .stencil = 0 }; // Reverse-Z: clear to 0.0 (far plane)
         render_pass_info.clearValueCount = 1;
         render_pass_info.pClearValues = &clear_value;
@@ -81,7 +109,8 @@ pub const ShadowSystem = struct {
         // Constants from original implementation: constantFactor=1.25, clamp=0.0, slopeFactor=1.75
         c.vkCmdSetDepthBias(command_buffer, 1.25, 0.0, 1.75);
 
-        var viewport = std.mem.zeroes(c.VkViewport);
+        var viewport: c.VkViewport = undefined;
+        @memset(std.mem.asBytes(&viewport), 0);
         viewport.x = 0.0;
         viewport.y = 0.0;
         viewport.width = @floatFromInt(self.shadow_extent.width);
@@ -90,7 +119,8 @@ pub const ShadowSystem = struct {
         viewport.maxDepth = 1.0;
         c.vkCmdSetViewport(command_buffer, 0, 1, &viewport);
 
-        var scissor = std.mem.zeroes(c.VkRect2D);
+        var scissor: c.VkRect2D = undefined;
+        @memset(std.mem.asBytes(&scissor), 0);
         scissor.offset = .{ .x = 0, .y = 0 };
         scissor.extent = self.shadow_extent;
         c.vkCmdSetScissor(command_buffer, 0, 1, &scissor);
@@ -107,3 +137,20 @@ pub const ShadowSystem = struct {
         self.shadow_image_layouts[cascade_index] = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
 };
+
+test "ShadowSystem initialization and state" {
+    const testing = std.testing;
+    var sys = try ShadowSystem.init(testing.allocator, 1024);
+
+    try testing.expectEqual(@as(u32, 1024), sys.shadow_extent.width);
+    try testing.expectEqual(@as(u32, 1024), sys.shadow_extent.height);
+    try testing.expect(!sys.pass_active);
+    try testing.expectEqual(@as(u32, 0), sys.pass_index);
+    try testing.expect(!sys.pipeline_bound);
+
+    // Test basic state toggle (without real Vulkan calls)
+    sys.pass_active = true;
+    sys.pass_index = 1;
+    try testing.expect(sys.pass_active);
+    try testing.expectEqual(@as(u32, 1), sys.pass_index);
+}

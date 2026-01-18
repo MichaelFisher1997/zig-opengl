@@ -29,6 +29,8 @@ pub const TextureHandle = u32;
 pub const InvalidTextureHandle: TextureHandle = 0;
 
 pub const MAX_FRAMES_IN_FLIGHT = 2;
+/// Number of cascaded shadow map splits.
+/// 3 cascades provide a good balance between quality (near detail) and performance (draw calls).
 pub const SHADOW_CASCADE_COUNT = 3;
 
 pub const BufferUsage = enum {
