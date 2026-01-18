@@ -7,12 +7,22 @@ const std = @import("std");
 const BlockType = @import("block.zig").BlockType;
 const Face = @import("block.zig").Face;
 
+/// Rendering pass for the block
+pub const RenderPass = enum {
+    solid, // Opaque blocks (stone, dirt)
+    cutout, // Transparent with alpha test (leaves, grass, flowers)
+    fluid, // Translucent, special fluid handling (water)
+    translucent, // Translucent, sorted (glass)
+};
+
 pub const BlockDefinition = struct {
     id: BlockType,
     name: []const u8,
     is_solid: bool,
     is_transparent: bool,
     is_tintable: bool,
+    is_fluid: bool,
+    render_pass: RenderPass,
     light_emission: [3]u4, // RGB light emission
     default_color: [3]f32,
 
@@ -20,10 +30,16 @@ pub const BlockDefinition = struct {
     pub fn occludes(self: BlockDefinition, other_def: BlockDefinition, face: Face) bool {
         _ = face;
         if (self.id == .air) return false;
-        // Same transparent types occlude each other (no internal water/glass faces)
+
+        // Fluid culling: Same fluids don't draw faces between them
+        if (self.is_fluid and self.id == other_def.id) return true;
+
+        // Same transparent types occlude each other (no internal glass faces)
         if (self.is_transparent and self.id == other_def.id) return true;
+
         // Non-transparent solid blocks occlude everything
         if (self.is_solid and !self.is_transparent) return true;
+
         return false;
     }
 
@@ -43,27 +59,20 @@ pub const BlockDefinition = struct {
     }
 
     pub fn isOpaque(self: BlockDefinition) bool {
-        // Defined as solid and not transparent in the original logic,
-        // effectively blocking light propagation.
-        // The original isOpaque logic was a specific list.
-        // Let's look at the original code:
-        // return switch (self) {
-        //     .air, .water, .glass, .leaves, ... => false,
-        //     else => true,
-        // };
-        // This effectively matches (!is_transparent) for most cases,
-        // except keeping in mind that 'is_transparent' list in original code
-        // matches the 'false' list of isOpaque.
         return !self.is_transparent;
     }
 };
 
 /// Global static registry of block definitions
 pub const BLOCK_REGISTRY = blk: {
+    // Validate that BlockType is backed by u8 to ensure registry fits
+    if (@typeInfo(BlockType).@"enum".tag_type != u8) {
+        @compileError("BlockType must be backed by u8 for BLOCK_REGISTRY safety");
+    }
+
     var definitions = [_]BlockDefinition{undefined} ** 256; // Max u8 blocks
 
     // Default "Air" definition for all slots first
-
     for (0..256) |i| {
         definitions[i] = .{
             .id = .air,
@@ -71,6 +80,8 @@ pub const BLOCK_REGISTRY = blk: {
             .is_solid = false,
             .is_transparent = true,
             .is_tintable = false,
+            .is_fluid = false,
+            .render_pass = .solid, // Default, though air isn't drawn
             .light_emission = .{ 0, 0, 0 },
             .default_color = .{ 1, 0, 1 }, // Magenta for unknown
         };
@@ -93,6 +104,8 @@ pub const BLOCK_REGISTRY = blk: {
             .is_solid = true, // Default
             .is_transparent = false, // Default
             .is_tintable = false, // Default
+            .is_fluid = false, // Default
+            .render_pass = .solid, // Default
             .light_emission = .{ 0, 0, 0 }, // Default
             .default_color = .{ 1, 1, 1 }, // Default
         };
@@ -167,10 +180,24 @@ pub const BLOCK_REGISTRY = blk: {
             else => false,
         };
 
-        // 5. Light Emission
+        // 5. Is Fluid
+        def.is_fluid = switch (id) {
+            .water => true,
+            else => false,
+        };
+
+        // 6. Render Pass
+        def.render_pass = switch (id) {
+            .water => .fluid,
+            .glass => .fluid, // Or translucent, using fluid for now as per original grouping
+            .leaves, .mangrove_leaves, .jungle_leaves, .acacia_leaves, .birch_leaves, .spruce_leaves, .mangrove_roots, .bamboo, .acacia_sapling, .vine, .tall_grass, .flower_red, .flower_yellow, .dead_bush, .cactus, .melon => .cutout,
+            else => .solid,
+        };
+
+        // 7. Light Emission
         def.light_emission = switch (id) {
             .glowstone => .{ 15, 14, 10 },
-            // Original code had .water, .cactus, .ore => 0, 0, 0 which is the default
+            .water, .cactus, .coal_ore, .iron_ore, .gold_ore => .{ 0, 0, 0 },
             else => .{ 0, 0, 0 },
         };
 

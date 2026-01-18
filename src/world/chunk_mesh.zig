@@ -235,8 +235,8 @@ pub const ChunkMesh = struct {
                 const b1_def = block_registry.getBlockDefinition(b1);
                 const b2_def = block_registry.getBlockDefinition(b2);
 
-                const b1_emits = b1_def.is_solid or (b1 == .water and b2 != .water);
-                const b2_emits = b2_def.is_solid or (b2 == .water and b1 != .water);
+                const b1_emits = b1_def.is_solid or (b1_def.is_fluid and !b2_def.is_fluid);
+                const b2_emits = b2_def.is_solid or (b2_def.is_fluid and !b1_def.is_fluid);
 
                 if (isEmittingSubchunk(axis, s - 1, u, v, y_min, y_max) and b1_emits and !b2_def.occludes(b1_def.*, axis)) {
                     const light = getLightAtBoundary(chunk, neighbors, axis, s, u, v, si);
@@ -298,7 +298,7 @@ pub const ChunkMesh = struct {
                     height += 1;
                 }
 
-                const target = if (block_registry.getBlockDefinition(k.block).is_transparent and k.block != .leaves) fluid_list else solid_list;
+                const target = if (block_registry.getBlockDefinition(k.block).render_pass == .fluid) fluid_list else solid_list;
                 try addGreedyFace(self.allocator, target, axis, s, su, sv, width, height, k.block, k.side, si, k.light, k.color, chunk, neighbors);
 
                 var dy: u32 = 0;
