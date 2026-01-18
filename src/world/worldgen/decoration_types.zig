@@ -53,12 +53,14 @@ pub const Schematic = struct {
     center_z: i32 = 0,
 
     pub fn place(self: Schematic, chunk: *Chunk, x: u32, y: u32, z: u32, random: std.Random) void {
-        _ = random;
         const center_x = @as(i32, @intCast(x));
         const center_y = @as(i32, @intCast(y));
         const center_z = @as(i32, @intCast(z));
 
         for (self.blocks) |sb| {
+            if (sb.probability < 1.0) {
+                if (random.float(f32) >= sb.probability) continue;
+            }
             const bx = center_x + sb.offset[0] - self.center_x;
             const by = center_y + sb.offset[1];
             const bz = center_z + sb.offset[2] - self.center_z;

@@ -119,7 +119,7 @@ const Chunk = @import("../chunk.zig").Chunk;
 pub const StandardDecorationProvider = struct {
     pub fn provider() DecorationProvider {
         return .{
-            .ptr = undefined, // No state needed
+            .ptr = null, // Stateless
             .vtable = &VTABLE,
         };
     }
@@ -129,7 +129,7 @@ pub const StandardDecorationProvider = struct {
     };
 
     fn decorate(
-        ptr: *anyopaque,
+        ptr: ?*anyopaque,
         chunk: *Chunk,
         local_x: u32,
         local_z: u32,

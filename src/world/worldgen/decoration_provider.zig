@@ -5,13 +5,17 @@ const BiomeId = @import("biome.zig").BiomeId;
 
 /// Abstraction for decoration placement logic.
 /// Allows OverworldGenerator to be decoupled from specific decoration implementations.
+///
+/// Implementation Note: The generator typically calls `decorate` once per column.
+/// Providers are responsible for deciding which decorations (if any) to place in that column.
+/// Most providers stop after placing the first valid decoration to avoid overlap.
 pub const DecorationProvider = struct {
-    ptr: *anyopaque,
+    ptr: ?*anyopaque,
     vtable: *const VTable,
 
     pub const VTable = struct {
         decorate: *const fn (
-            ptr: *anyopaque,
+            ptr: ?*anyopaque,
             chunk: *Chunk,
             local_x: u32,
             local_z: u32,

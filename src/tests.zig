@@ -1145,7 +1145,7 @@ test "OverworldGenerator with mock decoration provider" {
         };
 
         fn decorate(
-            ptr: *anyopaque,
+            ptr: ?*anyopaque,
             chunk: *Chunk,
             local_x: u32,
             local_z: u32,
@@ -1167,7 +1167,7 @@ test "OverworldGenerator with mock decoration provider" {
             _ = allow_subbiomes;
             _ = veg_mult;
             _ = random;
-            const count: *usize = @ptrCast(@alignCast(ptr));
+            const count: *usize = @ptrCast(@alignCast(ptr.?));
             count.* += 1;
         }
     };
