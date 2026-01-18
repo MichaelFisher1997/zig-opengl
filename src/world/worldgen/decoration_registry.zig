@@ -80,7 +80,8 @@ pub const DECORATIONS = [_]Decoration{
     },
 
     // === Forest: Dense Oak (Variant > 0.4) ===
-    // Keeps this as a special override for now
+    // Keeps this as a special override for now.
+    // Uses schematics.OAK_TREE directly but with smaller spacing (2) for density.
     .{
         .schematic = .{
             .schematic = schematics.OAK_TREE,
@@ -94,6 +95,8 @@ pub const DECORATIONS = [_]Decoration{
 };
 
 const Chunk = @import("../chunk.zig").Chunk;
+const CHUNK_SIZE_X = @import("../chunk.zig").CHUNK_SIZE_X;
+const CHUNK_SIZE_Z = @import("../chunk.zig").CHUNK_SIZE_Z;
 
 pub const StandardDecorationProvider = struct {
     pub fn provider() DecorationProvider {
@@ -106,6 +109,49 @@ pub const StandardDecorationProvider = struct {
     const VTABLE = DecorationProvider.VTable{
         .decorate = decorate,
     };
+
+    /// Check if area around (x, z) is clear of obstructions (logs/leaves)
+    fn isAreaClear(chunk: *Chunk, x: i32, y: i32, z: i32, radius: i32) bool {
+        // Optimization: only check a few key points or a small box
+        // Since we are generating the chunk, we only care about blocks *we* placed in this pass
+        // or previously placed blocks.
+
+        // Simple bounding box check centered at x,z
+        var dz: i32 = -radius;
+        while (dz <= radius) : (dz += 1) {
+            var dx: i32 = -radius;
+            while (dx <= radius) : (dx += 1) {
+                // Skip the center (target) column, as we are placing there
+                if (dx == 0 and dz == 0) continue;
+
+                const check_x = x + dx;
+                const check_z = z + dz;
+
+                // Only check within chunk bounds for now (avoiding neighbor lookups)
+                if (check_x >= 0 and check_x < CHUNK_SIZE_X and
+                    check_z >= 0 and check_z < CHUNK_SIZE_Z)
+                {
+
+                    // Check a few blocks up from the base
+                    // If we find wood or leaves, it's likely another tree
+                    var dy: i32 = 1;
+                    while (dy <= 3) : (dy += 1) {
+                        const block = chunk.getBlockSafe(check_x, y + dy, check_z);
+                        if (block == .wood or block == .leaves or
+                            block == .birch_log or block == .birch_leaves or
+                            block == .spruce_log or block == .spruce_leaves or
+                            block == .jungle_log or block == .jungle_leaves or
+                            block == .acacia_log or block == .acacia_leaves or
+                            block == .mangrove_log or block == .mangrove_leaves)
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    }
 
     fn decorate(
         ptr: ?*anyopaque,
@@ -138,8 +184,6 @@ pub const StandardDecorationProvider = struct {
                     if (random.float(f32) >= prob) continue;
 
                     chunk.setBlock(local_x, @intCast(surface_y + 1), local_z, s.block);
-                    // Don't break here, multiple simple decos might co-exist (rare but possible in theory, though usually not on same block)
-                    // Actually, simple decos occupy the block above surface. We should probably break if we place one.
                     break;
                 },
                 .schematic => |s| {
@@ -153,6 +197,13 @@ pub const StandardDecorationProvider = struct {
 
                     const prob = @min(1.0, s.probability * veg_mult);
                     if (random.float(f32) >= prob) continue;
+
+                    // Enforce spacing for schematic decorations
+                    if (s.spacing_radius > 0) {
+                        if (!isAreaClear(chunk, @intCast(local_x), surface_y, @intCast(local_z), s.spacing_radius)) {
+                            continue;
+                        }
+                    }
 
                     s.schematic.place(chunk, local_x, @intCast(surface_y + 1), local_z, random);
                     break;
@@ -173,19 +224,28 @@ pub const StandardDecorationProvider = struct {
                 const tree_type = veg.tree_types[tree_idx];
 
                 if (tree_type != .none) {
-                    const tree_def = TreeRegistry.getTree(tree_type);
-
-                    // Check if placement is valid
-                    var valid_surface = false;
-                    for (tree_def.place_on) |valid_block| {
-                        if (surface_block == valid_block) {
-                            valid_surface = true;
-                            break;
+                    if (TreeRegistry.getTree(tree_type)) |tree_def| {
+                        // Check if placement is valid
+                        var valid_surface = false;
+                        for (tree_def.place_on) |valid_block| {
+                            if (surface_block == valid_block) {
+                                valid_surface = true;
+                                break;
+                            }
                         }
-                    }
 
-                    if (valid_surface) {
-                        tree_def.schematic.place(chunk, local_x, @intCast(surface_y + 1), local_z, random);
+                        if (valid_surface) {
+                            // Enforce spacing
+                            if (tree_def.spacing_radius > 0) {
+                                if (!isAreaClear(chunk, @intCast(local_x), surface_y, @intCast(local_z), tree_def.spacing_radius)) {
+                                    return; // Skip this tree
+                                }
+                            }
+
+                            tree_def.schematic.place(chunk, local_x, @intCast(surface_y + 1), local_z, random);
+                        }
+                    } else |_| {
+                        // Handle invalid tree type (e.g. .none) gracefully
                     }
                 }
             }
