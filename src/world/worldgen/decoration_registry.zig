@@ -5,6 +5,8 @@
 const std = @import("std");
 const BlockType = @import("../block.zig").BlockType;
 const BiomeId = @import("biome.zig").BiomeId;
+const biome_mod = @import("biome.zig");
+const tree_registry = @import("tree_registry.zig");
 
 // Import types and schematics
 pub const types = @import("decoration_types.zig");
@@ -76,126 +78,6 @@ pub const DECORATIONS = [_]Decoration{
             .variant_min = 0.6,
         },
     },
-
-    // === Trees: Sparse (Plains, Mountains) ===
-    .{
-        .schematic = .{
-            .schematic = schematics.OAK_TREE,
-            .place_on = &.{ .grass, .dirt },
-            .biomes = &.{ .plains, .mountains },
-            .probability = 0.002, // Very sparse
-            .spacing_radius = 4,
-        },
-    },
-
-    // === Forest: Oak Trees (Standard) ===
-    .{ .schematic = .{
-        .schematic = schematics.OAK_TREE,
-        .place_on = &.{ .grass, .dirt },
-        .biomes = &.{.forest},
-        .probability = 0.02,
-        .spacing_radius = 3,
-        .variant_min = -0.4,
-        .variant_max = 0.4,
-    } },
-
-    // === Forest: Birch Trees (Standard) ===
-    .{ .schematic = .{
-        .schematic = schematics.BIRCH_TREE,
-        .place_on = &.{ .grass, .dirt },
-        .biomes = &.{.forest},
-        .probability = 0.015,
-        .spacing_radius = 3,
-        .variant_min = 0.0,
-        .variant_max = 0.6,
-    } },
-
-    // === Forest: Dense Oak (Variant > 0.4) ===
-    .{
-        .schematic = .{
-            .schematic = schematics.OAK_TREE,
-            .place_on = &.{ .grass, .dirt },
-            .biomes = &.{.forest},
-            .probability = 0.1,
-            .spacing_radius = 2,
-            .variant_min = 0.4,
-        },
-    },
-
-    // === Taiga: Spruce Trees ===
-    .{
-        .schematic = .{
-            .schematic = schematics.SPRUCE_TREE,
-            .place_on = &.{ .grass, .dirt, .snow_block },
-            .biomes = &.{ .taiga, .snow_tundra },
-            .probability = 0.08,
-            .spacing_radius = 3,
-        },
-    },
-
-    // === Swamp: Swamp Oak ===
-    .{
-        .schematic = .{
-            .schematic = schematics.SWAMP_OAK,
-            .place_on = &.{ .grass, .dirt },
-            .biomes = &.{.swamp},
-            .probability = 0.05,
-            .spacing_radius = 4,
-        },
-    },
-
-    // === Mangrove Swamp: Mangrove Trees ===
-    .{
-        .schematic = .{
-            .schematic = schematics.MANGROVE_TREE,
-            .place_on = &.{ .mud, .grass },
-            .biomes = &.{.mangrove_swamp},
-            .probability = 0.12,
-            .spacing_radius = 3,
-        },
-    },
-
-    // === Jungle: Jungle Trees ===
-    .{
-        .schematic = .{
-            .schematic = schematics.JUNGLE_TREE,
-            .place_on = &.{ .grass, .dirt },
-            .biomes = &.{.jungle},
-            .probability = 0.15,
-            .spacing_radius = 2,
-        },
-    },
-
-    // === Savanna: Acacia Trees ===
-    .{
-        .schematic = .{
-            .schematic = schematics.ACACIA_TREE,
-            .place_on = &.{ .grass, .dirt },
-            .biomes = &.{.savanna},
-            .probability = 0.015,
-            .spacing_radius = 5,
-        },
-    },
-
-    // === Mushroom Fields: Huge Mushrooms ===
-    .{
-        .schematic = .{
-            .schematic = schematics.HUGE_RED_MUSHROOM,
-            .place_on = &.{.mycelium},
-            .biomes = &.{.mushroom_fields},
-            .probability = 0.03,
-            .spacing_radius = 4,
-        },
-    },
-    .{
-        .schematic = .{
-            .schematic = schematics.HUGE_BROWN_MUSHROOM,
-            .place_on = &.{.mycelium},
-            .biomes = &.{.mushroom_fields},
-            .probability = 0.03,
-            .spacing_radius = 4,
-        },
-    },
 };
 
 const Chunk = @import("../chunk.zig").Chunk;
@@ -226,6 +108,8 @@ pub const StandardDecorationProvider = struct {
         random: std.Random,
     ) void {
         _ = ptr;
+
+        // 1. Apply simple decorations (grass, flowers, etc.)
         for (DECORATIONS) |deco| {
             switch (deco) {
                 .simple => |s| {
@@ -241,23 +125,51 @@ pub const StandardDecorationProvider = struct {
                     if (random.float(f32) >= prob) continue;
 
                     chunk.setBlock(local_x, @intCast(surface_y + 1), local_z, s.block);
+                    // Don't break, allow trying other non-conflicting decorations?
+                    // Original code broke here. Let's keep it consistent: one simple decoration per block.
                     break;
                 },
-                .schematic => |s| {
-                    if (!s.isAllowed(biome, surface_block)) continue;
+                .schematic => {}, // No longer used in static list
+            }
+        }
 
-                    if (!allow_subbiomes) {
-                        if (s.variant_min != -1.0 or s.variant_max != 1.0) continue;
+        // 2. Apply trees from registry based on biome
+        const biome_def = biome_mod.getBiomeDefinition(biome);
+        const vegetation = biome_def.vegetation;
+
+        if (vegetation.tree_types.len > 0) {
+            for (vegetation.tree_types) |tree_type| {
+                if (tree_registry.getTreeDefinition(tree_type)) |tree_def| {
+                    // Check surface block
+                    var valid_surface = false;
+                    for (tree_def.place_on) |valid_block| {
+                        if (surface_block == valid_block) {
+                            valid_surface = true;
+                            break;
+                        }
+                    }
+                    if (!valid_surface) continue;
+
+                    // Check variant noise
+                    if (allow_subbiomes) {
+                        if (variant < tree_def.variant_min or variant > tree_def.variant_max) continue;
                     } else {
-                        if (variant < s.variant_min or variant > s.variant_max) continue;
+                        // Strict mode? Or just ignore variant requirements?
+                        // Original code: if (!allow_subbiomes) check if range is default (-1 to 1).
+                        if (tree_def.variant_min != -1.0 or tree_def.variant_max != 1.0) continue;
                     }
 
-                    const prob = @min(1.0, s.probability * veg_mult);
+                    // Check probability
+                    const prob = @min(1.0, tree_def.probability * veg_mult);
                     if (random.float(f32) >= prob) continue;
 
-                    s.schematic.place(chunk, local_x, @intCast(surface_y + 1), local_z, random);
+                    // Place tree
+                    tree_def.schematic.place(chunk, local_x, @intCast(surface_y + 1), local_z, random);
+
+                    // If a tree is placed, stop trying other trees?
+                    // Usually yes, we don't want trees on top of each other.
                     break;
-                },
+                }
             }
         }
     }
