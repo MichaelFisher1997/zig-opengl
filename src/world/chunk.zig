@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const BlockType = @import("block.zig").BlockType;
+const block_registry = @import("block_registry.zig");
 const BiomeId = @import("worldgen/biome.zig").BiomeId;
 
 pub const CHUNK_SIZE_X = 16;
@@ -332,7 +333,7 @@ pub const Chunk = struct {
             const uy: u32 = @intCast(y);
             const block = self.getBlock(x, uy, z);
             self.setSkyLight(x, uy, z, sky_light);
-            if (block.isOpaque()) {
+            if (block_registry.getBlockDefinition(block).isOpaque()) {
                 sky_light = 0;
             } else if (block == .water and sky_light > 0) {
                 sky_light -= 1;

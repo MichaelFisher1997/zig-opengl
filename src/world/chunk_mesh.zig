@@ -11,6 +11,7 @@ const CHUNK_SIZE_X = @import("chunk.zig").CHUNK_SIZE_X;
 const CHUNK_SIZE_Y = @import("chunk.zig").CHUNK_SIZE_Y;
 const CHUNK_SIZE_Z = @import("chunk.zig").CHUNK_SIZE_Z;
 const BlockType = @import("block.zig").BlockType;
+const block_registry = @import("block_registry.zig");
 const Face = @import("block.zig").Face;
 const ALL_FACES = @import("block.zig").ALL_FACES;
 const TextureAtlas = @import("../engine/graphics/texture_atlas.zig").TextureAtlas;
@@ -231,15 +232,18 @@ pub const ChunkMesh = struct {
                 const y_min: i32 = @intCast(si * SUBCHUNK_SIZE);
                 const y_max: i32 = y_min + SUBCHUNK_SIZE;
 
-                const b1_emits = b1.isSolid() or (b1 == .water and b2 != .water);
-                const b2_emits = b2.isSolid() or (b2 == .water and b1 != .water);
+                const b1_def = block_registry.getBlockDefinition(b1);
+                const b2_def = block_registry.getBlockDefinition(b2);
 
-                if (isEmittingSubchunk(axis, s - 1, u, v, y_min, y_max) and b1_emits and !b2.occludes(b1, axis)) {
+                const b1_emits = b1_def.is_solid or (b1 == .water and b2 != .water);
+                const b2_emits = b2_def.is_solid or (b2 == .water and b1 != .water);
+
+                if (isEmittingSubchunk(axis, s - 1, u, v, y_min, y_max) and b1_emits and !b2_def.occludes(b1_def.*, axis)) {
                     const light = getLightAtBoundary(chunk, neighbors, axis, s, u, v, si);
                     const color = getBlockColor(chunk, neighbors, axis, s - 1, u, v, si, b1);
                     mask[u + v * du] = .{ .block = b1, .side = true, .light = light, .color = color };
-                } else if (isEmittingSubchunk(axis, s, u, v, y_min, y_max) and b2_emits and !b1.occludes(b2, axis)) {
-                    const light = getLightAtBoundary(chunk, neighbors, axis, s - 1, u, v, si);
+                } else if (isEmittingSubchunk(axis, s, u, v, y_min, y_max) and b2_emits and !b1_def.occludes(b2_def.*, axis)) {
+                    const light = getLightAtBoundary(chunk, neighbors, axis, s, u, v, si);
                     const color = getBlockColor(chunk, neighbors, axis, s, u, v, si, b2);
                     mask[u + v * du] = .{ .block = b2, .side = false, .light = light, .color = color };
                 }
@@ -294,7 +298,7 @@ pub const ChunkMesh = struct {
                     height += 1;
                 }
 
-                const target = if (k.block.isTransparent() and k.block != .leaves) fluid_list else solid_list;
+                const target = if (block_registry.getBlockDefinition(k.block).is_transparent and k.block != .leaves) fluid_list else solid_list;
                 try addGreedyFace(self.allocator, target, axis, s, su, sv, width, height, k.block, k.side, si, k.light, k.color, chunk, neighbors);
 
                 var dy: u32 = 0;
@@ -458,7 +462,8 @@ fn getAOAt(chunk: *const Chunk, neighbors: NeighborChunks, x: i32, y: i32, z: i3
         }
     };
 
-    return if (b.isSolid() and !b.isTransparent()) 1.0 else 0.0;
+    const b_def = block_registry.getBlockDefinition(b);
+    return if (b_def.is_solid and !b_def.is_transparent) 1.0 else 0.0;
 }
 
 fn calculateVertexAO(s1: f32, s2: f32, c: f32) f32 {
@@ -473,7 +478,7 @@ fn addGreedyFace(allocator: std.mem.Allocator, verts: *std.ArrayListUnmanaged(Ve
         .south => Face.north,
         else => unreachable,
     };
-    const base_col = block.getFaceColor(face);
+    const base_col = block_registry.getBlockDefinition(block).getFaceColor(face);
     const col = [3]f32{ base_col[0] * tint[0], base_col[1] * tint[1], base_col[2] * tint[2] };
     const norm = face.getNormal();
     const nf = [3]f32{ @floatFromInt(norm[0]), @floatFromInt(norm[1]), @floatFromInt(norm[2]) };

@@ -27,6 +27,7 @@ const CHUNK_SIZE_Z = @import("world/chunk.zig").CHUNK_SIZE_Z;
 const worldToChunk = @import("world/chunk.zig").worldToChunk;
 const worldToLocal = @import("world/chunk.zig").worldToLocal;
 const BlockType = @import("world/block.zig").BlockType;
+const block_registry = @import("world/block_registry.zig");
 const BiomeId = @import("world/worldgen/biome.zig").BiomeId;
 
 // Worldgen modules
@@ -546,45 +547,45 @@ test "Chunk pin and unpin" {
 // ============================================================================
 
 test "BlockType isSolid" {
-    try testing.expect(!BlockType.air.isSolid());
-    try testing.expect(!BlockType.water.isSolid());
-    try testing.expect(BlockType.stone.isSolid());
-    try testing.expect(BlockType.dirt.isSolid());
-    try testing.expect(BlockType.grass.isSolid());
-    try testing.expect(BlockType.leaves.isSolid());
+    try testing.expect(!block_registry.getBlockDefinition(BlockType.air).is_solid);
+    try testing.expect(!block_registry.getBlockDefinition(BlockType.water).is_solid);
+    try testing.expect(block_registry.getBlockDefinition(BlockType.stone).is_solid);
+    try testing.expect(block_registry.getBlockDefinition(BlockType.dirt).is_solid);
+    try testing.expect(block_registry.getBlockDefinition(BlockType.grass).is_solid);
+    try testing.expect(block_registry.getBlockDefinition(BlockType.leaves).is_solid);
 }
 
 test "BlockType isTransparent" {
-    try testing.expect(BlockType.air.isTransparent());
-    try testing.expect(BlockType.water.isTransparent());
-    try testing.expect(BlockType.glass.isTransparent());
-    try testing.expect(BlockType.leaves.isTransparent());
-    try testing.expect(!BlockType.stone.isTransparent());
-    try testing.expect(!BlockType.dirt.isTransparent());
+    try testing.expect(block_registry.getBlockDefinition(BlockType.air).is_transparent);
+    try testing.expect(block_registry.getBlockDefinition(BlockType.water).is_transparent);
+    try testing.expect(block_registry.getBlockDefinition(BlockType.glass).is_transparent);
+    try testing.expect(block_registry.getBlockDefinition(BlockType.leaves).is_transparent);
+    try testing.expect(!block_registry.getBlockDefinition(BlockType.stone).is_transparent);
+    try testing.expect(!block_registry.getBlockDefinition(BlockType.dirt).is_transparent);
 }
 
 test "BlockType isOpaque" {
-    try testing.expect(!BlockType.air.isOpaque());
-    try testing.expect(!BlockType.water.isOpaque());
-    try testing.expect(!BlockType.glass.isOpaque());
-    try testing.expect(BlockType.stone.isOpaque());
-    try testing.expect(BlockType.dirt.isOpaque());
+    try testing.expect(!block_registry.getBlockDefinition(BlockType.air).isOpaque());
+    try testing.expect(!block_registry.getBlockDefinition(BlockType.water).isOpaque());
+    try testing.expect(!block_registry.getBlockDefinition(BlockType.glass).isOpaque());
+    try testing.expect(block_registry.getBlockDefinition(BlockType.stone).isOpaque());
+    try testing.expect(block_registry.getBlockDefinition(BlockType.dirt).isOpaque());
 }
 
 test "BlockType isAir" {
-    try testing.expect(BlockType.air.isAir());
-    try testing.expect(!BlockType.stone.isAir());
-    try testing.expect(!BlockType.water.isAir());
+    try testing.expect(BlockType.air == .air);
+    try testing.expect(BlockType.stone != .air);
+    try testing.expect(BlockType.water != .air);
 }
 
 test "BlockType getLightEmission" {
-    try testing.expectEqual(@as(u4, 15), BlockType.glowstone.getLightEmission());
-    try testing.expectEqual(@as(u4, 0), BlockType.stone.getLightEmission());
-    try testing.expectEqual(@as(u4, 0), BlockType.water.getLightEmission());
+    try testing.expectEqual(@as(u4, 15), block_registry.getBlockDefinition(BlockType.glowstone).getLightEmissionLevel());
+    try testing.expectEqual(@as(u4, 0), block_registry.getBlockDefinition(BlockType.stone).getLightEmissionLevel());
+    try testing.expectEqual(@as(u4, 0), block_registry.getBlockDefinition(BlockType.water).getLightEmissionLevel());
 }
 
 test "BlockType getColor returns valid RGB" {
-    const colors = BlockType.stone.getColor();
+    const colors = block_registry.getBlockDefinition(BlockType.stone).default_color;
     try testing.expect(colors[0] >= 0 and colors[0] <= 1);
     try testing.expect(colors[1] >= 0 and colors[1] <= 1);
     try testing.expect(colors[2] >= 0 and colors[2] <= 1);
@@ -1086,7 +1087,7 @@ test "WorldGen golden output for known seed at origin" {
 
     // 3. The surface block should be solid (not air/water)
     const surface_block = chunk.getBlock(8, surface_height, 8);
-    try testing.expect(surface_block.isSolid());
+    try testing.expect(block_registry.getBlockDefinition(surface_block).is_solid);
 }
 
 test "WorldGen populates heightmap and biomes" {

@@ -16,6 +16,7 @@ const World = @import("../world/world.zig").World;
 const collision = @import("../engine/physics/collision.zig");
 const ray = @import("../engine/math/ray.zig");
 const block = @import("../world/block.zig");
+const block_registry = @import("../world/block_registry.zig");
 const BlockType = block.BlockType;
 const Face = block.Face;
 const input_mapper = @import("input_mapper.zig");
@@ -333,7 +334,7 @@ pub const Player = struct {
 
             pub fn isSolid(ctx: @This(), x: i32, y: i32, z: i32) bool {
                 const blk = ctx.world.getBlock(x, y, z);
-                return blk.isSolid();
+                return block_registry.getBlockDefinition(blk).is_solid;
             }
         };
 

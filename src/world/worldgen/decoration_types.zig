@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const BlockType = @import("../block.zig").BlockType;
+const block_registry = @import("../block_registry.zig");
 const BiomeId = @import("biome.zig").BiomeId;
 const chunk_mod = @import("../chunk.zig");
 const Chunk = chunk_mod.Chunk;
@@ -69,7 +70,7 @@ pub const Schematic = struct {
             if (bx >= 0 and bx < CHUNK_SIZE_X and bz >= 0 and bz < CHUNK_SIZE_Z and by >= 0 and by < CHUNK_SIZE_Y) {
                 // Don't overwrite existing solid blocks to avoid trees deleting ground
                 const existing = chunk.getBlock(@intCast(bx), @intCast(by), @intCast(bz));
-                if (existing == .air or existing.isTransparent()) {
+                if (existing == .air or block_registry.getBlockDefinition(existing).is_transparent) {
                     chunk.setBlock(@intCast(bx), @intCast(by), @intCast(bz), sb.block);
                 }
             }

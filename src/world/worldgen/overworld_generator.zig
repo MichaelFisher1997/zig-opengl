@@ -53,6 +53,7 @@ const CHUNK_SIZE_Y = @import("../chunk.zig").CHUNK_SIZE_Y;
 const CHUNK_SIZE_Z = @import("../chunk.zig").CHUNK_SIZE_Z;
 const MAX_LIGHT = @import("../chunk.zig").MAX_LIGHT;
 const BlockType = @import("../block.zig").BlockType;
+const block_registry = @import("../block_registry.zig");
 const Biome = @import("../block.zig").Biome;
 const lod_chunk = @import("../lod_chunk.zig");
 const LODLevel = lod_chunk.LODLevel;
@@ -1493,7 +1494,7 @@ pub const OverworldGenerator = struct {
                     const uy: u32 = @intCast(y);
                     const block = chunk.getBlock(local_x, uy, local_z);
                     chunk.setSkyLight(local_x, uy, local_z, sky_light);
-                    if (block.isOpaque()) {
+                    if (block_registry.getBlockDefinition(block).isOpaque()) {
                         sky_light = 0;
                     } else if (block == .water and sky_light > 0) {
                         sky_light -= 1;
@@ -1522,7 +1523,7 @@ pub const OverworldGenerator = struct {
                 var local_x: u32 = 0;
                 while (local_x < CHUNK_SIZE_X) : (local_x += 1) {
                     const block = chunk.getBlock(local_x, y, local_z);
-                    const emission = block.getLightEmissionRGB();
+                    const emission = block_registry.getBlockDefinition(block).light_emission;
                     if (emission[0] > 0 or emission[1] > 0 or emission[2] > 0) {
                         chunk.setBlockLightRGB(local_x, y, local_z, emission[0], emission[1], emission[2]);
                         try queue.append(self.allocator, .{
@@ -1550,7 +1551,7 @@ pub const OverworldGenerator = struct {
                     const uy: u32 = @intCast(ny);
                     const uz: u32 = @intCast(nz);
                     const block = chunk.getBlock(ux, uy, uz);
-                    if (!block.isOpaque()) {
+                    if (!block_registry.getBlockDefinition(block).isOpaque()) {
                         const current_light = chunk.getLight(ux, uy, uz);
                         const current_r = current_light.getBlockLightR();
                         const current_g = current_light.getBlockLightG();

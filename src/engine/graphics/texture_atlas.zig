@@ -10,6 +10,7 @@ const FilterMode = @import("texture.zig").FilterMode;
 const log = @import("../core/log.zig");
 const resource_pack = @import("resource_pack.zig");
 const BlockType = @import("../../world/block.zig").BlockType;
+const block_registry = @import("../../world/block_registry.zig");
 const PBRMapType = resource_pack.PBRMapType;
 
 const rhi = @import("rhi.zig");
@@ -357,7 +358,7 @@ pub const TextureAtlas = struct {
             if (!loaded) {
                 log.log.warn("Failed to load texture: {s}, using fallback color", .{config.name});
                 // Use solid block color as fallback in the atlas
-                const base_f32 = config.block.getColor();
+                const base_f32 = block_registry.getBlockDefinition(config.block).default_color;
                 const base_u8 = [3]u8{
                     @intFromFloat(@min(base_f32[0] * 255.0, 255.0)),
                     @intFromFloat(@min(base_f32[1] * 255.0, 255.0)),
