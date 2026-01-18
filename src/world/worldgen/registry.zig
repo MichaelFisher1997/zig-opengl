@@ -11,7 +11,7 @@ pub const RegistryError = error{
 
 pub const GeneratorType = struct {
     info: gen_interface.GeneratorInfo,
-    initFn: *const fn (seed: u64, allocator: std.mem.Allocator) anyerror!Generator,
+    initFn: *const fn (seed: u64, allocator: std.mem.Allocator) RegistryError!Generator,
 };
 
 pub const GENERATORS = [_]GeneratorType{
@@ -25,14 +25,14 @@ pub const GENERATORS = [_]GeneratorType{
     },
 };
 
-fn initOverworld(seed: u64, allocator: std.mem.Allocator) anyerror!Generator {
-    const gen = try allocator.create(OverworldGenerator);
+fn initOverworld(seed: u64, allocator: std.mem.Allocator) RegistryError!Generator {
+    const gen = allocator.create(OverworldGenerator) catch return error.OutOfMemory;
     gen.* = OverworldGenerator.init(seed, allocator);
     return gen.generator();
 }
 
-fn initFlatWorld(seed: u64, allocator: std.mem.Allocator) anyerror!Generator {
-    const gen = try allocator.create(FlatWorldGenerator);
+fn initFlatWorld(seed: u64, allocator: std.mem.Allocator) RegistryError!Generator {
+    const gen = allocator.create(FlatWorldGenerator) catch return error.OutOfMemory;
     gen.* = FlatWorldGenerator.init(seed, allocator);
     return gen.generator();
 }
@@ -46,7 +46,7 @@ pub fn getGeneratorInfo(index: usize) gen_interface.GeneratorInfo {
     return GENERATORS[index].info;
 }
 
-pub fn createGenerator(index: usize, seed: u64, allocator: std.mem.Allocator) anyerror!Generator {
+pub fn createGenerator(index: usize, seed: u64, allocator: std.mem.Allocator) RegistryError!Generator {
     if (index >= GENERATORS.len) return error.InvalidGeneratorIndex;
     return GENERATORS[index].initFn(seed, allocator) catch |err| {
         std.log.err("Generator initialization failed for index {}: {}", .{ index, err });

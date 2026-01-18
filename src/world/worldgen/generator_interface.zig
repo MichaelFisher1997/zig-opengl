@@ -90,7 +90,10 @@ pub const GenerationOptions = struct {
 };
 
 pub const GeneratorInfo = struct {
+    /// Human-readable name of the generator (e.g. "Overworld").
+    /// Displayed in the UI. Should be kept relatively short (under 32 chars recommended).
     name: []const u8,
+    /// Description of the generator's features and purpose.
     description: []const u8,
 };
 
