@@ -1,6 +1,7 @@
 const std = @import("std");
 const rhi = @import("rhi.zig");
 const RHI = rhi.RHI;
+const IGraphicsCommandEncoder = rhi.IGraphicsCommandEncoder;
 const Vec3 = @import("../math/vec3.zig").Vec3;
 const Mat4 = @import("../math/mat4.zig").Mat4;
 
@@ -19,7 +20,6 @@ pub const AtmosphereSystem = struct {
             .rhi = rhi_instance,
         };
 
-        // Create cloud mesh (large quad centered on camera)
         const cloud_vertices = [_]f32{
             -self.cloud_mesh_size, -self.cloud_mesh_size,
             self.cloud_mesh_size,  -self.cloud_mesh_size,
@@ -44,20 +44,12 @@ pub const AtmosphereSystem = struct {
     }
 
     pub fn renderClouds(self: *AtmosphereSystem, params: rhi.CloudParams, view_proj: Mat4) void {
-        // Phase 5 Refactor: Use RHI primitives
-
         var final_params = params;
         final_params.view_proj = view_proj;
-        final_params.cam_pos = params.cam_pos;
 
-        // 1. Bind pipeline and push constants
         self.rhi.beginCloudPass(final_params);
-
-        // 2. Bind geometry (now owned by this system)
         self.rhi.bindBuffer(self.cloud_vbo, .vertex);
         self.rhi.bindBuffer(self.cloud_ebo, .index);
-
-        // 3. Draw
         self.rhi.drawIndexed(self.cloud_vbo, self.cloud_ebo, 6);
     }
 };
