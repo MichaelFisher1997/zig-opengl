@@ -107,6 +107,8 @@ pub const Generator = struct {
         /// 1. Set chunk.generated = false at the very beginning of the function.
         /// 2. Respect the stop_flag (if provided) by returning early without setting chunk.generated = true.
         /// 3. Set chunk.generated = true ONLY after ALL generation steps (terrain, ores, features, lighting) are complete.
+        /// Note: If stop_flag is used to return early, the chunk may be left in a partially modified state.
+        /// The chunk.generated = false flag ensures that other systems (like rendering) do not process this incomplete data.
         generate: *const fn (ptr: *anyopaque, chunk: *Chunk, stop_flag: ?*const bool) void,
 
         /// Generate heightmap-only data for LOD levels.

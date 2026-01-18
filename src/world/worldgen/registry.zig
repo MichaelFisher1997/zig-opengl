@@ -49,9 +49,9 @@ pub fn getGeneratorInfo(index: usize) gen_interface.GeneratorInfo {
 pub fn createGenerator(index: usize, seed: u64, allocator: std.mem.Allocator) RegistryError!Generator {
     if (index >= GENERATORS.len) return error.InvalidGeneratorIndex;
     return GENERATORS[index].initFn(seed, allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.OutOfMemory;
-        // Map other errors to something or just return them if we use anyerror.
-        // But the user requested an explicit error set.
-        return error.OutOfMemory; // initOverworld/initFlatWorld only really return OOM
+        if (err != error.OutOfMemory) {
+            std.log.err("Generator initialization failed for index {}: {}", .{ index, err });
+        }
+        return error.OutOfMemory;
     };
 }
