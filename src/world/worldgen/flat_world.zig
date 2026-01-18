@@ -38,8 +38,10 @@ pub const FlatWorldGenerator = struct {
 
     pub fn generate(self: *FlatWorldGenerator, chunk: *Chunk, stop_flag: ?*const bool) void {
         _ = self;
+        chunk.generated = false;
 
         var local_z: u32 = 0;
+
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
             if (stop_flag) |sf| if (sf.*) return;
             var local_x: u32 = 0;
@@ -84,9 +86,8 @@ pub const FlatWorldGenerator = struct {
         _ = region_x;
         _ = region_z;
         _ = lod_level;
-        const h: f32 = @floatFromInt(FLAT_HEIGHT);
 
-        @memset(data.heightmap, h);
+        @memset(data.heightmap, @floatFromInt(FLAT_HEIGHT));
         @memset(data.biomes, .plains);
         @memset(data.top_blocks, .grass);
         @memset(data.colors, GRASS_COLOR);

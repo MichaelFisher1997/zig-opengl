@@ -103,8 +103,10 @@ pub const Generator = struct {
 
     pub const VTable = struct {
         /// Generate a full chunk of terrain.
-        /// Implementations MUST NOT set chunk.generated = true if stop_flag is set and returns early.
-        /// chunk.generated = true should only be set after all generation steps (including lighting) are complete.
+        /// Implementations MUST:
+        /// 1. Set chunk.generated = false at the very beginning of the function.
+        /// 2. Respect the stop_flag (if provided) by returning early without setting chunk.generated = true.
+        /// 3. Set chunk.generated = true ONLY after ALL generation steps (terrain, ores, features, lighting) are complete.
         generate: *const fn (ptr: *anyopaque, chunk: *Chunk, stop_flag: ?*const bool) void,
 
         /// Generate heightmap-only data for LOD levels.

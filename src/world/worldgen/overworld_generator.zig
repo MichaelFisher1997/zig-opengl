@@ -384,6 +384,7 @@ pub const OverworldGenerator = struct {
     }
 
     pub fn generate(self: *OverworldGenerator, chunk: *Chunk, stop_flag: ?*const bool) void {
+        chunk.generated = false;
         const world_x = chunk.getWorldX();
         const world_z = chunk.getWorldZ();
         const p = self.params;
@@ -626,7 +627,7 @@ pub const OverworldGenerator = struct {
         );
 
         var worm_carve_map = self.cave_system.generateWormCaves(chunk, &surface_heights, self.allocator) catch {
-            self.generateWithoutWormCavesInternal(chunk, &surface_heights, &biome_ids, &secondary_biome_ids, &biome_blends, &filler_depths, &is_underwater_flags, &is_ocean_water_flags, &cave_region_values, &coastal_types, &slopes, &exposure_values, sea);
+            self.generateWithoutWormCavesInternal(chunk, &surface_heights, &biome_ids, &secondary_biome_ids, &biome_blends, &filler_depths, &is_underwater_flags, &is_ocean_water_flags, &cave_region_values, &coastal_types, &slopes, &exposure_values, sea, stop_flag);
             return;
         };
         defer worm_carve_map.deinit();
@@ -711,7 +712,7 @@ pub const OverworldGenerator = struct {
         self.printDebugStats(world_x, world_z, &debug_temperatures, &debug_humidities, &debug_continentalness, &biome_ids, debug_beach_count);
     }
 
-    fn generateWithoutWormCavesInternal(self: *const OverworldGenerator, chunk: *Chunk, surface_heights: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32, biome_ids: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]BiomeId, secondary_biome_ids: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]BiomeId, biome_blends: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32, filler_depths: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32, is_underwater_flags: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]bool, is_ocean_water_flags: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]bool, cave_region_values: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32, coastal_types: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]CoastalSurfaceType, slopes: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32, exposure_values: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32, sea: f32) void {
+    fn generateWithoutWormCavesInternal(self: *const OverworldGenerator, chunk: *Chunk, surface_heights: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32, biome_ids: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]BiomeId, secondary_biome_ids: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]BiomeId, biome_blends: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32, filler_depths: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32, is_underwater_flags: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]bool, is_ocean_water_flags: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]bool, cave_region_values: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32, coastal_types: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]CoastalSurfaceType, slopes: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]i32, exposure_values: *const [CHUNK_SIZE_X * CHUNK_SIZE_Z]f32, sea: f32, stop_flag: ?*const bool) void {
         _ = exposure_values;
         _ = slopes;
         const world_x = chunk.getWorldX();
@@ -719,6 +720,7 @@ pub const OverworldGenerator = struct {
         const p = self.params;
         var local_z: u32 = 0;
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
+            if (stop_flag) |sf| if (sf.*) return;
             var local_x: u32 = 0;
             while (local_x < CHUNK_SIZE_X) : (local_x += 1) {
                 const idx = local_x + local_z * CHUNK_SIZE_X;
@@ -776,6 +778,13 @@ pub const OverworldGenerator = struct {
                 }
             }
         }
+        if (stop_flag) |sf| if (sf.*) return;
+        self.generateOres(chunk);
+        if (stop_flag) |sf| if (sf.*) return;
+        self.generateFeatures(chunk);
+        if (stop_flag) |sf| if (sf.*) return;
+        self.computeSkylight(chunk);
+        if (stop_flag) |sf| if (sf.*) return;
         self.computeBlockLight(chunk) catch {};
         chunk.generated = true;
         chunk.dirty = true;

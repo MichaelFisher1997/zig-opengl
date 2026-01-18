@@ -4,6 +4,11 @@ const Generator = gen_interface.Generator;
 const OverworldGenerator = @import("overworld_generator.zig").OverworldGenerator;
 const FlatWorldGenerator = @import("flat_world.zig").FlatWorldGenerator;
 
+pub const RegistryError = error{
+    InvalidGeneratorIndex,
+    OutOfMemory,
+};
+
 pub const GeneratorType = struct {
     info: gen_interface.GeneratorInfo,
     initFn: *const fn (seed: u64, allocator: std.mem.Allocator) anyerror!Generator,
@@ -41,7 +46,12 @@ pub fn getGeneratorInfo(index: usize) gen_interface.GeneratorInfo {
     return GENERATORS[index].info;
 }
 
-pub fn createGenerator(index: usize, seed: u64, allocator: std.mem.Allocator) !Generator {
+pub fn createGenerator(index: usize, seed: u64, allocator: std.mem.Allocator) RegistryError!Generator {
     if (index >= GENERATORS.len) return error.InvalidGeneratorIndex;
-    return GENERATORS[index].initFn(seed, allocator);
+    return GENERATORS[index].initFn(seed, allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        // Map other errors to something or just return them if we use anyerror.
+        // But the user requested an explicit error set.
+        return error.OutOfMemory; // initOverworld/initFlatWorld only really return OOM
+    };
 }
