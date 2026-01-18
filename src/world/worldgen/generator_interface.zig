@@ -127,7 +127,8 @@ pub const Generator = struct {
         /// Get detailed column information for a world position (used for mapping)
         getColumnInfo: *const fn (ptr: *anyopaque, wx: f32, wz: f32) ColumnInfo,
 
-        /// Clean up generator resources
+        /// Clean up generator resources.
+        /// This MUST be called to free any memory or resources allocated by the generator.
         deinit: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator) void,
     };
 

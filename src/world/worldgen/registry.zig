@@ -46,12 +46,10 @@ pub fn getGeneratorInfo(index: usize) gen_interface.GeneratorInfo {
     return GENERATORS[index].info;
 }
 
-pub fn createGenerator(index: usize, seed: u64, allocator: std.mem.Allocator) RegistryError!Generator {
+pub fn createGenerator(index: usize, seed: u64, allocator: std.mem.Allocator) anyerror!Generator {
     if (index >= GENERATORS.len) return error.InvalidGeneratorIndex;
     return GENERATORS[index].initFn(seed, allocator) catch |err| {
-        if (err != error.OutOfMemory) {
-            std.log.err("Generator initialization failed for index {}: {}", .{ index, err });
-        }
-        return error.OutOfMemory;
+        std.log.err("Generator initialization failed for index {}: {}", .{ index, err });
+        return err;
     };
 }
