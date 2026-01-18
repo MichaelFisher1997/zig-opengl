@@ -81,6 +81,8 @@ pub const DECORATIONS = [_]Decoration{
 };
 
 const Chunk = @import("../chunk.zig").Chunk;
+const CHUNK_SIZE_X = @import("../chunk.zig").CHUNK_SIZE_X;
+const CHUNK_SIZE_Z = @import("../chunk.zig").CHUNK_SIZE_Z;
 
 pub const StandardDecorationProvider = struct {
     pub fn provider() DecorationProvider {
@@ -93,6 +95,39 @@ pub const StandardDecorationProvider = struct {
     const VTABLE = DecorationProvider.VTable{
         .decorate = decorate,
     };
+
+    /// Check if area around (x, z) is clear of obstructions (logs/leaves)
+    fn isAreaClear(chunk: *Chunk, x: i32, y: i32, z: i32, radius: i32) bool {
+        var dz: i32 = -radius;
+        while (dz <= radius) : (dz += 1) {
+            var dx: i32 = -radius;
+            while (dx <= radius) : (dx += 1) {
+                if (dx == 0 and dz == 0) continue;
+
+                const check_x = x + dx;
+                const check_z = z + dz;
+
+                if (check_x >= 0 and check_x < CHUNK_SIZE_X and
+                    check_z >= 0 and check_z < CHUNK_SIZE_Z)
+                {
+                    var dy: i32 = 1;
+                    while (dy <= 3) : (dy += 1) {
+                        const block = chunk.getBlockSafe(check_x, y + dy, check_z);
+                        if (block == .wood or block == .leaves or
+                            block == .birch_log or block == .birch_leaves or
+                            block == .spruce_log or block == .spruce_leaves or
+                            block == .jungle_log or block == .jungle_leaves or
+                            block == .acacia_log or block == .acacia_leaves or
+                            block == .mangrove_log or block == .mangrove_leaves)
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    }
 
     fn decorate(
         ptr: ?*anyopaque,
@@ -109,7 +144,7 @@ pub const StandardDecorationProvider = struct {
     ) void {
         _ = ptr;
 
-        // 1. Apply simple decorations (grass, flowers, etc.)
+        // 1. Static decorations (flowers, grass)
         for (DECORATIONS) |deco| {
             switch (deco) {
                 .simple => |s| {
@@ -125,15 +160,13 @@ pub const StandardDecorationProvider = struct {
                     if (random.float(f32) >= prob) continue;
 
                     chunk.setBlock(local_x, @intCast(surface_y + 1), local_z, s.block);
-                    // Don't break, allow trying other non-conflicting decorations?
-                    // Original code broke here. Let's keep it consistent: one simple decoration per block.
                     break;
                 },
-                .schematic => {}, // No longer used in static list
+                .schematic => {},
             }
         }
 
-        // 2. Apply trees from registry based on biome
+        // 2. Dynamic Tree Registry (from Biome Definition)
         const biome_def = biome_mod.getBiomeDefinition(biome);
         const vegetation = biome_def.vegetation;
 
@@ -154,8 +187,6 @@ pub const StandardDecorationProvider = struct {
                     if (allow_subbiomes) {
                         if (variant < tree_def.variant_min or variant > tree_def.variant_max) continue;
                     } else {
-                        // Strict mode? Or just ignore variant requirements?
-                        // Original code: if (!allow_subbiomes) check if range is default (-1 to 1).
                         if (tree_def.variant_min != -1.0 or tree_def.variant_max != 1.0) continue;
                     }
 
@@ -163,11 +194,17 @@ pub const StandardDecorationProvider = struct {
                     const prob = @min(1.0, tree_def.probability * veg_mult);
                     if (random.float(f32) >= prob) continue;
 
+                    // Enforce spacing
+                    if (tree_def.spacing_radius > 0) {
+                        if (!isAreaClear(chunk, @intCast(local_x), surface_y, @intCast(local_z), tree_def.spacing_radius)) {
+                            continue;
+                        }
+                    }
+
                     // Place tree
                     tree_def.schematic.place(chunk, local_x, @intCast(surface_y + 1), local_z, random);
 
-                    // If a tree is placed, stop trying other trees?
-                    // Usually yes, we don't want trees on top of each other.
+                    // Break after placing a tree to avoid multiple trees spawning in the same block column
                     break;
                 }
             }

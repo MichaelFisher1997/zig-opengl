@@ -7,7 +7,8 @@ const BlockType = @import("../block.zig").BlockType;
 const schematics = @import("schematics.zig");
 const Schematic = schematics.Schematic;
 
-/// Tree types available for generation
+/// Tree types available for generation.
+/// Note: The order of variants does not affect logic, but is preserved in registry iteration.
 pub const TreeType = enum {
     oak,
     birch,
@@ -21,16 +22,23 @@ pub const TreeType = enum {
     // Variants
     dense_oak,
     sparse_oak,
+    /// Null-type used to represent no tree placement
     none,
 };
 
 /// Definition of a tree's placement rules and structure
 pub const TreeDefinition = struct {
+    /// Schematic containing the blocks to place
     schematic: Schematic,
+    /// Blocks that this tree can be placed on
     place_on: []const BlockType = &.{ .grass, .dirt },
+    /// Probability of this tree being selected when its biome is active
     probability: f32 = 0.05,
+    /// Minimum distance in blocks between trees of this type
     spacing_radius: i32 = 3,
+    /// Minimum variant noise value for this tree to spawn
     variant_min: f32 = -1.0,
+    /// Maximum variant noise value for this tree to spawn
     variant_max: f32 = 1.0,
 };
 
@@ -107,7 +115,7 @@ pub fn getTreeDefinition(tree_type: TreeType) ?TreeDefinition {
 
 test "TreeRegistry completeness" {
     inline for (std.meta.fields(TreeType)) |field| {
-        const t: TreeType = @enumFromInt(field.value);
+        const t = @field(TreeType, field.name);
         if (t != .none) {
             const def = getTreeDefinition(t);
             try std.testing.expect(def != null);
