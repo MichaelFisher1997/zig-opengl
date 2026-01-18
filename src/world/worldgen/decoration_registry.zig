@@ -5,6 +5,8 @@
 const std = @import("std");
 const BlockType = @import("../block.zig").BlockType;
 const BiomeId = @import("biome.zig").BiomeId;
+const getBiomeDefinition = @import("biome.zig").getBiomeDefinition;
+const TreeRegistry = @import("tree_registry.zig").TreeRegistry;
 
 // Import types and schematics
 pub const types = @import("decoration_types.zig");
@@ -77,40 +79,8 @@ pub const DECORATIONS = [_]Decoration{
         },
     },
 
-    // === Trees: Sparse (Plains, Mountains) ===
-    .{
-        .schematic = .{
-            .schematic = schematics.OAK_TREE,
-            .place_on = &.{ .grass, .dirt },
-            .biomes = &.{ .plains, .mountains },
-            .probability = 0.002, // Very sparse
-            .spacing_radius = 4,
-        },
-    },
-
-    // === Forest: Oak Trees (Standard) ===
-    .{ .schematic = .{
-        .schematic = schematics.OAK_TREE,
-        .place_on = &.{ .grass, .dirt },
-        .biomes = &.{.forest},
-        .probability = 0.02,
-        .spacing_radius = 3,
-        .variant_min = -0.4,
-        .variant_max = 0.4,
-    } },
-
-    // === Forest: Birch Trees (Standard) ===
-    .{ .schematic = .{
-        .schematic = schematics.BIRCH_TREE,
-        .place_on = &.{ .grass, .dirt },
-        .biomes = &.{.forest},
-        .probability = 0.015,
-        .spacing_radius = 3,
-        .variant_min = 0.0,
-        .variant_max = 0.6,
-    } },
-
     // === Forest: Dense Oak (Variant > 0.4) ===
+    // Keeps this as a special override for now
     .{
         .schematic = .{
             .schematic = schematics.OAK_TREE,
@@ -119,81 +89,6 @@ pub const DECORATIONS = [_]Decoration{
             .probability = 0.1,
             .spacing_radius = 2,
             .variant_min = 0.4,
-        },
-    },
-
-    // === Taiga: Spruce Trees ===
-    .{
-        .schematic = .{
-            .schematic = schematics.SPRUCE_TREE,
-            .place_on = &.{ .grass, .dirt, .snow_block },
-            .biomes = &.{ .taiga, .snow_tundra },
-            .probability = 0.08,
-            .spacing_radius = 3,
-        },
-    },
-
-    // === Swamp: Swamp Oak ===
-    .{
-        .schematic = .{
-            .schematic = schematics.SWAMP_OAK,
-            .place_on = &.{ .grass, .dirt },
-            .biomes = &.{.swamp},
-            .probability = 0.05,
-            .spacing_radius = 4,
-        },
-    },
-
-    // === Mangrove Swamp: Mangrove Trees ===
-    .{
-        .schematic = .{
-            .schematic = schematics.MANGROVE_TREE,
-            .place_on = &.{ .mud, .grass },
-            .biomes = &.{.mangrove_swamp},
-            .probability = 0.12,
-            .spacing_radius = 3,
-        },
-    },
-
-    // === Jungle: Jungle Trees ===
-    .{
-        .schematic = .{
-            .schematic = schematics.JUNGLE_TREE,
-            .place_on = &.{ .grass, .dirt },
-            .biomes = &.{.jungle},
-            .probability = 0.15,
-            .spacing_radius = 2,
-        },
-    },
-
-    // === Savanna: Acacia Trees ===
-    .{
-        .schematic = .{
-            .schematic = schematics.ACACIA_TREE,
-            .place_on = &.{ .grass, .dirt },
-            .biomes = &.{.savanna},
-            .probability = 0.015,
-            .spacing_radius = 5,
-        },
-    },
-
-    // === Mushroom Fields: Huge Mushrooms ===
-    .{
-        .schematic = .{
-            .schematic = schematics.HUGE_RED_MUSHROOM,
-            .place_on = &.{.mycelium},
-            .biomes = &.{.mushroom_fields},
-            .probability = 0.03,
-            .spacing_radius = 4,
-        },
-    },
-    .{
-        .schematic = .{
-            .schematic = schematics.HUGE_BROWN_MUSHROOM,
-            .place_on = &.{.mycelium},
-            .biomes = &.{.mushroom_fields},
-            .probability = 0.03,
-            .spacing_radius = 4,
         },
     },
 };
@@ -226,6 +121,8 @@ pub const StandardDecorationProvider = struct {
         random: std.Random,
     ) void {
         _ = ptr;
+
+        // 1. Static decorations (flowers, grass, special variants)
         for (DECORATIONS) |deco| {
             switch (deco) {
                 .simple => |s| {
@@ -241,6 +138,8 @@ pub const StandardDecorationProvider = struct {
                     if (random.float(f32) >= prob) continue;
 
                     chunk.setBlock(local_x, @intCast(surface_y + 1), local_z, s.block);
+                    // Don't break here, multiple simple decos might co-exist (rare but possible in theory, though usually not on same block)
+                    // Actually, simple decos occupy the block above surface. We should probably break if we place one.
                     break;
                 },
                 .schematic => |s| {
@@ -258,6 +157,37 @@ pub const StandardDecorationProvider = struct {
                     s.schematic.place(chunk, local_x, @intCast(surface_y + 1), local_z, random);
                     break;
                 },
+            }
+        }
+
+        // 2. Dynamic Tree Registry (from Biome Definition)
+        const biome_def = getBiomeDefinition(biome);
+        const veg = biome_def.vegetation;
+
+        if (veg.tree_types.len > 0 and veg.tree_density > 0) {
+            // Check probability first
+            const tree_prob = @min(1.0, veg.tree_density * veg_mult);
+            if (random.float(f32) < tree_prob) {
+                // Select a random tree type from the biome's list
+                const tree_idx = random.uintLessThan(usize, veg.tree_types.len);
+                const tree_type = veg.tree_types[tree_idx];
+
+                if (tree_type != .none) {
+                    const tree_def = TreeRegistry.getTree(tree_type);
+
+                    // Check if placement is valid
+                    var valid_surface = false;
+                    for (tree_def.place_on) |valid_block| {
+                        if (surface_block == valid_block) {
+                            valid_surface = true;
+                            break;
+                        }
+                    }
+
+                    if (valid_surface) {
+                        tree_def.schematic.place(chunk, local_x, @intCast(surface_y + 1), local_z, random);
+                    }
+                }
             }
         }
     }
