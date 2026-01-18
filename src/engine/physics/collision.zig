@@ -9,6 +9,7 @@ const Vec3 = math.Vec3;
 const AABB = math.AABB;
 const World = @import("../../world/world.zig").World;
 const BlockType = @import("../../world/block.zig").BlockType;
+const block_registry = @import("../../world/block_registry.zig");
 
 /// Result of collision detection and resolution.
 pub const CollisionResult = struct {
@@ -187,7 +188,7 @@ pub fn collidesWithWorld(world: *World, aabb: AABB) bool {
             var x = min_x;
             while (x <= max_x) : (x += 1) {
                 const block = world.getBlock(x, y, z);
-                if (block.isSolid()) {
+                if (block_registry.getBlockDefinition(block).is_solid) {
                     // Create block AABB and test intersection
                     const block_aabb = AABB.init(
                         Vec3.init(@floatFromInt(x), @floatFromInt(y), @floatFromInt(z)),
@@ -226,7 +227,7 @@ pub fn getGroundLevel(world: *World, x: f32, z: f32) i32 {
     var y: i32 = 255;
     while (y >= 0) : (y -= 1) {
         const block = world.getBlock(ix, y, iz);
-        if (block.isSolid()) {
+        if (block_registry.getBlockDefinition(block).is_solid) {
             return y + 1; // Return the position above the solid block
         }
     }

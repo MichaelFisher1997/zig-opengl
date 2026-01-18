@@ -11,6 +11,7 @@ const Font = @import("../../engine/ui/font.zig");
 const widgets = @import("../../engine/ui/widgets.zig");
 const Inventory = @import("../inventory.zig").Inventory;
 const BlockType = @import("../../world/block.zig").BlockType;
+const block_registry = @import("../../world/block_registry.zig");
 
 /// Inventory UI state
 pub const InventoryUI = struct {
@@ -169,7 +170,7 @@ pub const InventoryUI = struct {
 
         // Draw held item at cursor
         if (self.held_item) |item| {
-            const rgb = item.block_type.getColor();
+            const rgb = block_registry.getBlockDefinition(item.block_type).default_color;
             const icon_color = Color.rgba(rgb[0], rgb[1], rgb[2], 0.8);
             const icon_size = cfg.slot_size - cfg.icon_margin * 2;
             ui.drawRect(
@@ -281,7 +282,7 @@ pub const InventoryUI = struct {
 
         // Item icon
         if (item) |stack| {
-            const rgb = stack.block_type.getColor();
+            const rgb = block_registry.getBlockDefinition(stack.block_type).default_color;
             const icon_color = Color.rgba(rgb[0], rgb[1], rgb[2], 1.0);
 
             const icon_size = size - cfg.icon_margin * 2;

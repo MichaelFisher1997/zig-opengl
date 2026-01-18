@@ -9,6 +9,7 @@ const Color = @import("../../engine/ui/ui_system.zig").Color;
 const Font = @import("../../engine/ui/font.zig");
 const Inventory = @import("../inventory.zig").Inventory;
 const BlockType = @import("../../world/block.zig").BlockType;
+const block_registry = @import("../../world/block_registry.zig");
 
 /// Hotbar rendering configuration
 pub const HotbarConfig = struct {
@@ -85,7 +86,7 @@ fn drawSlot(
 
     // Draw block icon if slot has an item
     if (item) |stack| {
-        const rgb = stack.block_type.getColor();
+        const rgb = block_registry.getBlockDefinition(stack.block_type).default_color;
         const icon_color = Color.rgba(rgb[0], rgb[1], rgb[2], 1.0);
 
         const icon_size = size - config.icon_margin * 2;

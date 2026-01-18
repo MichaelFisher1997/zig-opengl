@@ -11,6 +11,7 @@ const CHUNK_SIZE_X = @import("chunk.zig").CHUNK_SIZE_X;
 const CHUNK_SIZE_Y = @import("chunk.zig").CHUNK_SIZE_Y;
 const CHUNK_SIZE_Z = @import("chunk.zig").CHUNK_SIZE_Z;
 const BlockType = @import("block.zig").BlockType;
+const block_registry = @import("block_registry.zig");
 const Face = @import("block.zig").Face;
 const ALL_FACES = @import("block.zig").ALL_FACES;
 const TextureAtlas = @import("../engine/graphics/texture_atlas.zig").TextureAtlas;
@@ -231,16 +232,19 @@ pub const ChunkMesh = struct {
                 const y_min: i32 = @intCast(si * SUBCHUNK_SIZE);
                 const y_max: i32 = y_min + SUBCHUNK_SIZE;
 
-                const b1_emits = b1.isSolid() or (b1 == .water and b2 != .water);
-                const b2_emits = b2.isSolid() or (b2 == .water and b1 != .water);
+                const b1_def = block_registry.getBlockDefinition(b1);
+                const b2_def = block_registry.getBlockDefinition(b2);
 
-                if (isEmittingSubchunk(axis, s - 1, u, v, y_min, y_max) and b1_emits and !b2.occludes(b1, axis)) {
+                const b1_emits = b1_def.is_solid or (b1_def.is_fluid and !b2_def.is_fluid);
+                const b2_emits = b2_def.is_solid or (b2_def.is_fluid and !b1_def.is_fluid);
+
+                if (isEmittingSubchunk(axis, s - 1, u, v, y_min, y_max) and b1_emits and !b2_def.occludes(b1_def, axis)) {
                     const light = getLightAtBoundary(chunk, neighbors, axis, s, u, v, si);
-                    const color = getBlockColor(chunk, neighbors, axis, s - 1, u, v, si, b1);
+                    const color = getBlockColor(chunk, neighbors, axis, s - 1, u, v, b1);
                     mask[u + v * du] = .{ .block = b1, .side = true, .light = light, .color = color };
-                } else if (isEmittingSubchunk(axis, s, u, v, y_min, y_max) and b2_emits and !b1.occludes(b2, axis)) {
-                    const light = getLightAtBoundary(chunk, neighbors, axis, s - 1, u, v, si);
-                    const color = getBlockColor(chunk, neighbors, axis, s, u, v, si, b2);
+                } else if (isEmittingSubchunk(axis, s, u, v, y_min, y_max) and b2_emits and !b1_def.occludes(b2_def, axis)) {
+                    const light = getLightAtBoundary(chunk, neighbors, axis, s, u, v, si);
+                    const color = getBlockColor(chunk, neighbors, axis, s, u, v, b2);
                     mask[u + v * du] = .{ .block = b2, .side = false, .light = light, .color = color };
                 }
             }
@@ -294,8 +298,9 @@ pub const ChunkMesh = struct {
                     height += 1;
                 }
 
-                const target = if (k.block.isTransparent() and k.block != .leaves) fluid_list else solid_list;
-                try addGreedyFace(self.allocator, target, axis, s, su, sv, width, height, k.block, k.side, si, k.light, k.color, chunk, neighbors);
+                const k_def = block_registry.getBlockDefinition(k.block);
+                const target = if (k_def.render_pass == .fluid) fluid_list else solid_list;
+                try addGreedyFace(self.allocator, target, axis, s, su, sv, width, height, k_def, k.side, si, k.light, k.color, chunk, neighbors);
 
                 var dy: u32 = 0;
                 while (dy < height) : (dy += 1) {
@@ -458,7 +463,8 @@ fn getAOAt(chunk: *const Chunk, neighbors: NeighborChunks, x: i32, y: i32, z: i3
         }
     };
 
-    return if (b.isSolid() and !b.isTransparent()) 1.0 else 0.0;
+    const b_def = block_registry.getBlockDefinition(b);
+    return if (b_def.is_solid and !b_def.is_transparent) 1.0 else 0.0;
 }
 
 fn calculateVertexAO(s1: f32, s2: f32, c: f32) f32 {
@@ -466,18 +472,18 @@ fn calculateVertexAO(s1: f32, s2: f32, c: f32) f32 {
     return 1.0 - (s1 + s2 + c) * 0.2;
 }
 
-fn addGreedyFace(allocator: std.mem.Allocator, verts: *std.ArrayListUnmanaged(Vertex), axis: Face, s: i32, u: u32, v: u32, w: u32, h: u32, block: BlockType, forward: bool, si: u32, light: PackedLight, tint: [3]f32, chunk: *const Chunk, neighbors: NeighborChunks) !void {
+fn addGreedyFace(allocator: std.mem.Allocator, verts: *std.ArrayListUnmanaged(Vertex), axis: Face, s: i32, u: u32, v: u32, w: u32, h: u32, block_def: *const block_registry.BlockDefinition, forward: bool, si: u32, light: PackedLight, tint: [3]f32, chunk: *const Chunk, neighbors: NeighborChunks) !void {
     const face = if (forward) axis else switch (axis) {
         .top => Face.bottom,
         .east => Face.west,
         .south => Face.north,
         else => unreachable,
     };
-    const base_col = block.getFaceColor(face);
+    const base_col = block_def.getFaceColor(face);
     const col = [3]f32{ base_col[0] * tint[0], base_col[1] * tint[1], base_col[2] * tint[2] };
     const norm = face.getNormal();
     const nf = [3]f32{ @floatFromInt(norm[0]), @floatFromInt(norm[1]), @floatFromInt(norm[2]) };
-    const tiles = TextureAtlas.getTilesForBlock(@intFromEnum(block));
+    const tiles = TextureAtlas.getTilesForBlock(@intFromEnum(block_def.id));
     const tid: f32 = @floatFromInt(switch (face) {
         .top => tiles.top,
         .bottom => tiles.bottom,
@@ -636,18 +642,20 @@ fn getBiomeAt(chunk: *const Chunk, neighbors: NeighborChunks, x: i32, z: i32) bi
     return chunk.getBiome(@intCast(x), @intCast(z));
 }
 
-fn getBlockColor(chunk: *const Chunk, neighbors: NeighborChunks, axis: Face, s: i32, u: u32, v: u32, si: u32, block: BlockType) [3]f32 {
+/// Calculates the average color of the block's biome at the given face coordinates.
+/// `s`, `u`, `v` are local coordinates on the slice plane (depending on `axis`).
+fn getBlockColor(chunk: *const Chunk, neighbors: NeighborChunks, axis: Face, s: i32, u: u32, v: u32, block: BlockType) [3]f32 {
     // Only apply biome tint to top face of grass, and all faces of leaves/water
     if (block == .grass) {
+
         // Grass: only tint the top face, sides and bottom get no tint
         if (axis != .top) return .{ 1.0, 1.0, 1.0 };
     } else if (block != .leaves and block != .water) {
         return .{ 1.0, 1.0, 1.0 };
     }
 
-    var x: i32 = 0;
-    var z: i32 = 0;
-    _ = si;
+    var x: i32 = undefined;
+    var z: i32 = undefined;
 
     switch (axis) {
         .top => {

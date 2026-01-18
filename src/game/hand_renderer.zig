@@ -9,6 +9,7 @@ const Vec3 = @import("../engine/math/vec3.zig").Vec3;
 const Vertex = rhi_pkg.Vertex;
 const TextureAtlas = @import("../engine/graphics/texture_atlas.zig").TextureAtlas;
 const BlockType = @import("../world/block.zig").BlockType;
+const block_registry = @import("../world/block_registry.zig");
 const Inventory = @import("inventory.zig").Inventory;
 
 pub const HandRenderer = struct {
@@ -85,7 +86,7 @@ pub const HandRenderer = struct {
 
         _ = atlas; // Unused if getTilesForBlock is static
         const tiles = TextureAtlas.getTilesForBlock(@intFromEnum(block_type));
-        const color = block_type.getColor();
+        const color = block_registry.getBlockDefinition(block_type).default_color;
 
         // Standard cube faces
         // 0: top, 1: bottom, 2: north, 3: south, 4: east, 5: west
