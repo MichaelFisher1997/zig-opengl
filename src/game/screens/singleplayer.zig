@@ -119,7 +119,7 @@ pub const SingleplayerScreen = struct {
         Font.drawText(ui, "WORLD TYPE", px + 30.0 * ui_scale, gy, label_scale, LABEL_COLOR);
         const g_rect = Rect{ .x = px + 30.0 * ui_scale, .y = gy + 28.0 * ui_scale, .width = pw - 60.0 * ui_scale, .height = ih };
         const g_info = registry.getGeneratorInfo(self.selected_generator_index);
-        var g_label_buf: [64]u8 = undefined;
+        var g_label_buf: [128]u8 = undefined;
         const g_label = try std.fmt.bufPrint(&g_label_buf, "{s} ({}/{})", .{ g_info.name, self.selected_generator_index + 1, registry.getGeneratorCount() });
         if (Widgets.drawButton(ui, g_rect, g_label, btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             self.selected_generator_index = (self.selected_generator_index + 1) % registry.getGeneratorCount();

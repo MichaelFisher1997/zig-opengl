@@ -102,13 +102,16 @@ pub const Generator = struct {
     info: GeneratorInfo,
 
     pub const VTable = struct {
-        /// Generate a full chunk of terrain
+        /// Generate a full chunk of terrain.
+        /// Implementations MUST NOT set chunk.generated = true if stop_flag is set and returns early.
+        /// chunk.generated = true should only be set after all generation steps (including lighting) are complete.
         generate: *const fn (ptr: *anyopaque, chunk: *Chunk, stop_flag: ?*const bool) void,
 
-        /// Generate heightmap-only data for LOD levels
+        /// Generate heightmap-only data for LOD levels.
         generateHeightmapOnly: *const fn (ptr: *anyopaque, data: *LODSimplifiedData, region_x: i32, region_z: i32, lod_level: LODLevel) void,
 
-        /// Periodically check if internal caches should be recentered
+        /// Periodically check if internal caches should be recentered around the player.
+        /// Returns true if any cache was recentered.
         maybeRecenterCache: *const fn (ptr: *anyopaque, player_x: i32, player_z: i32) bool,
 
         /// Get the world seed used by this generator

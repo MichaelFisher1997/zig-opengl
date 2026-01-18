@@ -21,6 +21,9 @@ pub const FlatWorldGenerator = struct {
     seed: u64,
     allocator: std.mem.Allocator,
 
+    const FLAT_HEIGHT: i32 = 64;
+    const GRASS_COLOR: u32 = 0xFF40A040;
+
     pub const INFO = GeneratorInfo{
         .name = "Flat World",
         .description = "A perfectly flat world, ideal for testing and building.",
@@ -35,25 +38,24 @@ pub const FlatWorldGenerator = struct {
 
     pub fn generate(self: *FlatWorldGenerator, chunk: *Chunk, stop_flag: ?*const bool) void {
         _ = self;
-        const flat_height: i32 = 64;
 
         var local_z: u32 = 0;
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
             if (stop_flag) |sf| if (sf.*) return;
             var local_x: u32 = 0;
             while (local_x < CHUNK_SIZE_X) : (local_x += 1) {
-                chunk.setSurfaceHeight(local_x, local_z, @intCast(flat_height));
+                chunk.setSurfaceHeight(local_x, local_z, @intCast(FLAT_HEIGHT));
                 chunk.setBiome(local_x, local_z, .plains);
 
                 var y: i32 = 0;
                 while (y < CHUNK_SIZE_Y) : (y += 1) {
                     const block: BlockType = if (y == 0)
                         .bedrock
-                    else if (y < flat_height - 3)
+                    else if (y < FLAT_HEIGHT - 3)
                         .stone
-                    else if (y < flat_height)
+                    else if (y < FLAT_HEIGHT)
                         .dirt
-                    else if (y == flat_height)
+                    else if (y == FLAT_HEIGHT)
                         .grass
                     else
                         .air;
@@ -63,15 +65,17 @@ pub const FlatWorldGenerator = struct {
             }
         }
 
-        chunk.generated = true;
         // Basic skylight
         var lz: u32 = 0;
         while (lz < CHUNK_SIZE_Z) : (lz += 1) {
+            if (stop_flag) |sf| if (sf.*) return;
             var lx: u32 = 0;
             while (lx < CHUNK_SIZE_X) : (lx += 1) {
                 chunk.updateSkylightColumn(lx, lz);
             }
         }
+
+        chunk.generated = true;
         chunk.dirty = true;
     }
 
@@ -80,13 +84,12 @@ pub const FlatWorldGenerator = struct {
         _ = region_x;
         _ = region_z;
         _ = lod_level;
-        const flat_height: f32 = 64.0;
+        const h: f32 = @floatFromInt(FLAT_HEIGHT);
 
-        @memset(data.heightmap, flat_height);
+        @memset(data.heightmap, h);
         @memset(data.biomes, .plains);
         @memset(data.top_blocks, .grass);
-        // Colors: simple green for grass
-        @memset(data.colors, 0xFF40A040);
+        @memset(data.colors, GRASS_COLOR);
     }
 
     pub fn maybeRecenterCache(self: *FlatWorldGenerator, player_x: i32, player_z: i32) bool {
@@ -105,7 +108,7 @@ pub const FlatWorldGenerator = struct {
         _ = wx;
         _ = wz;
         return .{
-            .height = 64,
+            .height = FLAT_HEIGHT,
             .biome = .plains,
             .is_ocean = false,
             .temperature = 0.5,

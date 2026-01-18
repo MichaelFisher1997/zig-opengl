@@ -696,7 +696,6 @@ pub const OverworldGenerator = struct {
                 }
             }
         }
-        chunk.generated = true;
         if (stop_flag) |sf| if (sf.*) return;
         self.generateOres(chunk);
         if (stop_flag) |sf| if (sf.*) return;
@@ -707,6 +706,7 @@ pub const OverworldGenerator = struct {
         self.computeBlockLight(chunk) catch |err| {
             std.debug.print("Failed to compute block light: {}\n", .{err});
         };
+        chunk.generated = true;
         chunk.dirty = true;
         self.printDebugStats(world_x, world_z, &debug_temperatures, &debug_humidities, &debug_continentalness, &biome_ids, debug_beach_count);
     }
@@ -776,11 +776,8 @@ pub const OverworldGenerator = struct {
                 }
             }
         }
-        chunk.generated = true;
-        self.generateOres(chunk);
-        self.generateFeatures(chunk);
-        self.computeSkylight(chunk);
         self.computeBlockLight(chunk) catch {};
+        chunk.generated = true;
         chunk.dirty = true;
     }
 

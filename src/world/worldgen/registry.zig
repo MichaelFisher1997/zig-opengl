@@ -37,11 +37,11 @@ pub fn getGeneratorCount() usize {
 }
 
 pub fn getGeneratorInfo(index: usize) gen_interface.GeneratorInfo {
-    if (index >= GENERATORS.len) return GENERATORS[0].info;
+    std.debug.assert(index < GENERATORS.len);
     return GENERATORS[index].info;
 }
 
 pub fn createGenerator(index: usize, seed: u64, allocator: std.mem.Allocator) !Generator {
-    const idx = if (index >= GENERATORS.len) 0 else index;
-    return GENERATORS[idx].initFn(seed, allocator);
+    if (index >= GENERATORS.len) return error.InvalidGeneratorIndex;
+    return GENERATORS[index].initFn(seed, allocator);
 }
