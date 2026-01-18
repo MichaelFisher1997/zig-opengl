@@ -906,13 +906,14 @@ test "ConfiguredNoise determinism with same params" {
 // WorldGen Determinism Tests
 // ============================================================================
 
-const TerrainGenerator = @import("world/worldgen/generator.zig").TerrainGenerator;
+const OverworldGenerator = @import("world/worldgen/overworld_generator.zig").OverworldGenerator;
+const Generator = @import("world/worldgen/generator_interface.zig").Generator;
 
 test "WorldGen same seed produces identical blocks at origin" {
     const allocator = testing.allocator;
 
-    var gen1 = TerrainGenerator.init(12345, allocator);
-    var gen2 = TerrainGenerator.init(12345, allocator);
+    var gen1 = OverworldGenerator.init(12345, allocator);
+    var gen2 = OverworldGenerator.init(12345, allocator);
 
     var chunk1 = Chunk.init(0, 0);
     var chunk2 = Chunk.init(0, 0);
@@ -926,8 +927,8 @@ test "WorldGen same seed produces identical blocks at origin" {
 test "WorldGen same seed produces identical biomes at origin" {
     const allocator = testing.allocator;
 
-    var gen1 = TerrainGenerator.init(12345, allocator);
-    var gen2 = TerrainGenerator.init(12345, allocator);
+    var gen1 = OverworldGenerator.init(12345, allocator);
+    var gen2 = OverworldGenerator.init(12345, allocator);
 
     var chunk1 = Chunk.init(0, 0);
     var chunk2 = Chunk.init(0, 0);
@@ -943,7 +944,7 @@ test "WorldGen same seed produces identical blocks at different positions" {
 
     const seed: u64 = 54321;
 
-    var gen1 = TerrainGenerator.init(seed, allocator);
+    var gen1 = OverworldGenerator.init(seed, allocator);
     var chunk1a = Chunk.init(0, 0);
     var chunk1b = Chunk.init(1, 0);
     var chunk1c = Chunk.init(0, 1);
@@ -952,7 +953,7 @@ test "WorldGen same seed produces identical blocks at different positions" {
     gen1.generate(&chunk1b, null);
     gen1.generate(&chunk1c, null);
 
-    var gen2 = TerrainGenerator.init(seed, allocator);
+    var gen2 = OverworldGenerator.init(seed, allocator);
     var chunk2a = Chunk.init(0, 0);
     var chunk2b = Chunk.init(1, 0);
     var chunk2c = Chunk.init(0, 1);
@@ -972,8 +973,8 @@ test "WorldGen same seed produces identical blocks at different positions" {
 test "WorldGen different seeds produce different blocks" {
     const allocator = testing.allocator;
 
-    var gen1 = TerrainGenerator.init(11111, allocator);
-    var gen2 = TerrainGenerator.init(99999, allocator);
+    var gen1 = OverworldGenerator.init(11111, allocator);
+    var gen2 = OverworldGenerator.init(99999, allocator);
 
     var chunk1 = Chunk.init(0, 0);
     var chunk2 = Chunk.init(0, 0);
@@ -988,8 +989,8 @@ test "WorldGen different seeds produce different blocks" {
 test "WorldGen different seeds produce different biomes" {
     const allocator = testing.allocator;
 
-    var gen1 = TerrainGenerator.init(11111, allocator);
-    var gen2 = TerrainGenerator.init(99999, allocator);
+    var gen1 = OverworldGenerator.init(11111, allocator);
+    var gen2 = OverworldGenerator.init(99999, allocator);
 
     // With structure-first generation (Issue #92), noise scales are much larger
     // (continental scale = 1/3500). To see biome differences, we need to test
@@ -1027,10 +1028,10 @@ test "WorldGen determinism across multiple chunks with same seed" {
     const allocator = testing.allocator;
     const seed: u64 = 987654321;
 
-    var gens = [_]TerrainGenerator{
-        TerrainGenerator.init(seed, allocator),
-        TerrainGenerator.init(seed, allocator),
-        TerrainGenerator.init(seed, allocator),
+    var gens = [_]OverworldGenerator{
+        OverworldGenerator.init(seed, allocator),
+        OverworldGenerator.init(seed, allocator),
+        OverworldGenerator.init(seed, allocator),
     };
 
     var chunks1 = [_]Chunk{
@@ -1062,7 +1063,7 @@ test "WorldGen determinism across multiple chunks with same seed" {
 test "WorldGen golden output for known seed at origin" {
     const allocator = testing.allocator;
 
-    var gen = TerrainGenerator.init(42, allocator);
+    var gen = OverworldGenerator.init(42, allocator);
     var chunk = Chunk.init(0, 0);
 
     gen.generate(&chunk, null);
@@ -1088,7 +1089,7 @@ test "WorldGen golden output for known seed at origin" {
 
 test "WorldGen populates heightmap and biomes" {
     const allocator = testing.allocator;
-    var gen = TerrainGenerator.init(42, allocator);
+    var gen = OverworldGenerator.init(42, allocator);
     var chunk = Chunk.init(0, 0);
 
     gen.generate(&chunk, null);
@@ -1119,7 +1120,7 @@ test "WorldGen populates heightmap and biomes" {
 
 test "Decoration placement" {
     const allocator = testing.allocator;
-    const gen = TerrainGenerator.init(42, allocator);
+    const gen = OverworldGenerator.init(42, allocator);
     var chunk = Chunk.init(0, 0);
 
     // Setup chunk for decorations
