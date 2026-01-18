@@ -300,7 +300,7 @@ pub const ChunkMesh = struct {
 
                 const k_def = block_registry.getBlockDefinition(k.block);
                 const target = if (k_def.render_pass == .fluid) fluid_list else solid_list;
-                try addGreedyFace(self.allocator, target, axis, s, su, sv, width, height, k.block, k.side, si, k.light, k.color, chunk, neighbors);
+                try addGreedyFace(self.allocator, target, axis, s, su, sv, width, height, k_def, k.side, si, k.light, k.color, chunk, neighbors);
 
                 var dy: u32 = 0;
                 while (dy < height) : (dy += 1) {
@@ -472,18 +472,18 @@ fn calculateVertexAO(s1: f32, s2: f32, c: f32) f32 {
     return 1.0 - (s1 + s2 + c) * 0.2;
 }
 
-fn addGreedyFace(allocator: std.mem.Allocator, verts: *std.ArrayListUnmanaged(Vertex), axis: Face, s: i32, u: u32, v: u32, w: u32, h: u32, block: BlockType, forward: bool, si: u32, light: PackedLight, tint: [3]f32, chunk: *const Chunk, neighbors: NeighborChunks) !void {
+fn addGreedyFace(allocator: std.mem.Allocator, verts: *std.ArrayListUnmanaged(Vertex), axis: Face, s: i32, u: u32, v: u32, w: u32, h: u32, block_def: *const block_registry.BlockDefinition, forward: bool, si: u32, light: PackedLight, tint: [3]f32, chunk: *const Chunk, neighbors: NeighborChunks) !void {
     const face = if (forward) axis else switch (axis) {
         .top => Face.bottom,
         .east => Face.west,
         .south => Face.north,
         else => unreachable,
     };
-    const base_col = block_registry.getBlockDefinition(block).getFaceColor(face);
+    const base_col = block_def.getFaceColor(face);
     const col = [3]f32{ base_col[0] * tint[0], base_col[1] * tint[1], base_col[2] * tint[2] };
     const norm = face.getNormal();
     const nf = [3]f32{ @floatFromInt(norm[0]), @floatFromInt(norm[1]), @floatFromInt(norm[2]) };
-    const tiles = TextureAtlas.getTilesForBlock(@intFromEnum(block));
+    const tiles = TextureAtlas.getTilesForBlock(@intFromEnum(block_def.id));
     const tid: f32 = @floatFromInt(switch (face) {
         .top => tiles.top,
         .bottom => tiles.bottom,

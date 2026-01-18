@@ -77,7 +77,7 @@ pub const BlockDefinition = struct {
 /// Global static registry of block definitions
 pub const BLOCK_REGISTRY = blk: {
     // Validate that BlockType is backed by u8 to ensure registry fits
-    // See validation at the end of the block
+    // Comptime validation at lines 80-88 below
     if (@typeInfo(BlockType).@"enum".tag_type != u8) {
         @compileError("BlockType must be backed by u8 for BLOCK_REGISTRY safety");
     }
