@@ -86,9 +86,6 @@ pub const BLOCK_REGISTRY = blk: {
         @compileError("BlockType has more fields than BLOCK_REGISTRY size (256)");
     }
 
-    // Ensure we cover all fields (length check is a proxy, but good sanity check)
-    // The iteration below covers them all by name.
-
     var definitions = [_]BlockDefinition{undefined} ** 256; // Max u8 blocks
 
     // Default "Air" definition for all slots first
@@ -216,11 +213,20 @@ pub const BLOCK_REGISTRY = blk: {
         // 7. Light Emission
         def.light_emission = switch (id) {
             .glowstone => .{ 15, 14, 10 },
-            .water, .cactus, .coal_ore, .iron_ore, .gold_ore => .{ 0, 0, 0 },
             else => .{ 0, 0, 0 },
         };
 
         definitions[int_id] = def;
+    }
+
+    // Validate that all known block types have been registered (no "unknown" left)
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name, "_")) continue;
+        const id = @field(BlockType, field.name);
+        const idx = @intFromEnum(id);
+        if (std.mem.eql(u8, definitions[idx].name, "unknown")) {
+            @compileError("Missing block registry definition for: " ++ field.name);
+        }
     }
 
     break :blk definitions;
