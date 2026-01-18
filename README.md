@@ -60,6 +60,20 @@
 
 This project uses **Nix** for a reproducible development environment.
 
+### 🛠️ Development Setup
+
+After cloning or creating a new worktree, run the setup script to enable git hooks:
+
+```bash
+./scripts/setup-hooks.sh
+```
+
+This configures a pre-push hook that runs:
+- `zig fmt --check src/` - formatting check
+- `zig build test` - full test suite
+
+To bypass in emergencies: `git push --no-verify`
+
 ### 🎮 Running the Game
 - **Run**: `nix develop --command zig build run`
 - **Release build**: `nix develop --command zig build run -Doptimize=ReleaseFast`
