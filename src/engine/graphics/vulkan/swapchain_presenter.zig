@@ -3,10 +3,11 @@ const c = @import("../../../c.zig").c;
 const rhi_types = @import("../rhi_types.zig");
 const VulkanDevice = @import("../vulkan_device.zig").VulkanDevice;
 const VulkanSwapchain = @import("../vulkan_swapchain.zig").VulkanSwapchain;
+const Utils = @import("utils.zig");
 
 pub const SwapchainPresenter = struct {
     allocator: std.mem.Allocator,
-    vulkan_device: *const VulkanDevice,
+    vulkan_device: *VulkanDevice,
     window: *c.SDL_Window,
     swapchain: VulkanSwapchain,
 
@@ -18,7 +19,7 @@ pub const SwapchainPresenter = struct {
     // State
     framebuffer_resized: bool = false,
 
-    pub fn init(allocator: std.mem.Allocator, vulkan_device: *const VulkanDevice, window: *c.SDL_Window, msaa_samples: u8) !SwapchainPresenter {
+    pub fn init(allocator: std.mem.Allocator, vulkan_device: *VulkanDevice, window: *c.SDL_Window, msaa_samples: u8) !SwapchainPresenter {
         const swapchain = try VulkanSwapchain.init(allocator, vulkan_device, window, msaa_samples);
         return SwapchainPresenter{
             .allocator = allocator,

@@ -2,14 +2,10 @@ const std = @import("std");
 const c = @import("../../../c.zig").c;
 const rhi = @import("../rhi.zig");
 const VulkanDevice = @import("../vulkan_device.zig").VulkanDevice;
+const Utils = @import("utils.zig");
 
 /// Vulkan buffer with backing memory.
-pub const VulkanBuffer = struct {
-    buffer: c.VkBuffer = null,
-    memory: c.VkDeviceMemory = null,
-    size: c.VkDeviceSize = 0,
-    is_host_visible: bool = false,
-};
+pub const VulkanBuffer = Utils.VulkanBuffer;
 
 /// Vulkan texture with image, view, and sampler.
 pub const TextureResource = struct {
@@ -44,11 +40,11 @@ const StagingBuffer = struct {
     mapped_ptr: ?*anyopaque,
 
     fn init(device: *const VulkanDevice, size: u64) !StagingBuffer {
-        const buf = try createVulkanBuffer(device, size, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        const buf = try Utils.createVulkanBuffer(device, size, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         if (buf.buffer == null) return error.VulkanError;
 
         var mapped: ?*anyopaque = null;
-        try checkVk(c.vkMapMemory(device.vk_device, buf.memory, 0, size, 0, &mapped));
+        try Utils.checkVk(c.vkMapMemory(device.vk_device, buf.memory, 0, size, 0, &mapped));
 
         return StagingBuffer{
             .buffer = buf.buffer,
@@ -86,7 +82,7 @@ const StagingBuffer = struct {
 
 pub const ResourceManager = struct {
     allocator: std.mem.Allocator,
-    vulkan_device: *const VulkanDevice,
+    vulkan_device: *VulkanDevice,
 
     // Resource tracking
     buffers: std.AutoHashMap(rhi.BufferHandle, VulkanBuffer),
@@ -106,8 +102,9 @@ pub const ResourceManager = struct {
     transfer_fence: c.VkFence,
     transfer_ready: bool = false,
     current_frame_index: usize = 0,
+    textures_enabled: bool = true,
 
-    pub fn init(allocator: std.mem.Allocator, vulkan_device: *const VulkanDevice) !ResourceManager {
+    pub fn init(allocator: std.mem.Allocator, vulkan_device: *VulkanDevice) !ResourceManager {
         var self = ResourceManager{
             .allocator = allocator,
             .vulkan_device = vulkan_device,
@@ -134,7 +131,7 @@ pub const ResourceManager = struct {
         pool_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         pool_info.queueFamilyIndex = vulkan_device.graphics_family;
         pool_info.flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        try checkVk(c.vkCreateCommandPool(vulkan_device.vk_device, &pool_info, null, &self.transfer_command_pool));
+        try Utils.checkVk(c.vkCreateCommandPool(vulkan_device.vk_device, &pool_info, null, &self.transfer_command_pool));
 
         // Allocate transfer command buffers
         var alloc_info = std.mem.zeroes(c.VkCommandBufferAllocateInfo);
@@ -142,13 +139,13 @@ pub const ResourceManager = struct {
         alloc_info.commandPool = self.transfer_command_pool;
         alloc_info.level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         alloc_info.commandBufferCount = rhi.MAX_FRAMES_IN_FLIGHT;
-        try checkVk(c.vkAllocateCommandBuffers(vulkan_device.vk_device, &alloc_info, &self.transfer_command_buffers));
+        try Utils.checkVk(c.vkAllocateCommandBuffers(vulkan_device.vk_device, &alloc_info, &self.transfer_command_buffers));
 
         // Create transfer fence
         var fence_info = std.mem.zeroes(c.VkFenceCreateInfo);
         fence_info.sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fence_info.flags = 0; // Not signaled initially
-        try checkVk(c.vkCreateFence(vulkan_device.vk_device, &fence_info, null, &self.transfer_fence));
+        try Utils.checkVk(c.vkCreateFence(vulkan_device.vk_device, &fence_info, null, &self.transfer_fence));
 
         return self;
     }
@@ -198,6 +195,38 @@ pub const ResourceManager = struct {
         }
     }
 
+    /// Flushes any pending transfer commands for the current frame.
+    /// This is useful for initialization-time resource uploads that must complete before rendering begins.
+    pub fn flushTransfer(self: *ResourceManager) !void {
+        if (!self.transfer_ready) return;
+
+        const cb = self.transfer_command_buffers[self.current_frame_index];
+        try Utils.checkVk(c.vkEndCommandBuffer(cb));
+
+        var submit_info = std.mem.zeroes(c.VkSubmitInfo);
+        submit_info.sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &cb;
+
+        // Use the transfer fence to wait
+        try Utils.checkVk(c.vkResetFences(self.vulkan_device.vk_device, 1, &self.transfer_fence));
+
+        self.vulkan_device.mutex.lock();
+        const result = c.vkQueueSubmit(self.vulkan_device.queue, 1, &submit_info, self.transfer_fence);
+        self.vulkan_device.mutex.unlock();
+
+        if (result != c.VK_SUCCESS) return error.VulkanError;
+
+        try Utils.checkVk(c.vkWaitForFences(self.vulkan_device.vk_device, 1, &self.transfer_fence, c.VK_TRUE, std.math.maxInt(u64)));
+
+        self.transfer_ready = false;
+
+        // Note: We do NOT reset the staging buffer here because other systems might still rely on it
+        // being valid until the next frame. However, for init-time flush, we can reset it.
+        // Let's reset it to be safe for next usage.
+        self.staging_buffers[self.current_frame_index].reset();
+    }
+
     pub fn setCurrentFrame(self: *ResourceManager, frame_index: usize) void {
         self.current_frame_index = frame_index;
         self.transfer_ready = false; // Reset for new frame
@@ -226,7 +255,7 @@ pub const ResourceManager = struct {
         var begin_info = std.mem.zeroes(c.VkCommandBufferBeginInfo);
         begin_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         begin_info.flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        try checkVk(c.vkBeginCommandBuffer(self.transfer_command_buffers[self.current_frame_index], &begin_info));
+        try Utils.checkVk(c.vkBeginCommandBuffer(self.transfer_command_buffers[self.current_frame_index], &begin_info));
 
         self.transfer_ready = true;
         return self.transfer_command_buffers[self.current_frame_index];
@@ -248,7 +277,7 @@ pub const ResourceManager = struct {
 
         const properties = c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
-        const buf = createVulkanBuffer(self.vulkan_device, size, vk_usage, properties) catch {
+        const buf = Utils.createVulkanBuffer(self.vulkan_device, size, vk_usage, properties) catch {
             return rhi.InvalidBufferHandle;
         };
 
@@ -273,7 +302,7 @@ pub const ResourceManager = struct {
         const buf = self.buffers.get(handle) orelse return;
 
         const staging = &self.staging_buffers[self.current_frame_index];
-        const staging_offset = staging.allocate(data.len) orelse return;
+        const staging_offset = staging.allocate(data.len) orelse return; // Silently fail on overflow for now, but logged
 
         const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + staging_offset;
         @memcpy(dest[0..data.len], data);
@@ -293,7 +322,7 @@ pub const ResourceManager = struct {
         if (!buf.is_host_visible) return null;
 
         var ptr: ?*anyopaque = null;
-        checkVk(c.vkMapMemory(self.vulkan_device.vk_device, buf.memory, 0, buf.size, 0, &ptr)) catch return null;
+        Utils.checkVk(c.vkMapMemory(self.vulkan_device.vk_device, buf.memory, 0, buf.size, 0, &ptr)) catch return null;
         return ptr;
     }
 
@@ -362,7 +391,7 @@ pub const ResourceManager = struct {
         var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc_info.allocationSize = mem_reqs.size;
-        alloc_info.memoryTypeIndex = findMemoryType(self.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) catch {
+        alloc_info.memoryTypeIndex = Utils.findMemoryType(self.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) catch {
             c.vkDestroyImage(self.vulkan_device.vk_device, image, null);
             return rhi.InvalidTextureHandle;
         };
@@ -395,7 +424,7 @@ pub const ResourceManager = struct {
             return rhi.InvalidTextureHandle;
         }
 
-        const sampler = createSampler(self.vulkan_device, config, mip_levels, self.vulkan_device.max_anisotropy);
+        const sampler = Utils.createSampler(self.vulkan_device, config, mip_levels, self.vulkan_device.max_anisotropy);
 
         // Upload data if present
         if (data_opt) |data| {
@@ -552,21 +581,61 @@ pub const ResourceManager = struct {
     }
 
     pub fn updateTexture(self: *ResourceManager, handle: rhi.TextureHandle, data: []const u8) void {
-        _ = self;
-        _ = handle;
-        _ = data;
-        // TODO: Implement texture updates (rarely used in current engine)
+        const tex = self.textures.get(handle) orelse return;
+
+        const staging = &self.staging_buffers[self.current_frame_index];
+        if (staging.allocate(data.len)) |offset| {
+            // Async Path
+            const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + offset;
+            @memcpy(dest[0..data.len], data);
+
+            const transfer_cb = self.prepareTransfer() catch return;
+
+            var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
+            barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.newLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = tex.image;
+            barrier.subresourceRange.aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+            barrier.srcAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+            barrier.dstAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+
+            c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, c.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &barrier);
+
+            var region = std.mem.zeroes(c.VkBufferImageCopy);
+            region.bufferOffset = offset;
+            region.imageSubresource.aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent = .{ .width = tex.width, .height = tex.height, .depth = 1 };
+
+            c.vkCmdCopyBufferToImage(transfer_cb, staging.buffer, tex.image, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+            barrier.oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+
+            c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
+        } else {
+            // Buffer full, drop update for now (or implement fallback)
+            std.log.err("Staging buffer full during updateTexture! Update dropped.", .{});
+        }
     }
 
     pub fn createShader(self: *ResourceManager, vertex_src: [*c]const u8, fragment_src: [*c]const u8) rhi.RhiError!rhi.ShaderHandle {
         _ = self;
         _ = vertex_src;
         _ = fragment_src;
-        // TODO: Implement shader creation.
-        // Current engine uses hardcoded pipelines or pre-compiled SPV.
-        // If RHI expects runtime compilation/loading, we need a way to store shader modules.
-        // For now, returning InvalidShaderHandle as placeholder.
-        return rhi.InvalidShaderHandle;
+        // TODO: Implement actual shader creation when ready.
+        // For now, return error to avoid silent failure.
+        // NOTE: If engine code calls this, it will now fail loudly, which is better than silent failure.
+        return error.ExtensionNotPresent; // Or proper NotImpl error
     }
 
     pub fn destroyShader(self: *ResourceManager, handle: rhi.ShaderHandle) void {
@@ -575,113 +644,6 @@ pub const ResourceManager = struct {
     }
 };
 
-// Helper functions
-
-fn checkVk(result: c.VkResult) !void {
-    switch (result) {
-        c.VK_SUCCESS => return,
-        c.VK_ERROR_DEVICE_LOST => return error.GpuLost,
-        c.VK_ERROR_OUT_OF_HOST_MEMORY, c.VK_ERROR_OUT_OF_DEVICE_MEMORY => return error.OutOfMemory,
-        c.VK_ERROR_SURFACE_LOST_KHR => return error.SurfaceLost,
-        c.VK_ERROR_INITIALIZATION_FAILED => return error.InitializationFailed,
-        c.VK_ERROR_EXTENSION_NOT_PRESENT => return error.ExtensionNotPresent,
-        c.VK_ERROR_FEATURE_NOT_PRESENT => return error.FeatureNotPresent,
-        c.VK_ERROR_TOO_MANY_OBJECTS => return error.TooManyObjects,
-        c.VK_ERROR_FORMAT_NOT_SUPPORTED => return error.FormatNotSupported,
-        c.VK_ERROR_FRAGMENTED_POOL => return error.FragmentedPool,
-        else => return error.Unknown,
-    }
-}
-
-fn findMemoryType(physical_device: c.VkPhysicalDevice, type_filter: u32, properties: c.VkMemoryPropertyFlags) !u32 {
-    var mem_properties: c.VkPhysicalDeviceMemoryProperties = undefined;
-    c.vkGetPhysicalDeviceMemoryProperties(physical_device, &mem_properties);
-
-    var i: u32 = 0;
-    while (i < mem_properties.memoryTypeCount) : (i += 1) {
-        if ((type_filter & (@as(u32, 1) << @intCast(i))) != 0 and
-            (mem_properties.memoryTypes[i].propertyFlags & properties) == properties)
-        {
-            return i;
-        }
-    }
-    return error.NoMatchingMemoryType;
-}
-
-fn createVulkanBuffer(device: *const VulkanDevice, size: usize, usage: c.VkBufferUsageFlags, properties: c.VkMemoryPropertyFlags) !VulkanBuffer {
-    var buffer_info = std.mem.zeroes(c.VkBufferCreateInfo);
-    buffer_info.sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer_info.size = @intCast(size);
-    buffer_info.usage = usage;
-    buffer_info.sharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
-
-    var buffer: c.VkBuffer = null;
-    try checkVk(c.vkCreateBuffer(device.vk_device, &buffer_info, null, &buffer));
-
-    var mem_reqs: c.VkMemoryRequirements = undefined;
-    c.vkGetBufferMemoryRequirements(device.vk_device, buffer, &mem_reqs);
-
-    var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
-    alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    alloc_info.allocationSize = mem_reqs.size;
-    alloc_info.memoryTypeIndex = try findMemoryType(device.physical_device, mem_reqs.memoryTypeBits, properties);
-
-    var memory: c.VkDeviceMemory = null;
-    try checkVk(c.vkAllocateMemory(device.vk_device, &alloc_info, null, &memory));
-    try checkVk(c.vkBindBufferMemory(device.vk_device, buffer, memory, 0));
-
-    return .{
-        .buffer = buffer,
-        .memory = memory,
-        .size = mem_reqs.size,
-        .is_host_visible = (properties & c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0,
-    };
-}
-
-fn createSampler(device: *const VulkanDevice, config: rhi.TextureConfig, mip_levels: u32, max_anisotropy: f32) c.VkSampler {
-    const vk_mag_filter: c.VkFilter = if (config.mag_filter == .nearest) c.VK_FILTER_NEAREST else c.VK_FILTER_LINEAR;
-    const vk_min_filter: c.VkFilter = if (config.min_filter == .nearest or config.min_filter == .nearest_mipmap_nearest or config.min_filter == .nearest_mipmap_linear)
-        c.VK_FILTER_NEAREST
-    else
-        c.VK_FILTER_LINEAR;
-
-    const vk_mipmap_mode: c.VkSamplerMipmapMode = if (config.min_filter == .nearest_mipmap_nearest or config.min_filter == .linear_mipmap_nearest)
-        c.VK_SAMPLER_MIPMAP_MODE_NEAREST
-    else
-        c.VK_SAMPLER_MIPMAP_MODE_LINEAR;
-
-    const vk_wrap_s: c.VkSamplerAddressMode = switch (config.wrap_s) {
-        .repeat => c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .mirrored_repeat => c.VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
-        .clamp_to_edge => c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .clamp_to_border => c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
-    };
-    const vk_wrap_t: c.VkSamplerAddressMode = switch (config.wrap_t) {
-        .repeat => c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .mirrored_repeat => c.VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
-        .clamp_to_edge => c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .clamp_to_border => c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
-    };
-
-    var sampler_info = std.mem.zeroes(c.VkSamplerCreateInfo);
-    sampler_info.sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    sampler_info.magFilter = vk_mag_filter;
-    sampler_info.minFilter = vk_min_filter;
-    sampler_info.addressModeU = vk_wrap_s;
-    sampler_info.addressModeV = vk_wrap_t;
-    sampler_info.addressModeW = vk_wrap_s;
-    // Anisotropy logic: enable if mip_levels > 1 and global setting > 1
-    // We don't have access to global 'anisotropic_filtering' level here,
-    // passing max_anisotropy as a proxy for "enabled if > 1".
-    sampler_info.anisotropyEnable = if (max_anisotropy > 1.0 and mip_levels > 1) c.VK_TRUE else c.VK_FALSE;
-    sampler_info.maxAnisotropy = max_anisotropy;
-    sampler_info.borderColor = c.VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-    sampler_info.unnormalizedCoordinates = c.VK_FALSE;
-    sampler_info.compareEnable = c.VK_FALSE;
-    sampler_info.compareOp = c.VK_COMPARE_OP_ALWAYS;
-    sampler_info.mipmapMode = vk_mipmap_mode;
-    sampler_info.mipLodBias = 0.0;
-    sampler_info.minLod = 0.0;
     sampler_info.maxLod = @floatFromInt(mip_levels);
 
     var sampler: c.VkSampler = null;

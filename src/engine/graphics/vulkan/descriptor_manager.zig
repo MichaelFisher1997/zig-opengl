@@ -6,6 +6,7 @@ const VulkanDevice = @import("../vulkan_device.zig").VulkanDevice;
 const ResourceManager = @import("resource_manager.zig").ResourceManager;
 const VulkanBuffer = @import("resource_manager.zig").VulkanBuffer;
 const Mat4 = @import("../../math/mat4.zig").Mat4;
+const Utils = @import("utils.zig");
 
 const GlobalUniforms = extern struct {
     view_proj: Mat4,
@@ -69,11 +70,11 @@ pub const DescriptorManager = struct {
 
         // Create UBOs
         for (0..rhi.MAX_FRAMES_IN_FLIGHT) |i| {
-            self.global_ubos[i] = createVulkanBuffer(vulkan_device, @sizeOf(GlobalUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch return error.VulkanError;
-            try checkVk(c.vkMapMemory(vulkan_device.vk_device, self.global_ubos[i].memory, 0, @sizeOf(GlobalUniforms), 0, &self.global_ubos_mapped[i]));
+            self.global_ubos[i] = Utils.createVulkanBuffer(vulkan_device, @sizeOf(GlobalUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch return error.VulkanError;
+            try Utils.checkVk(c.vkMapMemory(vulkan_device.vk_device, self.global_ubos[i].memory, 0, @sizeOf(GlobalUniforms), 0, &self.global_ubos_mapped[i]));
 
-            self.shadow_ubos[i] = createVulkanBuffer(vulkan_device, @sizeOf(ShadowUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch return error.VulkanError;
-            try checkVk(c.vkMapMemory(vulkan_device.vk_device, self.shadow_ubos[i].memory, 0, @sizeOf(ShadowUniforms), 0, &self.shadow_ubos_mapped[i]));
+            self.shadow_ubos[i] = Utils.createVulkanBuffer(vulkan_device, @sizeOf(ShadowUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch return error.VulkanError;
+            try Utils.checkVk(c.vkMapMemory(vulkan_device.vk_device, self.shadow_ubos[i].memory, 0, @sizeOf(ShadowUniforms), 0, &self.shadow_ubos_mapped[i]));
         }
 
         // Create dummy textures
@@ -85,6 +86,11 @@ pub const DescriptorManager = struct {
 
         const roughness_neutral = [_]u8{ 255, 0, 0, 255 };
         self.dummy_roughness_texture = resource_manager.createTexture(1, 1, .rgba, .{}, &roughness_neutral);
+
+        // FLUSH transfers immediately so textures are ready.
+        // This prevents frame 0 from resetting the staging buffer before these uploads complete.
+        // NOTE: ResourceManager uses frame 0 by default, so we flush frame 0.
+        try resource_manager.flushTransfer();
 
         // Create Descriptor Pool
         var pool_sizes = [_]c.VkDescriptorPoolSize{
@@ -98,7 +104,7 @@ pub const DescriptorManager = struct {
         pool_info.pPoolSizes = &pool_sizes[0];
         pool_info.maxSets = 100;
 
-        try checkVk(c.vkCreateDescriptorPool(vulkan_device.vk_device, &pool_info, null, &self.descriptor_pool));
+        try Utils.checkVk(c.vkCreateDescriptorPool(vulkan_device.vk_device, &pool_info, null, &self.descriptor_pool));
 
         // Create Descriptor Set Layout
         var bindings = [_]c.VkDescriptorSetLayoutBinding{
@@ -129,7 +135,7 @@ pub const DescriptorManager = struct {
         layout_info.bindingCount = bindings.len;
         layout_info.pBindings = &bindings[0];
 
-        try checkVk(c.vkCreateDescriptorSetLayout(vulkan_device.vk_device, &layout_info, null, &self.descriptor_set_layout));
+        try Utils.checkVk(c.vkCreateDescriptorSetLayout(vulkan_device.vk_device, &layout_info, null, &self.descriptor_set_layout));
 
         // Allocate Descriptor Sets
         for (0..rhi.MAX_FRAMES_IN_FLIGHT) |i| {
@@ -139,8 +145,8 @@ pub const DescriptorManager = struct {
             alloc_info.descriptorSetCount = 1;
             alloc_info.pSetLayouts = &self.descriptor_set_layout;
 
-            try checkVk(c.vkAllocateDescriptorSets(vulkan_device.vk_device, &alloc_info, &self.descriptor_sets[i]));
-            try checkVk(c.vkAllocateDescriptorSets(vulkan_device.vk_device, &alloc_info, &self.lod_descriptor_sets[i]));
+            try Utils.checkVk(c.vkAllocateDescriptorSets(vulkan_device.vk_device, &alloc_info, &self.descriptor_sets[i]));
+            try Utils.checkVk(c.vkAllocateDescriptorSets(vulkan_device.vk_device, &alloc_info, &self.lod_descriptor_sets[i]));
 
             // Write UBO descriptors immediately (they don't change)
             var buffer_info_global = c.VkDescriptorBufferInfo{
@@ -227,39 +233,3 @@ pub const DescriptorManager = struct {
     // Additional methods for binding textures would go here
     // For now, we assume VulkanContext handles the complexity of gathering textures and calling a mass update
 };
-
-fn checkVk(result: c.VkResult) !void {
-    if (result != c.VK_SUCCESS) return error.VulkanError;
-}
-
-fn createVulkanBuffer(device: *const VulkanDevice, size: usize, usage: c.VkBufferUsageFlags, properties: c.VkMemoryPropertyFlags) !VulkanBuffer {
-    // Duplicated from resource_manager.zig to avoid circular dependency or extensive refactoring
-    // Ideally this goes to a Utils struct
-    var buffer_info = std.mem.zeroes(c.VkBufferCreateInfo);
-    buffer_info.sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer_info.size = @intCast(size);
-    buffer_info.usage = usage;
-    buffer_info.sharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
-
-    var buffer: c.VkBuffer = null;
-    try checkVk(c.vkCreateBuffer(device.vk_device, &buffer_info, null, &buffer));
-
-    var mem_reqs: c.VkMemoryRequirements = undefined;
-    c.vkGetBufferMemoryRequirements(device.vk_device, buffer, &mem_reqs);
-
-    var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
-    alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    alloc_info.allocationSize = mem_reqs.size;
-    alloc_info.memoryTypeIndex = try device.findMemoryType(mem_reqs.memoryTypeBits, properties);
-
-    var memory: c.VkDeviceMemory = null;
-    try checkVk(c.vkAllocateMemory(device.vk_device, &alloc_info, null, &memory));
-    try checkVk(c.vkBindBufferMemory(device.vk_device, buffer, memory, 0));
-
-    return .{
-        .buffer = buffer,
-        .memory = memory,
-        .size = mem_reqs.size,
-        .is_host_visible = (properties & c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0,
-    };
-}

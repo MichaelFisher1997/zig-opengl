@@ -3,6 +3,7 @@ const c = @import("../../../c.zig").c;
 const rhi = @import("../rhi.zig");
 const VulkanDevice = @import("../vulkan_device.zig").VulkanDevice;
 const SwapchainPresenter = @import("swapchain_presenter.zig").SwapchainPresenter;
+const Utils = @import("utils.zig");
 
 pub const FrameManager = struct {
     vulkan_device: *VulkanDevice,
@@ -32,14 +33,14 @@ pub const FrameManager = struct {
         pool_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         pool_info.queueFamilyIndex = vulkan_device.graphics_family;
         pool_info.flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        try checkVk(c.vkCreateCommandPool(vulkan_device.vk_device, &pool_info, null, &self.command_pool));
+        try Utils.checkVk(c.vkCreateCommandPool(vulkan_device.vk_device, &pool_info, null, &self.command_pool));
 
         var alloc_info = std.mem.zeroes(c.VkCommandBufferAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         alloc_info.commandPool = self.command_pool;
         alloc_info.level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         alloc_info.commandBufferCount = rhi.MAX_FRAMES_IN_FLIGHT;
-        try checkVk(c.vkAllocateCommandBuffers(vulkan_device.vk_device, &alloc_info, &self.command_buffers));
+        try Utils.checkVk(c.vkAllocateCommandBuffers(vulkan_device.vk_device, &alloc_info, &self.command_buffers));
 
         var semaphore_info = std.mem.zeroes(c.VkSemaphoreCreateInfo);
         semaphore_info.sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -49,9 +50,9 @@ pub const FrameManager = struct {
         fence_info.flags = c.VK_FENCE_CREATE_SIGNALED_BIT;
 
         for (0..rhi.MAX_FRAMES_IN_FLIGHT) |i| {
-            try checkVk(c.vkCreateSemaphore(vulkan_device.vk_device, &semaphore_info, null, &self.image_available_semaphores[i]));
-            try checkVk(c.vkCreateSemaphore(vulkan_device.vk_device, &semaphore_info, null, &self.render_finished_semaphores[i]));
-            try checkVk(c.vkCreateFence(vulkan_device.vk_device, &fence_info, null, &self.in_flight_fences[i]));
+            try Utils.checkVk(c.vkCreateSemaphore(vulkan_device.vk_device, &semaphore_info, null, &self.image_available_semaphores[i]));
+            try Utils.checkVk(c.vkCreateSemaphore(vulkan_device.vk_device, &semaphore_info, null, &self.render_finished_semaphores[i]));
+            try Utils.checkVk(c.vkCreateFence(vulkan_device.vk_device, &fence_info, null, &self.in_flight_fences[i]));
         }
 
         return self;
@@ -94,11 +95,11 @@ pub const FrameManager = struct {
 
         // Begin command buffer
         const cb = self.command_buffers[self.current_frame];
-        try checkVk(c.vkResetCommandBuffer(cb, 0));
+        try Utils.checkVk(c.vkResetCommandBuffer(cb, 0));
 
         var begin_info = std.mem.zeroes(c.VkCommandBufferBeginInfo);
         begin_info.sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        try checkVk(c.vkBeginCommandBuffer(cb, &begin_info));
+        try Utils.checkVk(c.vkBeginCommandBuffer(cb, &begin_info));
 
         self.frame_in_progress = true;
         return true;
@@ -108,11 +109,11 @@ pub const FrameManager = struct {
         if (!self.frame_in_progress) return error.InvalidState;
 
         const cb = self.command_buffers[self.current_frame];
-        try checkVk(c.vkEndCommandBuffer(cb));
+        try Utils.checkVk(c.vkEndCommandBuffer(cb));
 
         // End transfer command buffer if present
         if (transfer_cb) |tcb| {
-            try checkVk(c.vkEndCommandBuffer(tcb));
+            try Utils.checkVk(c.vkEndCommandBuffer(tcb));
         }
 
         var wait_stages = [_]c.VkPipelineStageFlags{c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
@@ -174,7 +175,3 @@ pub const FrameManager = struct {
         _ = c.vkDeviceWaitIdle(self.vulkan_device.vk_device);
     }
 };
-
-fn checkVk(result: c.VkResult) !void {
-    if (result != c.VK_SUCCESS) return error.VulkanError;
-}
