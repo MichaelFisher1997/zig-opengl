@@ -10,8 +10,57 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Suppress git hints in checkout
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+  # Cache key shared across all jobs
+  NIX_CACHE_KEY: nix-${{ github.run_id }}
+
 jobs:
+  # Warm up the cache once, other jobs restore from it
+  cache-warmup:
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@v16
+
+    - name: Restore Nix Cache
+      id: cache-restore
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          /nix
+          ~/.cache/nix
+        key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-keys: |
+          nix-${{ runner.os }}-
+
+    - name: Warm Nix Store
+      if: steps.cache-restore.outputs.cache-hit != 'true'
+      run: |
+        # Evaluate flake to download dependencies
+        nix build --dry-run 2>&1 || true
+        nix develop --command true
+
+    - name: Save Nix Cache
+      if: steps.cache-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          /nix
+          ~/.cache/nix
+        key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+
   build:
+    needs: cache-warmup
     permissions:
       contents: read
       id-token: write
@@ -23,13 +72,15 @@ jobs:
     - name: Install Nix
       uses: DeterminateSystems/nix-installer-action@v16
 
-    - name: Cache Nix Store
-      uses: nix-community/cache-nix-action@v7
+    - name: Restore Nix Cache
+      uses: actions/cache/restore@v4
       with:
-        primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
-        restore-prefixes-first-match: nix-${{ runner.os }}-
-        paths: |
+        path: |
+          /nix
           ~/.cache/nix
+        key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-keys: |
+          nix-${{ runner.os }}-
 
     - name: Build
       run: nix build -L
@@ -48,6 +99,7 @@ jobs:
         retention-days: 7
 
   unit-test:
+    needs: cache-warmup
     permissions:
       contents: read
       id-token: write
@@ -59,18 +111,21 @@ jobs:
     - name: Install Nix
       uses: DeterminateSystems/nix-installer-action@v16
 
-    - name: Cache Nix Store
-      uses: nix-community/cache-nix-action@v7
+    - name: Restore Nix Cache
+      uses: actions/cache/restore@v4
       with:
-        primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
-        restore-prefixes-first-match: nix-${{ runner.os }}-
-        paths: |
+        path: |
+          /nix
           ~/.cache/nix
+        key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-keys: |
+          nix-${{ runner.os }}-
 
     - name: Run unit tests
       run: nix develop --command zig build test
 
   integration-test:
+    needs: cache-warmup
     permissions:
       contents: read
       id-token: write
@@ -82,13 +137,15 @@ jobs:
     - name: Install Nix
       uses: DeterminateSystems/nix-installer-action@v16
 
-    - name: Cache Nix Store
-      uses: nix-community/cache-nix-action@v7
+    - name: Restore Nix Cache
+      uses: actions/cache/restore@v4
       with:
-        primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
-        restore-prefixes-first-match: nix-${{ runner.os }}-
-        paths: |
+        path: |
+          /nix
           ~/.cache/nix
+        key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-keys: |
+          nix-${{ runner.os }}-
 
     - name: Run integration smoke test
       env:

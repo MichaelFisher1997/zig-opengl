@@ -9,6 +9,7 @@
     # We use an overlay to get the latest compiler.
     zig-overlay.url = "github:mitchellh/zig-overlay";
     zig-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    zig-overlay.inputs.flake-utils.follows = "flake-utils";
   };
 
   outputs = { self, nixpkgs, flake-utils, zig-overlay }:
