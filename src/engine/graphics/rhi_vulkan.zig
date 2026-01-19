@@ -2227,6 +2227,7 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
         ctx.ui_tex_descriptor_next[i] = 0;
     }
 
+    try ctx.resources.flushTransfer();
     ctx.resources.setCurrentFrame(0);
 }
 
@@ -2679,6 +2680,10 @@ fn endFrame(ctx_ptr: *anyopaque) void {
     ctx.frames.endFrame(&ctx.swapchain, transfer_cb) catch |err| {
         std.log.err("endFrame failed: {}", .{err});
     };
+
+    if (transfer_cb != null) {
+        ctx.resources.resetTransferState();
+    }
 
     ctx.frame_index += 1;
 }

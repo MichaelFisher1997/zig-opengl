@@ -75,6 +75,8 @@ const StagingBuffer = struct {
 
         if (aligned_offset + size > self.size) return null;
 
+        if (self.mapped_ptr == null) return null;
+
         self.current_offset = aligned_offset + size;
         return aligned_offset;
     }
@@ -145,7 +147,12 @@ pub const ResourceManager = struct {
         var fence_info = std.mem.zeroes(c.VkFenceCreateInfo);
         fence_info.sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fence_info.flags = 0; // Not signaled initially
-        try Utils.checkVk(c.vkCreateFence(vulkan_device.vk_device, &fence_info, null, &self.transfer_fence));
+        Utils.checkVk(c.vkCreateFence(vulkan_device.vk_device, &fence_info, null, &self.transfer_fence)) catch |err| {
+            std.log.err("Failed to create transfer fence: {}", .{err});
+            // Cleanup previous resources if needed, or propagate error
+            // For now, let's propagate since init returns !ResourceManager
+            return err;
+        };
 
         return self;
     }
@@ -247,6 +254,10 @@ pub const ResourceManager = struct {
             c.vkDestroySampler(device, img.sampler, null);
         }
         self.image_deletion_queue[frame_index].clearRetainingCapacity();
+    }
+
+    pub fn resetTransferState(self: *ResourceManager) void {
+        self.transfer_ready = false;
     }
 
     fn prepareTransfer(self: *ResourceManager) !c.VkCommandBuffer {
@@ -585,7 +596,10 @@ pub const ResourceManager = struct {
     }
 
     pub fn destroyTexture(self: *ResourceManager, handle: rhi.TextureHandle) void {
-        const tex = self.textures.get(handle) orelse return;
+        const tex = self.textures.get(handle) orelse {
+            std.debug.assert(handle != rhi.InvalidTextureHandle);
+            return;
+        };
         _ = self.textures.remove(handle);
         self.image_deletion_queue[self.current_frame_index].append(self.allocator, .{
             .image = tex.image,
