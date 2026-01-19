@@ -28,6 +28,8 @@ jobs:
       with:
         primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
         restore-prefixes-first-match: nix-${{ runner.os }}-
+        paths: |
+          ~/.cache/nix
 
     - name: Build
       run: nix build -L
@@ -62,6 +64,8 @@ jobs:
       with:
         primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
         restore-prefixes-first-match: nix-${{ runner.os }}-
+        paths: |
+          ~/.cache/nix
 
     - name: Run unit tests
       run: nix develop --command zig build test
@@ -83,6 +87,8 @@ jobs:
       with:
         primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
         restore-prefixes-first-match: nix-${{ runner.os }}-
+        paths: |
+          ~/.cache/nix
 
     - name: Run integration smoke test
       env:
