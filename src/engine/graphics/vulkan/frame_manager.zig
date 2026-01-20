@@ -109,10 +109,12 @@ pub const FrameManager = struct {
         if (!self.frame_in_progress) return error.InvalidState;
 
         const cb = self.command_buffers[self.current_frame];
+        std.log.debug("FrameManager.endFrame: vkEndCommandBuffer(cb)", .{});
         try Utils.checkVk(c.vkEndCommandBuffer(cb));
 
         // End transfer command buffer if present
         if (transfer_cb) |tcb| {
+            std.log.debug("FrameManager.endFrame: vkEndCommandBuffer(tcb)", .{});
             try Utils.checkVk(c.vkEndCommandBuffer(tcb));
         }
 
@@ -146,8 +148,10 @@ pub const FrameManager = struct {
         submit_info.signalSemaphoreCount = 1;
         submit_info.pSignalSemaphores = &self.render_finished_semaphores[self.current_frame];
 
+        std.log.debug("FrameManager.endFrame: calling submitGuarded", .{});
         try self.vulkan_device.submitGuarded(submit_info, self.in_flight_fences[self.current_frame]);
 
+        std.log.debug("FrameManager.endFrame: calling swapchain.present", .{});
         swapchain.present(self.render_finished_semaphores[self.current_frame], self.current_image_index) catch |err| {
             if (err == error.OutOfDate) {
                 // Resize needed, handled by next frame
@@ -158,6 +162,7 @@ pub const FrameManager = struct {
 
         self.current_frame = (self.current_frame + 1) % rhi.MAX_FRAMES_IN_FLIGHT;
         self.frame_in_progress = false;
+        std.log.debug("FrameManager.endFrame: done", .{});
     }
 
     pub fn abortFrame(self: *FrameManager) void {

@@ -2724,11 +2724,15 @@ fn endFrame(ctx_ptr: *anyopaque) void {
 
     if (!ctx.frames.frame_in_progress) return;
 
+    std.log.debug("endFrame: checking passes (main={}, shadow={})", .{ ctx.main_pass_active, ctx.shadow_system.pass_active });
+
     if (ctx.main_pass_active) endMainPassInternal(ctx);
     if (ctx.shadow_system.pass_active) endShadowPassInternal(ctx);
 
+    std.log.debug("endFrame: getting transfer cb", .{});
     const transfer_cb = ctx.resources.getTransferCommandBuffer();
 
+    std.log.debug("endFrame: calling frames.endFrame (tcb={})", .{transfer_cb != null});
     ctx.frames.endFrame(&ctx.swapchain, transfer_cb) catch |err| {
         std.log.err("endFrame failed: {}", .{err});
     };
@@ -2738,6 +2742,7 @@ fn endFrame(ctx_ptr: *anyopaque) void {
     }
 
     ctx.frame_index += 1;
+    std.log.debug("endFrame: done", .{});
 }
 
 fn setClearColor(ctx_ptr: *anyopaque, color: Vec3) void {
