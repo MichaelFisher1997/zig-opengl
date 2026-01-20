@@ -107,7 +107,7 @@ pub const GlobalVertexAllocator = struct {
             };
 
             // Upload at the correct offset within the megabuffer
-            self.rhi.updateBuffer(self.buffer, block.offset, std.mem.sliceAsBytes(vertices));
+            try self.rhi.updateBuffer(self.buffer, block.offset, std.mem.sliceAsBytes(vertices));
 
             // Update free block
             if (block.size > size_needed) {

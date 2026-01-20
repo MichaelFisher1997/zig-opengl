@@ -60,7 +60,7 @@ pub const HandRenderer = struct {
     }
 
     /// Check inventory and update mesh if held block changed
-    pub fn updateMesh(self: *HandRenderer, inventory: Inventory, atlas: *const TextureAtlas) void {
+    pub fn updateMesh(self: *HandRenderer, inventory: Inventory, atlas: *const TextureAtlas) !void {
         const selected = inventory.getSelectedBlock();
 
         // If no block selected or air, hide
@@ -75,12 +75,12 @@ pub const HandRenderer = struct {
 
         // If block changed, rebuild mesh
         if (self.last_block != block_type) {
-            self.buildMesh(block_type, atlas);
+            try self.buildMesh(block_type, atlas);
             self.last_block = block_type;
         }
     }
 
-    fn buildMesh(self: *HandRenderer, block_type: BlockType, atlas: *const TextureAtlas) void {
+    fn buildMesh(self: *HandRenderer, block_type: BlockType, atlas: *const TextureAtlas) !void {
         var vertices: [36]Vertex = undefined;
         var idx: usize = 0;
 
@@ -116,7 +116,7 @@ pub const HandRenderer = struct {
         // West Face (x = n)
         addQuad(&vertices, &idx, .{ n, n, n }, .{ n, n, p }, .{ n, p, p }, .{ n, p, n }, faces[5].normal, faces[5].tile, color);
 
-        self.rhi.uploadBuffer(self.buffer_handle, std.mem.asBytes(&vertices));
+        try self.rhi.uploadBuffer(self.buffer_handle, std.mem.asBytes(&vertices));
     }
 
     fn addQuad(verts: *[36]Vertex, idx: *usize, p0: [3]f32, p1: [3]f32, p2: [3]f32, p3: [3]f32, normal: [3]f32, tile: u8, color: [3]f32) void {

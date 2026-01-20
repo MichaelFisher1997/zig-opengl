@@ -309,23 +309,23 @@ pub const ResourceManager = struct {
         self.buffer_deletion_queue[self.current_frame_index].append(self.allocator, .{ .buffer = buf.buffer, .memory = buf.memory }) catch {};
     }
 
-    pub fn uploadBuffer(self: *ResourceManager, handle: rhi.BufferHandle, data: []const u8) void {
-        self.updateBuffer(handle, 0, data);
+    pub fn uploadBuffer(self: *ResourceManager, handle: rhi.BufferHandle, data: []const u8) rhi.RhiError!void {
+        return self.updateBuffer(handle, 0, data);
     }
 
-    pub fn updateBuffer(self: *ResourceManager, handle: rhi.BufferHandle, offset: usize, data: []const u8) void {
+    pub fn updateBuffer(self: *ResourceManager, handle: rhi.BufferHandle, offset: usize, data: []const u8) rhi.RhiError!void {
         const buf = self.buffers.get(handle) orelse return;
 
         const staging = &self.staging_buffers[self.current_frame_index];
         const staging_offset = staging.allocate(data.len) orelse {
             std.log.err("Staging buffer overflow in updateBuffer! Data dropped.", .{});
-            return;
+            return error.OutOfMemory;
         };
 
         const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + staging_offset;
         @memcpy(dest[0..data.len], data);
 
-        const cmd = self.prepareTransfer() catch return;
+        const cmd = try self.prepareTransfer();
 
         var region = std.mem.zeroes(c.VkBufferCopy);
         region.srcOffset = staging_offset;
@@ -335,15 +335,12 @@ pub const ResourceManager = struct {
         c.vkCmdCopyBuffer(cmd, staging.buffer, buf.buffer, 1, &region);
     }
 
-    pub fn mapBuffer(self: *ResourceManager, handle: rhi.BufferHandle) ?*anyopaque {
+    pub fn mapBuffer(self: *ResourceManager, handle: rhi.BufferHandle) rhi.RhiError!?*anyopaque {
         const buf = self.buffers.get(handle) orelse return null;
         if (!buf.is_host_visible) return null;
 
         var ptr: ?*anyopaque = null;
-        Utils.checkVk(c.vkMapMemory(self.vulkan_device.vk_device, buf.memory, 0, buf.size, 0, &ptr)) catch |err| {
-            std.log.err("vkMapMemory failed: {}", .{err});
-            return null;
-        };
+        try Utils.checkVk(c.vkMapMemory(self.vulkan_device.vk_device, buf.memory, 0, buf.size, 0, &ptr));
         return ptr;
     }
 
@@ -609,7 +606,7 @@ pub const ResourceManager = struct {
         }) catch {};
     }
 
-    pub fn updateTexture(self: *ResourceManager, handle: rhi.TextureHandle, data: []const u8) void {
+    pub fn updateTexture(self: *ResourceManager, handle: rhi.TextureHandle, data: []const u8) rhi.RhiError!void {
         const tex = self.textures.get(handle) orelse return;
 
         const staging = &self.staging_buffers[self.current_frame_index];
@@ -618,7 +615,7 @@ pub const ResourceManager = struct {
             const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + offset;
             @memcpy(dest[0..data.len], data);
 
-            const transfer_cb = self.prepareTransfer() catch return;
+            const transfer_cb = try self.prepareTransfer();
 
             var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
             barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -654,6 +651,7 @@ pub const ResourceManager = struct {
         } else {
             // Buffer full, drop update for now (or implement fallback)
             std.log.err("Staging buffer full during updateTexture! Update dropped.", .{});
+            return error.OutOfMemory;
         }
     }
 

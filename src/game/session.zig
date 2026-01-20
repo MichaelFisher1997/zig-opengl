@@ -150,11 +150,11 @@ pub const GameSession = struct {
             .player = player,
             .inventory = Inventory.init(),
             .inventory_ui_state = .{},
-            .block_outline = BlockOutline.init(rhi.*),
+            .block_outline = try BlockOutline.init(rhi.*),
             .hand_renderer = HandRenderer.init(rhi.*),
             .camera = player.camera,
             .ecs_registry = ECSRegistry.init(allocator),
-            .ecs_render_system = ECSRenderSystem.init(rhi),
+            .ecs_render_system = try ECSRenderSystem.init(rhi),
             .rhi = rhi,
             .atmosphere = atmosphere,
             .clouds = CloudState{},
@@ -256,7 +256,7 @@ pub const GameSession = struct {
                 }
 
                 self.hand_renderer.update(dt);
-                self.hand_renderer.updateMesh(self.inventory, atlas);
+                try self.hand_renderer.updateMesh(self.inventory, atlas);
             } else if (!self.world.paused) {
                 self.world.pauseGeneration();
             }

@@ -72,6 +72,8 @@ jobs:
 
     - name: Run unit tests
       run: nix develop --command zig build test
+      env:
+        ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-global
 
   integration-test:
     permissions:
@@ -95,6 +97,7 @@ jobs:
     - name: Run integration smoke test
       env:
         XDG_RUNTIME_DIR: /tmp/runtime-runner
+        ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-global
       run: |
         mkdir -p $XDG_RUNTIME_DIR
         xvfb-run -a nix develop --command zig build test-integration

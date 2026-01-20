@@ -65,7 +65,7 @@ pub const WorldMap = struct {
             }
         }
 
-        self.texture.update(pixels);
+        try self.texture.update(pixels);
     }
 
     fn getBiomeColor(info: ColumnInfo) [3]f32 {

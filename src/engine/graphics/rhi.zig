@@ -46,26 +46,26 @@ pub const IResourceFactory = struct {
 
     pub const VTable = struct {
         createBuffer: *const fn (ptr: *anyopaque, size: usize, usage: BufferUsage) BufferHandle,
-        uploadBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle, data: []const u8) void,
-        updateBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle, offset: usize, data: []const u8) void,
+        uploadBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle, data: []const u8) RhiError!void,
+        updateBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle, offset: usize, data: []const u8) RhiError!void,
         destroyBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle) void,
         createTexture: *const fn (ptr: *anyopaque, width: u32, height: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) TextureHandle,
         destroyTexture: *const fn (ptr: *anyopaque, handle: TextureHandle) void,
-        updateTexture: *const fn (ptr: *anyopaque, handle: TextureHandle, data: []const u8) void,
+        updateTexture: *const fn (ptr: *anyopaque, handle: TextureHandle, data: []const u8) RhiError!void,
         createShader: *const fn (ptr: *anyopaque, vertex_src: [*c]const u8, fragment_src: [*c]const u8) RhiError!ShaderHandle,
         destroyShader: *const fn (ptr: *anyopaque, handle: ShaderHandle) void,
-        mapBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle) ?*anyopaque,
+        mapBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle) RhiError!?*anyopaque,
         unmapBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle) void,
     };
 
     pub fn createBuffer(self: IResourceFactory, size: usize, usage: BufferUsage) BufferHandle {
         return self.vtable.createBuffer(self.ptr, size, usage);
     }
-    pub fn uploadBuffer(self: IResourceFactory, handle: BufferHandle, data: []const u8) void {
-        self.vtable.uploadBuffer(self.ptr, handle, data);
+    pub fn uploadBuffer(self: IResourceFactory, handle: BufferHandle, data: []const u8) RhiError!void {
+        return self.vtable.uploadBuffer(self.ptr, handle, data);
     }
-    pub fn updateBuffer(self: IResourceFactory, handle: BufferHandle, offset: usize, data: []const u8) void {
-        self.vtable.updateBuffer(self.ptr, handle, offset, data);
+    pub fn updateBuffer(self: IResourceFactory, handle: BufferHandle, offset: usize, data: []const u8) RhiError!void {
+        return self.vtable.updateBuffer(self.ptr, handle, offset, data);
     }
     pub fn destroyBuffer(self: IResourceFactory, handle: BufferHandle) void {
         self.vtable.destroyBuffer(self.ptr, handle);
@@ -76,8 +76,8 @@ pub const IResourceFactory = struct {
     pub fn destroyTexture(self: IResourceFactory, handle: TextureHandle) void {
         self.vtable.destroyTexture(self.ptr, handle);
     }
-    pub fn updateTexture(self: IResourceFactory, handle: TextureHandle, data: []const u8) void {
-        self.vtable.updateTexture(self.ptr, handle, data);
+    pub fn updateTexture(self: IResourceFactory, handle: TextureHandle, data: []const u8) RhiError!void {
+        return self.vtable.updateTexture(self.ptr, handle, data);
     }
     pub fn createShader(self: IResourceFactory, vertex_src: [*c]const u8, fragment_src: [*c]const u8) RhiError!ShaderHandle {
         return self.vtable.createShader(self.ptr, vertex_src, fragment_src);
@@ -85,7 +85,7 @@ pub const IResourceFactory = struct {
     pub fn destroyShader(self: IResourceFactory, handle: ShaderHandle) void {
         self.vtable.destroyShader(self.ptr, handle);
     }
-    pub fn mapBuffer(self: IResourceFactory, handle: BufferHandle) ?*anyopaque {
+    pub fn mapBuffer(self: IResourceFactory, handle: BufferHandle) RhiError!?*anyopaque {
         return self.vtable.mapBuffer(self.ptr, handle);
     }
     pub fn unmapBuffer(self: IResourceFactory, handle: BufferHandle) void {
@@ -418,8 +418,8 @@ pub const RHI = struct {
     pub fn createBuffer(self: RHI, size: usize, usage: BufferUsage) BufferHandle {
         return self.vtable.resources.createBuffer(self.ptr, size, usage);
     }
-    pub fn updateBuffer(self: RHI, handle: BufferHandle, offset: usize, data: []const u8) void {
-        self.vtable.resources.updateBuffer(self.ptr, handle, offset, data);
+    pub fn updateBuffer(self: RHI, handle: BufferHandle, offset: usize, data: []const u8) RhiError!void {
+        return self.vtable.resources.updateBuffer(self.ptr, handle, offset, data);
     }
     pub fn destroyBuffer(self: RHI, handle: BufferHandle) void {
         self.vtable.resources.destroyBuffer(self.ptr, handle);
@@ -431,12 +431,12 @@ pub const RHI = struct {
     pub fn destroyTexture(self: RHI, handle: TextureHandle) void {
         self.vtable.resources.destroyTexture(self.ptr, handle);
     }
-    pub fn uploadBuffer(self: RHI, handle: BufferHandle, data: []const u8) void {
-        self.vtable.resources.uploadBuffer(self.ptr, handle, data);
+    pub fn uploadBuffer(self: RHI, handle: BufferHandle, data: []const u8) RhiError!void {
+        return self.vtable.resources.uploadBuffer(self.ptr, handle, data);
     }
 
-    pub fn updateTexture(self: RHI, handle: TextureHandle, data: []const u8) void {
-        self.vtable.resources.updateTexture(self.ptr, handle, data);
+    pub fn updateTexture(self: RHI, handle: TextureHandle, data: []const u8) RhiError!void {
+        return self.vtable.resources.updateTexture(self.ptr, handle, data);
     }
 
     pub fn createShader(self: RHI, vertex_src: [*c]const u8, fragment_src: [*c]const u8) RhiError!ShaderHandle {

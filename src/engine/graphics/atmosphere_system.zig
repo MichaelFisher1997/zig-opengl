@@ -33,8 +33,8 @@ pub const AtmosphereSystem = struct {
         self.cloud_vbo = rhi_instance.createBuffer(@sizeOf(@TypeOf(cloud_vertices)), .vertex);
         self.cloud_ebo = rhi_instance.createBuffer(@sizeOf(@TypeOf(cloud_indices)), .index);
 
-        rhi_instance.uploadBuffer(self.cloud_vbo, std.mem.asBytes(&cloud_vertices));
-        rhi_instance.uploadBuffer(self.cloud_ebo, std.mem.asBytes(&cloud_indices));
+        try rhi_instance.uploadBuffer(self.cloud_vbo, std.mem.asBytes(&cloud_vertices));
+        try rhi_instance.uploadBuffer(self.cloud_ebo, std.mem.asBytes(&cloud_indices));
 
         return self;
     }

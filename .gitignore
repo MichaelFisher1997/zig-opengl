@@ -1,11 +1,13 @@
 zig-cache/
 .zig-cache/
+.zig-cache-new/
 zig-out/
 blocks-temp/
 libs/zig-image/
 result
 .direnv/
 *-profile*
+test_output.txt
 .env
 .env.*
 !.env.example

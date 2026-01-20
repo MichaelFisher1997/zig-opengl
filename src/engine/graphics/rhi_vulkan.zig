@@ -2269,18 +2269,18 @@ fn createBuffer(ctx_ptr: *anyopaque, size: usize, usage: rhi.BufferUsage) rhi.Bu
     return ctx.resources.createBuffer(size, usage);
 }
 
-fn uploadBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8) void {
+fn uploadBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8) rhi.RhiError!void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
-    ctx.resources.uploadBuffer(handle, data);
+    return ctx.resources.uploadBuffer(handle, data);
 }
 
-fn updateBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, dst_offset: usize, data: []const u8) void {
+fn updateBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, dst_offset: usize, data: []const u8) rhi.RhiError!void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
-    ctx.resources.updateBuffer(handle, dst_offset, data);
+    return ctx.resources.updateBuffer(handle, dst_offset, data);
 }
 
 fn destroyBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle) void {
@@ -3079,9 +3079,11 @@ fn bindTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, slot: u32) void {
     }
 }
 
-fn updateTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u8) void {
+fn updateTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u8) rhi.RhiError!void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    ctx.resources.updateTexture(handle, data);
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+    return ctx.resources.updateTexture(handle, data);
 }
 
 fn setViewport(ctx_ptr: *anyopaque, width: u32, height: u32) void {
@@ -3817,8 +3819,10 @@ fn destroyShader(ctx_ptr: *anyopaque, handle: rhi.ShaderHandle) void {
     ctx.resources.destroyShader(handle);
 }
 
-fn mapBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle) ?*anyopaque {
+fn mapBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle) rhi.RhiError!?*anyopaque {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
     return ctx.resources.mapBuffer(handle);
 }
 

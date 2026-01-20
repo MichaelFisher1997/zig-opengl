@@ -56,7 +56,7 @@ pub const Texture = struct {
         self.rhi_instance.bindTexture(self.handle, slot);
     }
 
-    pub fn update(self: *const Texture, data: []const u8) void {
-        self.rhi_instance.updateTexture(self.handle, data);
+    pub fn update(self: *const Texture, data: []const u8) rhi.RhiError!void {
+        try self.rhi_instance.updateTexture(self.handle, data);
     }
 };
