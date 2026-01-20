@@ -75,6 +75,7 @@
             pkgs.vulkan-loader
             pkgs.vulkan-headers
             pkgs.vulkan-validation-layers
+            pkgs.mesa.drivers
           ];
 
           shellHook = ''

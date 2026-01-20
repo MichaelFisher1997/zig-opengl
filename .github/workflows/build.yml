@@ -115,5 +115,9 @@ jobs:
         ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-global
         XDG_RUNTIME_DIR: /tmp/runtime-runner
         WAYLAND_DISPLAY: headless
+        VK_ICD_FILENAMES: /run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json
       run: |
+        # Find the actual path to the mesa driver in the nix store
+        LVP_PATH=$(nix build --no-link --print-out-paths nixpkgs#mesa.drivers)/share/vulkan/icd.d/lvp_icd.x86_64.json
+        export VK_ICD_FILENAMES=$LVP_PATH
         nix develop --command zig build run -Dsmoke-test=true
