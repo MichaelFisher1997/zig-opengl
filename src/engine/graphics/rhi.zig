@@ -49,7 +49,7 @@ pub const IResourceFactory = struct {
         uploadBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle, data: []const u8) RhiError!void,
         updateBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle, offset: usize, data: []const u8) RhiError!void,
         destroyBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle) void,
-        createTexture: *const fn (ptr: *anyopaque, width: u32, height: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) TextureHandle,
+        createTexture: *const fn (ptr: *anyopaque, width: u32, height: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) RhiError!TextureHandle,
         destroyTexture: *const fn (ptr: *anyopaque, handle: TextureHandle) void,
         updateTexture: *const fn (ptr: *anyopaque, handle: TextureHandle, data: []const u8) RhiError!void,
         createShader: *const fn (ptr: *anyopaque, vertex_src: [*c]const u8, fragment_src: [*c]const u8) RhiError!ShaderHandle,
@@ -70,7 +70,7 @@ pub const IResourceFactory = struct {
     pub fn destroyBuffer(self: IResourceFactory, handle: BufferHandle) void {
         self.vtable.destroyBuffer(self.ptr, handle);
     }
-    pub fn createTexture(self: IResourceFactory, width: u32, height: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) TextureHandle {
+    pub fn createTexture(self: IResourceFactory, width: u32, height: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) RhiError!TextureHandle {
         return self.vtable.createTexture(self.ptr, width, height, format, config, data);
     }
     pub fn destroyTexture(self: IResourceFactory, handle: TextureHandle) void {
@@ -425,7 +425,7 @@ pub const RHI = struct {
         self.vtable.resources.destroyBuffer(self.ptr, handle);
     }
 
-    pub fn createTexture(self: RHI, width: u32, height: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) TextureHandle {
+    pub fn createTexture(self: RHI, width: u32, height: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) RhiError!TextureHandle {
         return self.vtable.resources.createTexture(self.ptr, width, height, format, config, data);
     }
     pub fn destroyTexture(self: RHI, handle: TextureHandle) void {

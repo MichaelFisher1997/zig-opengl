@@ -16,6 +16,7 @@ pub const RhiError = error{
     TooManyObjects,
     FormatNotSupported,
     FragmentedPool,
+    NoMatchingMemoryType,
     ResourceNotReady,
     SkyPipelineNotReady,
     SkyPipelineLayoutNotReady,

@@ -235,7 +235,7 @@ const MockContext = struct {
         _ = ptr;
         _ = handle;
     }
-    fn createTexture(ptr: *anyopaque, width: u32, height: u32, format: rhi.TextureFormat, config: rhi.TextureConfig, data: ?[]const u8) rhi.TextureHandle {
+    fn createTexture(ptr: *anyopaque, width: u32, height: u32, format: rhi.TextureFormat, config: rhi.TextureConfig, data: ?[]const u8) rhi.RhiError!rhi.TextureHandle {
         _ = ptr;
         _ = width;
         _ = height;

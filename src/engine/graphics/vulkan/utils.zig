@@ -27,7 +27,7 @@ pub fn checkVk(result: c.VkResult) !void {
     }
 }
 
-pub fn findMemoryType(physical_device: c.VkPhysicalDevice, type_filter: u32, properties: c.VkMemoryPropertyFlags) !u32 {
+pub fn findMemoryType(physical_device: c.VkPhysicalDevice, type_filter: u32, properties: c.VkMemoryPropertyFlags) rhi.RhiError!u32 {
     var mem_properties: c.VkPhysicalDeviceMemoryProperties = undefined;
     c.vkGetPhysicalDeviceMemoryProperties(physical_device, &mem_properties);
 
@@ -42,7 +42,7 @@ pub fn findMemoryType(physical_device: c.VkPhysicalDevice, type_filter: u32, pro
     return error.NoMatchingMemoryType;
 }
 
-pub fn createVulkanBuffer(device: *const VulkanDevice, size: usize, usage: c.VkBufferUsageFlags, properties: c.VkMemoryPropertyFlags) !VulkanBuffer {
+pub fn createVulkanBuffer(device: *const VulkanDevice, size: usize, usage: c.VkBufferUsageFlags, properties: c.VkMemoryPropertyFlags) rhi.RhiError!VulkanBuffer {
     var buffer_info = std.mem.zeroes(c.VkBufferCreateInfo);
     buffer_info.sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     buffer_info.size = @intCast(size);

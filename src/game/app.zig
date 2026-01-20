@@ -171,7 +171,7 @@ pub const App = struct {
         var env_map: ?Texture = null;
         if (!std.mem.eql(u8, settings.environment_map, "default")) {
             if (resource_pack_manager.loadImageFileFloat(settings.environment_map)) |tex_data| {
-                env_map = Texture.initFloat(rhi, tex_data.width, tex_data.height, tex_data.pixels);
+                env_map = try Texture.initFloat(rhi, tex_data.width, tex_data.height, tex_data.pixels);
                 env_map.?.bind(9);
                 log.log.info("Loaded Environment Map: {s}", .{settings.environment_map});
                 var td = tex_data;
@@ -180,13 +180,13 @@ pub const App = struct {
                 log.log.warn("Could not load environment map: {s}", .{settings.environment_map});
                 // Fallback to white
                 const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
-                env_map = Texture.initFloat(rhi, 1, 1, &white_pixel);
+                env_map = try Texture.initFloat(rhi, 1, 1, &white_pixel);
                 env_map.?.bind(9);
             }
         } else {
             // Default white
             const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
-            env_map = Texture.initFloat(rhi, 1, 1, &white_pixel);
+            env_map = try Texture.initFloat(rhi, 1, 1, &white_pixel);
             env_map.?.bind(9);
         }
 

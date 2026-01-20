@@ -149,8 +149,10 @@ pub const ResourceManager = struct {
         fence_info.flags = 0; // Not signaled initially
         Utils.checkVk(c.vkCreateFence(vulkan_device.vk_device, &fence_info, null, &self.transfer_fence)) catch |err| {
             std.log.err("Failed to create transfer fence: {}", .{err});
-            // Cleanup previous resources if needed, or propagate error
-            // For now, let's propagate since init returns !ResourceManager
+            // Cleanup command pool and buffers before returning to avoid leaks
+            if (self.transfer_command_pool != null) {
+                c.vkDestroyCommandPool(vulkan_device.vk_device, self.transfer_command_pool, null);
+            }
             return err;
         };
 
@@ -351,7 +353,7 @@ pub const ResourceManager = struct {
         }
     }
 
-    pub fn createTexture(self: *ResourceManager, width: u32, height: u32, format: rhi.TextureFormat, config: rhi.TextureConfig, data_opt: ?[]const u8) rhi.TextureHandle {
+    pub fn createTexture(self: *ResourceManager, width: u32, height: u32, format: rhi.TextureFormat, config: rhi.TextureConfig, data_opt: ?[]const u8) rhi.RhiError!rhi.TextureHandle {
         const vk_format: c.VkFormat = switch (format) {
             .rgba => c.VK_FORMAT_R8G8B8A8_UNORM,
             .rgba_srgb => c.VK_FORMAT_R8G8B8A8_SRGB,
@@ -384,6 +386,8 @@ pub const ResourceManager = struct {
             usage_flags |= c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         }
 
+        const device = self.vulkan_device.vk_device;
+
         var image: c.VkImage = null;
         var image_info = std.mem.zeroes(c.VkImageCreateInfo);
         image_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -400,29 +404,22 @@ pub const ResourceManager = struct {
         image_info.samples = c.VK_SAMPLE_COUNT_1_BIT;
         image_info.sharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
 
-        if (c.vkCreateImage(self.vulkan_device.vk_device, &image_info, null, &image) != c.VK_SUCCESS) return rhi.InvalidTextureHandle;
+        try Utils.checkVk(c.vkCreateImage(device, &image_info, null, &image));
+        errdefer c.vkDestroyImage(device, image, null);
 
         var mem_reqs: c.VkMemoryRequirements = undefined;
-        c.vkGetImageMemoryRequirements(self.vulkan_device.vk_device, image, &mem_reqs);
+        c.vkGetImageMemoryRequirements(device, image, &mem_reqs);
 
         var memory: c.VkDeviceMemory = null;
         var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc_info.allocationSize = mem_reqs.size;
-        alloc_info.memoryTypeIndex = Utils.findMemoryType(self.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) catch {
-            c.vkDestroyImage(self.vulkan_device.vk_device, image, null);
-            return rhi.InvalidTextureHandle;
-        };
+        alloc_info.memoryTypeIndex = try Utils.findMemoryType(self.vulkan_device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-        if (c.vkAllocateMemory(self.vulkan_device.vk_device, &alloc_info, null, &memory) != c.VK_SUCCESS) {
-            c.vkDestroyImage(self.vulkan_device.vk_device, image, null);
-            return rhi.InvalidTextureHandle;
-        }
-        if (c.vkBindImageMemory(self.vulkan_device.vk_device, image, memory, 0) != c.VK_SUCCESS) {
-            c.vkFreeMemory(self.vulkan_device.vk_device, memory, null);
-            c.vkDestroyImage(self.vulkan_device.vk_device, image, null);
-            return rhi.InvalidTextureHandle;
-        }
+        try Utils.checkVk(c.vkAllocateMemory(device, &alloc_info, null, &memory));
+        errdefer c.vkFreeMemory(device, memory, null);
+
+        try Utils.checkVk(c.vkBindImageMemory(device, image, memory, 0));
 
         var view: c.VkImageView = null;
         var view_info = std.mem.zeroes(c.VkImageViewCreateInfo);
@@ -436,127 +433,111 @@ pub const ResourceManager = struct {
         view_info.subresourceRange.baseArrayLayer = 0;
         view_info.subresourceRange.layerCount = 1;
 
-        if (c.vkCreateImageView(self.vulkan_device.vk_device, &view_info, null, &view) != c.VK_SUCCESS) {
-            c.vkFreeMemory(self.vulkan_device.vk_device, memory, null);
-            c.vkDestroyImage(self.vulkan_device.vk_device, image, null);
-            return rhi.InvalidTextureHandle;
-        }
+        try Utils.checkVk(c.vkCreateImageView(device, &view_info, null, &view));
+        errdefer c.vkDestroyImageView(device, view, null);
 
-        const sampler = Utils.createSampler(self.vulkan_device, config, mip_levels, self.vulkan_device.max_anisotropy) catch {
-            c.vkDestroyImageView(self.vulkan_device.vk_device, view, null);
-            c.vkFreeMemory(self.vulkan_device.vk_device, memory, null);
-            c.vkDestroyImage(self.vulkan_device.vk_device, image, null);
-            return rhi.InvalidTextureHandle;
-        };
+        const sampler = try Utils.createSampler(self.vulkan_device, config, mip_levels, self.vulkan_device.max_anisotropy);
+        errdefer c.vkDestroySampler(device, sampler, null);
 
         // Upload data if present
         if (data_opt) |data| {
             const staging = &self.staging_buffers[self.current_frame_index];
-            const offset = staging.allocate(data.len);
+            const offset = staging.allocate(data.len) orelse return error.OutOfMemory;
 
-            if (offset) |off| {
-                const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + off;
-                @memcpy(dest[0..data.len], data);
+            const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + offset;
+            @memcpy(dest[0..data.len], data);
 
-                const transfer_cb = self.prepareTransfer() catch {
-                    // Cleanup and fail
-                    c.vkDestroySampler(self.vulkan_device.vk_device, sampler, null);
-                    c.vkDestroyImageView(self.vulkan_device.vk_device, view, null);
-                    c.vkFreeMemory(self.vulkan_device.vk_device, memory, null);
-                    c.vkDestroyImage(self.vulkan_device.vk_device, image, null);
-                    return rhi.InvalidTextureHandle;
-                };
+            const transfer_cb = try self.prepareTransfer();
 
-                var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
-                barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                barrier.oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
-                barrier.newLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
-                barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
-                barrier.image = image;
-                barrier.subresourceRange.aspectMask = aspect_mask;
-                barrier.subresourceRange.baseMipLevel = 0;
-                barrier.subresourceRange.levelCount = mip_levels;
-                barrier.subresourceRange.baseArrayLayer = 0;
-                barrier.subresourceRange.layerCount = 1;
-                barrier.srcAccessMask = 0;
-                barrier.dstAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+            var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
+            barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
+            barrier.newLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = image;
+            barrier.subresourceRange.aspectMask = aspect_mask;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = mip_levels;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
 
-                c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &barrier);
+            c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &barrier);
 
-                var region = std.mem.zeroes(c.VkBufferImageCopy);
-                region.bufferOffset = off;
-                region.imageSubresource.aspectMask = aspect_mask;
-                region.imageSubresource.layerCount = 1;
-                region.imageExtent = .{ .width = width, .height = height, .depth = 1 };
+            var region = std.mem.zeroes(c.VkBufferImageCopy);
+            region.bufferOffset = offset;
+            region.imageSubresource.aspectMask = aspect_mask;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent = .{ .width = width, .height = height, .depth = 1 };
 
-                c.vkCmdCopyBufferToImage(transfer_cb, staging.buffer, image, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            c.vkCmdCopyBufferToImage(transfer_cb, staging.buffer, image, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-                if (mip_levels > 1) {
-                    // Generate mipmaps (simplified blit loop)
-                    var mip_width: i32 = @intCast(width);
-                    var mip_height: i32 = @intCast(height);
+            if (mip_levels > 1) {
+                // Generate mipmaps (simplified blit loop)
+                var mip_width: i32 = @intCast(width);
+                var mip_height: i32 = @intCast(height);
 
-                    for (1..mip_levels) |i| {
-                        barrier.subresourceRange.baseMipLevel = @intCast(i - 1);
-                        barrier.subresourceRange.levelCount = 1;
-                        barrier.oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                        barrier.newLayout = c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                        barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
-                        barrier.dstAccessMask = c.VK_ACCESS_TRANSFER_READ_BIT;
-
-                        c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &barrier);
-
-                        var blit = std.mem.zeroes(c.VkImageBlit);
-                        blit.srcOffsets[0] = .{ .x = 0, .y = 0, .z = 0 };
-                        blit.srcOffsets[1] = .{ .x = mip_width, .y = mip_height, .z = 1 };
-                        blit.srcSubresource.aspectMask = aspect_mask;
-                        blit.srcSubresource.mipLevel = @intCast(i - 1);
-                        blit.srcSubresource.baseArrayLayer = 0;
-                        blit.srcSubresource.layerCount = 1;
-
-                        const next_width = if (mip_width > 1) @divFloor(mip_width, 2) else 1;
-                        const next_height = if (mip_height > 1) @divFloor(mip_height, 2) else 1;
-
-                        blit.dstOffsets[0] = .{ .x = 0, .y = 0, .z = 0 };
-                        blit.dstOffsets[1] = .{ .x = next_width, .y = next_height, .z = 1 };
-                        blit.dstSubresource.aspectMask = aspect_mask;
-                        blit.dstSubresource.mipLevel = @intCast(i);
-                        blit.dstSubresource.baseArrayLayer = 0;
-                        blit.dstSubresource.layerCount = 1;
-
-                        c.vkCmdBlitImage(transfer_cb, image, c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, c.VK_FILTER_LINEAR);
-
-                        barrier.oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                        barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                        barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_READ_BIT;
-                        barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
-
-                        c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
-
-                        if (mip_width > 1) mip_width = @divFloor(mip_width, 2);
-                        if (mip_height > 1) mip_height = @divFloor(mip_height, 2);
-                    }
-
-                    // Transition last mip level
-                    barrier.subresourceRange.baseMipLevel = @intCast(mip_levels - 1);
+                for (1..mip_levels) |i| {
+                    barrier.subresourceRange.baseMipLevel = @intCast(i - 1);
+                    barrier.subresourceRange.levelCount = 1;
                     barrier.oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                    barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    barrier.newLayout = c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
                     barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+                    barrier.dstAccessMask = c.VK_ACCESS_TRANSFER_READ_BIT;
+
+                    c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &barrier);
+
+                    var blit = std.mem.zeroes(c.VkImageBlit);
+                    blit.srcOffsets[0] = .{ .x = 0, .y = 0, .z = 0 };
+                    blit.srcOffsets[1] = .{ .x = mip_width, .y = mip_height, .z = 1 };
+                    blit.srcSubresource.aspectMask = aspect_mask;
+                    blit.srcSubresource.mipLevel = @intCast(i - 1);
+                    blit.srcSubresource.baseArrayLayer = 0;
+                    blit.srcSubresource.layerCount = 1;
+
+                    const next_width = if (mip_width > 1) @divFloor(mip_width, 2) else 1;
+                    const next_height = if (mip_height > 1) @divFloor(mip_height, 2) else 1;
+
+                    blit.dstOffsets[0] = .{ .x = 0, .y = 0, .z = 0 };
+                    blit.dstOffsets[1] = .{ .x = next_width, .y = next_height, .z = 1 };
+                    blit.dstSubresource.aspectMask = aspect_mask;
+                    blit.dstSubresource.mipLevel = @intCast(i);
+                    blit.dstSubresource.baseArrayLayer = 0;
+                    blit.dstSubresource.layerCount = 1;
+
+                    c.vkCmdBlitImage(transfer_cb, image, c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, c.VK_FILTER_LINEAR);
+
+                    barrier.oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                    barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_READ_BIT;
                     barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
 
                     c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
-                } else {
-                    barrier.oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                    barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
-                    barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
-                    c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
+
+                    if (mip_width > 1) mip_width = @divFloor(mip_width, 2);
+                    if (mip_height > 1) mip_height = @divFloor(mip_height, 2);
                 }
+
+                // Transition last mip level
+                barrier.subresourceRange.baseMipLevel = @intCast(mip_levels - 1);
+                barrier.oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+                barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+
+                c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
+            } else {
+                barrier.oldLayout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+                barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+                c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
             }
         } else {
             // No data - transition to SHADER_READ_ONLY_OPTIMAL
-            const transfer_cb = self.prepareTransfer() catch return rhi.InvalidTextureHandle; // Should ideally handle error
+            const transfer_cb = try self.prepareTransfer();
 
             var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
             barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -578,7 +559,7 @@ pub const ResourceManager = struct {
 
         const handle = self.next_texture_handle;
         self.next_texture_handle += 1;
-        self.textures.put(handle, .{
+        try self.textures.put(handle, .{
             .image = image,
             .memory = memory,
             .view = view,
@@ -587,7 +568,7 @@ pub const ResourceManager = struct {
             .height = height,
             .format = format,
             .config = config,
-        }) catch return rhi.InvalidTextureHandle;
+        });
 
         return handle;
     }

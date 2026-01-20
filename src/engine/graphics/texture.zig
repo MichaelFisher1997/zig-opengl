@@ -12,8 +12,8 @@ pub const Texture = struct {
     height: u32,
     rhi_instance: rhi.RHI,
 
-    pub fn init(instance: rhi.RHI, width: u32, height: u32, format: TextureFormat, config: Config, data: ?[]const u8) Texture {
-        const handle = instance.createTexture(width, height, format, config, data);
+    pub fn init(instance: rhi.RHI, width: u32, height: u32, format: TextureFormat, config: Config, data: ?[]const u8) rhi.RhiError!Texture {
+        const handle = try instance.createTexture(width, height, format, config, data);
         return .{
             .handle = handle,
             .width = width,
@@ -22,13 +22,13 @@ pub const Texture = struct {
         };
     }
 
-    pub fn initEmpty(instance: rhi.RHI, width: u32, height: u32, format: TextureFormat, config: Config) Texture {
+    pub fn initEmpty(instance: rhi.RHI, width: u32, height: u32, format: TextureFormat, config: Config) rhi.RhiError!Texture {
         return init(instance, width, height, format, config, null);
     }
 
-    pub fn initFloat(instance: rhi.RHI, width: u32, height: u32, data: []const f32) Texture {
+    pub fn initFloat(instance: rhi.RHI, width: u32, height: u32, data: []const f32) rhi.RhiError!Texture {
         const bytes = std.mem.sliceAsBytes(data);
-        const handle = instance.createTexture(width, height, .rgba32f, .{
+        const handle = try instance.createTexture(width, height, .rgba32f, .{
             .min_filter = .linear_mipmap_linear,
             .mag_filter = .linear,
             .wrap_s = .clamp_to_edge,
@@ -43,7 +43,7 @@ pub const Texture = struct {
         };
     }
 
-    pub fn initSolidColor(instance: rhi.RHI, r: u8, g: u8, b: u8, a: u8) Texture {
+    pub fn initSolidColor(instance: rhi.RHI, r: u8, g: u8, b: u8, a: u8) rhi.RhiError!Texture {
         const data = [_]u8{ r, g, b, a };
         return init(instance, 1, 1, .rgba, .{}, &data);
     }

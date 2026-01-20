@@ -133,7 +133,7 @@ pub const GameSession = struct {
         else
             try World.initGen(generator_index, allocator, effective_render_distance, seed, rhi.*);
 
-        const world_map = WorldMap.init(rhi.*, 256, 256);
+        const world_map = try WorldMap.init(rhi.*, 256, 256);
 
         // ecs_registry and ecs_render_system are initialized directly in the struct
 

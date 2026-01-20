@@ -70,28 +70,25 @@ pub const DescriptorManager = struct {
 
         // Create UBOs
         for (0..rhi.MAX_FRAMES_IN_FLIGHT) |i| {
-            self.global_ubos[i] = Utils.createVulkanBuffer(vulkan_device, @sizeOf(GlobalUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch return error.VulkanError;
+            self.global_ubos[i] = try Utils.createVulkanBuffer(vulkan_device, @sizeOf(GlobalUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
             try Utils.checkVk(c.vkMapMemory(vulkan_device.vk_device, self.global_ubos[i].memory, 0, @sizeOf(GlobalUniforms), 0, &self.global_ubos_mapped[i]));
 
-            self.shadow_ubos[i] = Utils.createVulkanBuffer(vulkan_device, @sizeOf(ShadowUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch return error.VulkanError;
+            self.shadow_ubos[i] = try Utils.createVulkanBuffer(vulkan_device, @sizeOf(ShadowUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
             try Utils.checkVk(c.vkMapMemory(vulkan_device.vk_device, self.shadow_ubos[i].memory, 0, @sizeOf(ShadowUniforms), 0, &self.shadow_ubos_mapped[i]));
         }
 
-        // Create dummy textures for materials without textures.
-        // Frame index set to 1 to isolate from frame 0's lifecycle.
+        // Create dummy textures. setCurrentFrame(1) ensures they aren't tied to frame 0's deletion queue.
         resource_manager.setCurrentFrame(1);
 
-        // Create dummy textures
         const white_pixel = [_]u8{ 255, 255, 255, 255 };
-        self.dummy_texture = resource_manager.createTexture(1, 1, .rgba, .{}, &white_pixel);
+        self.dummy_texture = try resource_manager.createTexture(1, 1, .rgba, .{}, &white_pixel);
 
         const normal_neutral = [_]u8{ 128, 128, 255, 0 };
-        self.dummy_normal_texture = resource_manager.createTexture(1, 1, .rgba, .{}, &normal_neutral);
+        self.dummy_normal_texture = try resource_manager.createTexture(1, 1, .rgba, .{}, &normal_neutral);
 
         const roughness_neutral = [_]u8{ 255, 0, 0, 255 };
-        self.dummy_roughness_texture = resource_manager.createTexture(1, 1, .rgba, .{}, &roughness_neutral);
+        self.dummy_roughness_texture = try resource_manager.createTexture(1, 1, .rgba, .{}, &roughness_neutral);
 
-        // FLUSH transfers immediately so textures are ready.
         try resource_manager.flushTransfer();
 
         // Create Descriptor Pool

@@ -370,17 +370,11 @@ pub const TextureAtlas = struct {
 
         // Create textures using RHI with NEAREST filtering for sharp pixel art, but with mipmaps for performance
         // Use SRGB format for diffuse/albedo - GPU will automatically convert to linear during sampling
-        const diffuse_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba_srgb, .{
+        const diffuse_texture = try Texture.init(rhi_instance, atlas_size, atlas_size, .rgba_srgb, .{
             .min_filter = .nearest_mipmap_linear,
             .mag_filter = .nearest,
             .generate_mipmaps = true,
         }, diffuse_pixels);
-
-        if (diffuse_texture.handle == 0) {
-            log.log.err("Failed to create diffuse texture atlas", .{});
-            // diffuse_pixels, normal_pixels, roughness_pixels are freed by defer
-            return error.TextureCreationFailure;
-        }
 
         var normal_texture: ?Texture = null;
         var roughness_texture: ?Texture = null;
@@ -388,30 +382,26 @@ pub const TextureAtlas = struct {
         if (has_pbr) {
             // Normal maps must stay as linear (UNORM) - they contain direction data, not colors
             if (normal_pixels) |np| {
-                const tex = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+                normal_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
                     .min_filter = .linear_mipmap_linear,
                     .mag_filter = .linear,
                     .generate_mipmaps = true,
-                }, np);
-                if (tex.handle != 0) {
-                    normal_texture = tex;
-                } else {
-                    log.log.warn("Failed to create normal map atlas", .{});
-                }
+                }, np) catch |err| blk: {
+                    log.log.warn("Failed to create normal map atlas: {}", .{err});
+                    break :blk null;
+                };
             }
 
             // Roughness/displacement are linear data, not colors - use UNORM
             if (roughness_pixels) |rp| {
-                const tex = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
+                roughness_texture = Texture.init(rhi_instance, atlas_size, atlas_size, .rgba, .{
                     .min_filter = .linear_mipmap_linear,
                     .mag_filter = .linear,
                     .generate_mipmaps = true,
-                }, rp);
-                if (tex.handle != 0) {
-                    roughness_texture = tex;
-                } else {
-                    log.log.warn("Failed to create roughness map atlas", .{});
-                }
+                }, rp) catch |err| blk: {
+                    log.log.warn("Failed to create roughness map atlas: {}", .{err});
+                    break :blk null;
+                };
             }
 
             log.log.info("PBR atlases created: {} textures with {} normal maps", .{ loaded_count, pbr_count });
