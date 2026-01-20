@@ -67,30 +67,53 @@ pub const DescriptorManager = struct {
             .dummy_normal_texture = 0,
             .dummy_roughness_texture = 0,
         };
-        errdefer self.deinit();
 
         // Create UBOs
         for (0..rhi.MAX_FRAMES_IN_FLIGHT) |i| {
-            self.global_ubos[i] = try Utils.createVulkanBuffer(vulkan_device, @sizeOf(GlobalUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-            try Utils.checkVk(c.vkMapMemory(vulkan_device.vk_device, self.global_ubos[i].memory, 0, @sizeOf(GlobalUniforms), 0, &self.global_ubos_mapped[i]));
+            self.global_ubos[i] = Utils.createVulkanBuffer(vulkan_device, @sizeOf(GlobalUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch |err| {
+                self.deinit();
+                return err;
+            };
+            Utils.checkVk(c.vkMapMemory(vulkan_device.vk_device, self.global_ubos[i].memory, 0, @sizeOf(GlobalUniforms), 0, &self.global_ubos_mapped[i])) catch |err| {
+                self.deinit();
+                return err;
+            };
 
-            self.shadow_ubos[i] = try Utils.createVulkanBuffer(vulkan_device, @sizeOf(ShadowUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-            try Utils.checkVk(c.vkMapMemory(vulkan_device.vk_device, self.shadow_ubos[i].memory, 0, @sizeOf(ShadowUniforms), 0, &self.shadow_ubos_mapped[i]));
+            self.shadow_ubos[i] = Utils.createVulkanBuffer(vulkan_device, @sizeOf(ShadowUniforms), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) catch |err| {
+                self.deinit();
+                return err;
+            };
+            Utils.checkVk(c.vkMapMemory(vulkan_device.vk_device, self.shadow_ubos[i].memory, 0, @sizeOf(ShadowUniforms), 0, &self.shadow_ubos_mapped[i])) catch |err| {
+                self.deinit();
+                return err;
+            };
         }
 
         // Create dummy textures at frame index 1 to isolate from frame 0's lifecycle.
         resource_manager.setCurrentFrame(1);
 
         const white_pixel = [_]u8{ 255, 255, 255, 255 };
-        self.dummy_texture = try resource_manager.createTexture(1, 1, .rgba, .{}, &white_pixel);
+        self.dummy_texture = resource_manager.createTexture(1, 1, .rgba, .{}, &white_pixel) catch |err| {
+            self.deinit();
+            return err;
+        };
 
         const normal_neutral = [_]u8{ 128, 128, 255, 0 };
-        self.dummy_normal_texture = try resource_manager.createTexture(1, 1, .rgba, .{}, &normal_neutral);
+        self.dummy_normal_texture = resource_manager.createTexture(1, 1, .rgba, .{}, &normal_neutral) catch |err| {
+            self.deinit();
+            return err;
+        };
 
         const roughness_neutral = [_]u8{ 255, 0, 0, 255 };
-        self.dummy_roughness_texture = try resource_manager.createTexture(1, 1, .rgba, .{}, &roughness_neutral);
+        self.dummy_roughness_texture = resource_manager.createTexture(1, 1, .rgba, .{}, &roughness_neutral) catch |err| {
+            self.deinit();
+            return err;
+        };
 
-        try resource_manager.flushTransfer();
+        resource_manager.flushTransfer() catch |err| {
+            self.deinit();
+            return err;
+        };
 
         // Create Descriptor Pool
         var pool_sizes = [_]c.VkDescriptorPoolSize{
@@ -105,7 +128,10 @@ pub const DescriptorManager = struct {
         pool_info.maxSets = 100;
         pool_info.flags = c.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
-        try Utils.checkVk(c.vkCreateDescriptorPool(vulkan_device.vk_device, &pool_info, null, &self.descriptor_pool));
+        Utils.checkVk(c.vkCreateDescriptorPool(vulkan_device.vk_device, &pool_info, null, &self.descriptor_pool)) catch |err| {
+            self.deinit();
+            return err;
+        };
 
         // Create Descriptor Set Layout
         var bindings = [_]c.VkDescriptorSetLayoutBinding{
@@ -136,7 +162,10 @@ pub const DescriptorManager = struct {
         layout_info.bindingCount = bindings.len;
         layout_info.pBindings = &bindings[0];
 
-        try Utils.checkVk(c.vkCreateDescriptorSetLayout(vulkan_device.vk_device, &layout_info, null, &self.descriptor_set_layout));
+        Utils.checkVk(c.vkCreateDescriptorSetLayout(vulkan_device.vk_device, &layout_info, null, &self.descriptor_set_layout)) catch |err| {
+            self.deinit();
+            return err;
+        };
 
         // Allocate Descriptor Sets
         for (0..rhi.MAX_FRAMES_IN_FLIGHT) |i| {
@@ -146,8 +175,14 @@ pub const DescriptorManager = struct {
             alloc_info.descriptorSetCount = 1;
             alloc_info.pSetLayouts = &self.descriptor_set_layout;
 
-            try Utils.checkVk(c.vkAllocateDescriptorSets(vulkan_device.vk_device, &alloc_info, &self.descriptor_sets[i]));
-            try Utils.checkVk(c.vkAllocateDescriptorSets(vulkan_device.vk_device, &alloc_info, &self.lod_descriptor_sets[i]));
+            Utils.checkVk(c.vkAllocateDescriptorSets(vulkan_device.vk_device, &alloc_info, &self.descriptor_sets[i])) catch |err| {
+                self.deinit();
+                return err;
+            };
+            Utils.checkVk(c.vkAllocateDescriptorSets(vulkan_device.vk_device, &alloc_info, &self.lod_descriptor_sets[i])) catch |err| {
+                self.deinit();
+                return err;
+            };
 
             // Write UBO descriptors immediately (they don't change)
             var buffer_info_global = c.VkDescriptorBufferInfo{

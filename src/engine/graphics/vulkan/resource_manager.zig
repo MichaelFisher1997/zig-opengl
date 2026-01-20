@@ -443,6 +443,7 @@ pub const ResourceManager = struct {
             const offset = staging.allocate(data.len) orelse return error.OutOfMemory;
 
             if (staging.mapped_ptr == null) return error.OutOfMemory;
+            if (staging.mapped_ptr == null) return error.OutOfMemory;
             const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + offset;
             @memcpy(dest[0..data.len], data);
 
@@ -593,6 +594,7 @@ pub const ResourceManager = struct {
         if (staging.allocate(data.len)) |offset| {
             if (staging.mapped_ptr == null) return error.OutOfMemory;
             // Async Path
+            if (staging.mapped_ptr == null) return error.OutOfMemory;
             const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + offset;
             @memcpy(dest[0..data.len], data);
 
