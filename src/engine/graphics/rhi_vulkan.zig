@@ -2570,9 +2570,9 @@ fn beginGPassInternal(ctx: *VulkanContext) void {
 
     // Debug: check for NULL handles
     if (command_buffer == null) std.log.err("CRITICAL: command_buffer is NULL for frame {}", .{current_frame});
-    if (ctx.g_render_pass == null) std.log.err("CRITICAL: g_render_pass is NULL");
-    if (ctx.g_framebuffer == null) std.log.err("CRITICAL: g_framebuffer is NULL");
-    if (ctx.pipeline_layout == null) std.log.err("CRITICAL: pipeline_layout is NULL");
+    if (ctx.g_render_pass == null) std.log.err("CRITICAL: g_render_pass is NULL", .{});
+    if (ctx.g_framebuffer == null) std.log.err("CRITICAL: g_framebuffer is NULL", .{});
+    if (ctx.pipeline_layout == null) std.log.err("CRITICAL: pipeline_layout is NULL", .{});
 
     var render_pass_info = std.mem.zeroes(c.VkRenderPassBeginInfo);
     render_pass_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
