@@ -109,3 +109,11 @@ jobs:
         ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-global
       run: |
         nix develop --command zig build test-integration
+
+    - name: Run world load smoke test (headless)
+      env:
+        ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-global
+        XDG_RUNTIME_DIR: /tmp/runtime-runner
+        WAYLAND_DISPLAY: headless
+      run: |
+        nix develop --command zig build run -Dsmoke-test=true

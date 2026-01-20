@@ -29,6 +29,7 @@ const screen_pkg = @import("screen.zig");
 const ScreenManager = screen_pkg.ScreenManager;
 const EngineContext = screen_pkg.EngineContext;
 const HomeScreen = @import("screens/home.zig").HomeScreen;
+const WorldScreen = @import("screens/world.zig").WorldScreen;
 
 pub const App = struct {
     allocator: std.mem.Allocator,
@@ -65,6 +66,7 @@ pub const App = struct {
     disable_gpass_draw: bool,
     disable_ssao: bool,
     disable_clouds: bool,
+    smoke_test_frames: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) !*App {
         // Load settings first to get window resolution
@@ -234,6 +236,7 @@ pub const App = struct {
             .disable_gpass_draw = disable_gpass_draw,
             .disable_ssao = disable_ssao,
             .disable_clouds = disable_clouds,
+            .smoke_test_frames = 0,
         };
 
         // EngineContext uses rhi as a pointer; App owns the instance.
@@ -255,8 +258,15 @@ pub const App = struct {
         }
 
         const engine_ctx = app.engineContext();
-        const home_screen = try HomeScreen.init(allocator, engine_ctx);
-        app.screen_manager.setScreen(home_screen.screen());
+        const build_options = @import("build_options");
+        if (build_options.smoke_test) {
+            log.log.info("SMOKE TEST MODE: Bypassing menu and loading world", .{});
+            const world_screen = try WorldScreen.init(allocator, engine_ctx, 12345, 0);
+            app.screen_manager.setScreen(world_screen.screen());
+        } else {
+            const home_screen = try HomeScreen.init(allocator, engine_ctx);
+            app.screen_manager.setScreen(home_screen.screen());
+        }
 
         return app;
     }
@@ -348,6 +358,15 @@ pub const App = struct {
         }
 
         self.rhi.endFrame();
+
+        const build_options = @import("build_options");
+        if (build_options.smoke_test) {
+            self.smoke_test_frames += 1;
+            if (self.smoke_test_frames >= 120) {
+                log.log.info("SMOKE TEST COMPLETE: 120 frames rendered. Exiting.", .{});
+                self.input.should_quit = true;
+            }
+        }
     }
 
     pub fn run(self: *App) !void {

@@ -8,6 +8,9 @@ pub fn build(b: *std.Build) void {
     const enable_debug_shadows = b.option(bool, "debug_shadows", "Enable debug shadow visualization resources") orelse false;
     options.addOption(bool, "debug_shadows", enable_debug_shadows);
 
+    const smoke_test = b.option(bool, "smoke-test", "Enable automated smoke test mode (auto-loads world and exits)") orelse false;
+    options.addOption(bool, "smoke_test", smoke_test);
+
     const zig_math = b.createModule(.{
         .root_source_file = b.path("libs/zig-math/math.zig"),
         .target = target,
