@@ -50,7 +50,7 @@ pub const WorldRenderer = struct {
             !(std.mem.eql(u8, val, "0") or std.mem.eql(u8, val, "false"))
         else
             false;
-        const vertex_capacity_mb: usize = if (safe_mode) 1024 else 6144;
+        const vertex_capacity_mb: usize = if (safe_mode) 1024 else 2048;
 
         if (safe_mode) {
             std.log.warn("ZIGCRAFT_SAFE_MODE enabled: GlobalVertexAllocator reduced to {}MB", .{vertex_capacity_mb});

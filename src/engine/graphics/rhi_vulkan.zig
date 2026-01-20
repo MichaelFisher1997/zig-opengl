@@ -2322,6 +2322,9 @@ fn recreateSwapchain(ctx: *VulkanContext) void {
 
 fn beginFrame(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
     if (ctx.gpu_fault_detected) return;
     if (ctx.frames.frame_in_progress) return;
 
@@ -2685,6 +2688,9 @@ fn computeSSAO(ctx_ptr: *anyopaque) void {
 
 fn endFrame(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
     if (!ctx.frames.frame_in_progress) return;
 
     if (ctx.main_pass_active) endMainPass(ctx_ptr);

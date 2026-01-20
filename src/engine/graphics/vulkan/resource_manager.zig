@@ -333,6 +333,19 @@ pub const ResourceManager = struct {
         region.size = data.len;
 
         c.vkCmdCopyBuffer(cmd, staging.buffer, buf.buffer, 1, &region);
+
+        // Ensure visibility for subsequent stages
+        var barrier = std.mem.zeroes(c.VkBufferMemoryBarrier);
+        barrier.sType = c.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        barrier.srcAccessMask = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = c.VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | c.VK_ACCESS_INDEX_READ_BIT | c.VK_ACCESS_SHADER_READ_BIT | c.VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer = buf.buffer;
+        barrier.offset = offset;
+        barrier.size = data.len;
+
+        c.vkCmdPipelineBarrier(cmd, c.VK_PIPELINE_STAGE_TRANSFER_BIT, c.VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | c.VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | c.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 0, null, 1, &barrier, 0, null);
     }
 
     pub fn mapBuffer(self: *ResourceManager, handle: rhi.BufferHandle) rhi.RhiError!?*anyopaque {
