@@ -2399,9 +2399,6 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
     }
 
     // Static descriptor updates (Atlases & Shadow maps)
-
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
     const cur_tex = ctx.current_texture;
     const cur_nor = ctx.current_normal_texture;
     const cur_rou = ctx.current_roughness_texture;
@@ -2968,7 +2965,11 @@ fn setTextureUniforms(ctx_ptr: *anyopaque, texture_enabled: bool, shadow_map_han
 fn beginCloudPass(ctx_ptr: *anyopaque, params: rhi.CloudParams) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frames.frame_in_progress) return;
-    if (!ctx.main_pass_active) beginMainPass(ctx_ptr);
+
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
+    if (!ctx.main_pass_active) beginMainPassInternal(ctx);
     if (!ctx.main_pass_active) return;
 
     // Use dedicated cloud pipeline
@@ -3004,7 +3005,11 @@ fn drawDebugShadowMap(ctx_ptr: *anyopaque, cascade_index: usize, depth_map_handl
     if (comptime !build_options.debug_shadows) return;
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frames.frame_in_progress) return;
-    if (!ctx.main_pass_active) beginMainPass(ctx_ptr);
+
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
+    if (!ctx.main_pass_active) beginMainPassInternal(ctx);
     if (!ctx.main_pass_active) return;
 
     if (ctx.debug_shadow.pipeline == null) return;
@@ -3029,8 +3034,6 @@ fn drawDebugShadowMap(ctx_ptr: *anyopaque, cascade_index: usize, depth_map_handl
     c.vkCmdPushConstants(command_buffer, ctx.debug_shadow.pipeline_layout.?, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
 
     // Update descriptor set with the depth texture
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
     const tex_entry = ctx.resources.textures.get(depth_map_handle);
 
     if (tex_entry) |tex| {
@@ -3315,12 +3318,14 @@ fn getFaultCount(ctx_ptr: *anyopaque) u32 {
 fn drawIndexed(ctx_ptr: *anyopaque, vbo_handle: rhi.BufferHandle, ebo_handle: rhi.BufferHandle, count: u32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frames.frame_in_progress) return;
-    if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) beginMainPass(ctx_ptr);
-
-    if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) return;
 
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
+
+    if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) beginMainPassInternal(ctx);
+
+    if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) return;
+
     const vbo_opt = ctx.resources.buffers.get(vbo_handle);
     const ebo_opt = ctx.resources.buffers.get(ebo_handle);
 
@@ -3357,15 +3362,17 @@ fn drawIndexed(ctx_ptr: *anyopaque, vbo_handle: rhi.BufferHandle, ebo_handle: rh
 fn drawIndirect(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, command_buffer: rhi.BufferHandle, offset: usize, draw_count: u32, stride: u32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frames.frame_in_progress) return;
-    if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) beginMainPass(ctx_ptr);
+
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
+    if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) beginMainPassInternal(ctx);
 
     if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) return;
 
     const use_shadow = ctx.shadow_system.pass_active;
     const use_g_pass = ctx.g_pass_active;
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
     const vbo_opt = ctx.resources.buffers.get(handle);
     const cmd_opt = ctx.resources.buffers.get(command_buffer);
 
@@ -3464,13 +3471,15 @@ fn drawIndirect(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, command_buffer: r
 fn drawInstance(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, instance_index: u32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frames.frame_in_progress) return;
-    if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) beginMainPass(ctx_ptr);
+
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
+    if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) beginMainPassInternal(ctx);
 
     const use_shadow = ctx.shadow_system.pass_active;
     const use_g_pass = ctx.g_pass_active;
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
     const vbo_opt = ctx.resources.buffers.get(handle);
 
     if (vbo_opt) |vbo| {
@@ -3530,20 +3539,20 @@ fn draw(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.Dra
 }
 
 fn drawOffset(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: rhi.DrawMode, offset: usize) void {
+    _ = mode;
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frames.frame_in_progress) return;
-    if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) beginMainPass(ctx_ptr);
 
-    // If we failed to start a pass (e.g. minimized window), abort draw
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
+    if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) beginMainPassInternal(ctx);
+
     if (!ctx.main_pass_active and !ctx.shadow_system.pass_active and !ctx.g_pass_active) return;
-
-    _ = mode;
 
     const use_shadow = ctx.shadow_system.pass_active;
     const use_g_pass = ctx.g_pass_active;
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
     const vbo_opt = ctx.resources.buffers.get(handle);
 
     if (vbo_opt) |vbo| {
@@ -3665,7 +3674,11 @@ fn pushConstants(ctx_ptr: *anyopaque, stages: rhi.ShaderStageFlags, offset: u32,
 fn begin2DPass(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frames.frame_in_progress) return;
-    if (!ctx.main_pass_active) beginMainPass(ctx_ptr);
+
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
+    if (!ctx.main_pass_active) beginMainPassInternal(ctx);
     if (!ctx.main_pass_active) return;
 
     ctx.ui_screen_width = screen_width;
@@ -3676,7 +3689,6 @@ fn begin2DPass(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void 
     const ui_vbo = ctx.ui_vbos[ctx.frames.current_frame];
     if (c.vkMapMemory(ctx.vulkan_device.vk_device, ui_vbo.memory, 0, ui_vbo.size, 0, &ctx.ui_mapped_ptr) != c.VK_SUCCESS) {
         std.log.err("Failed to map UI VBO memory!", .{});
-        ctx.ui_mapped_ptr = null;
     }
 
     // Bind UI pipeline and VBO
@@ -3684,8 +3696,8 @@ fn begin2DPass(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void 
     c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.ui_pipeline);
     ctx.terrain_pipeline_bound = false;
 
-    const offset: c.VkDeviceSize = 0;
-    c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vbo.buffer, &offset);
+    const offset_val: c.VkDeviceSize = 0;
+    c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vbo.buffer, &offset_val);
 
     // Set orthographic projection
     const proj = Mat4.orthographic(0, ctx.ui_screen_width, ctx.ui_screen_height, 0, -1, 1);
@@ -3958,33 +3970,6 @@ fn updateShadowUniforms(ctx_ptr: *anyopaque, params: rhi.ShadowParams) void {
         const mapped: *ShadowUniforms = @ptrCast(@alignCast(map_ptr));
         mapped.* = shadow_uniforms;
     }
-}
-
-fn drawSky(ctx_ptr: *anyopaque, params: rhi.SkyParams) void {
-    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    if (!ctx.frames.frame_in_progress) return;
-    if (!ctx.main_pass_active) beginMainPass(ctx_ptr);
-    if (!ctx.main_pass_active) return;
-
-    if (ctx.sky_pipeline == null) return;
-
-    const pc = SkyPushConstants{
-        .cam_forward = .{ params.cam_forward.x, params.cam_forward.y, params.cam_forward.z, 0.0 },
-        .cam_right = .{ params.cam_right.x, params.cam_right.y, params.cam_right.z, 0.0 },
-        .cam_up = .{ params.cam_up.x, params.cam_up.y, params.cam_up.z, 0.0 },
-        .sun_dir = .{ params.sun_dir.x, params.sun_dir.y, params.sun_dir.z, 0.0 },
-        .sky_color = .{ params.sky_color.x, params.sky_color.y, params.sky_color.z, 1.0 },
-        .horizon_color = .{ params.horizon_color.x, params.horizon_color.y, params.horizon_color.z, 1.0 },
-        .params = .{ params.aspect, params.tan_half_fov, params.sun_intensity, params.moon_intensity },
-        .time = .{ params.time, params.cam_pos.x, params.cam_pos.y, params.cam_pos.z },
-    };
-
-    const command_buffer = ctx.frames.command_buffers[ctx.frames.current_frame];
-    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.sky_pipeline);
-    c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.sky_pipeline_layout, 0, 1, &ctx.descriptors.descriptor_sets[ctx.frames.current_frame], 0, null);
-    ctx.terrain_pipeline_bound = false;
-    c.vkCmdPushConstants(command_buffer, ctx.sky_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(SkyPushConstants), &pc);
-    c.vkCmdDraw(command_buffer, 3, 1, 0, 0);
 }
 
 fn getNativeSkyPipeline(ctx_ptr: *anyopaque) u64 {
