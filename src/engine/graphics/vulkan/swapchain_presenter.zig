@@ -74,7 +74,9 @@ pub const SwapchainPresenter = struct {
         present_info.pSwapchains = &self.swapchain.handle;
         present_info.pImageIndices = &image_index;
 
+        self.vulkan_device.mutex.lock();
         const result = c.vkQueuePresentKHR(self.vulkan_device.queue, &present_info);
+        self.vulkan_device.mutex.unlock();
 
         if (result == c.VK_ERROR_OUT_OF_DATE_KHR or result == c.VK_SUBOPTIMAL_KHR or self.framebuffer_resized) {
             return error.OutOfDate;
