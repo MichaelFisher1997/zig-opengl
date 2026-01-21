@@ -25,6 +25,11 @@ pub const VulkanSwapchain = struct {
     msaa_color_memory: c.VkDeviceMemory = null,
     msaa_color_view: c.VkImageView = null,
 
+    // Headless mode
+    headless_mode: bool = false,
+    headless_image: c.VkImage = null,
+    headless_memory: c.VkDeviceMemory = null,
+
     // Resolution scaling
     pixel_width: u32 = 0,
     pixel_height: u32 = 0,
@@ -33,10 +38,14 @@ pub const VulkanSwapchain = struct {
     scale: f32 = 1.0,
 
     pub fn init(allocator: std.mem.Allocator, device: *const VulkanDevice, window: *c.SDL_Window, msaa_samples: u8) !VulkanSwapchain {
+        const skip_env = std.posix.getenv("ZIGCRAFT_SKIP_PRESENT");
+        const headless = if (skip_env) |val| (std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true")) else false;
+
         var self = VulkanSwapchain{
             .allocator = allocator,
             .device = device,
             .window = window,
+            .headless_mode = headless,
         };
         try self.create(msaa_samples);
         return self;
@@ -80,6 +89,11 @@ pub const VulkanSwapchain = struct {
         self.msaa_color_view = null;
         self.msaa_color_image = null;
         self.msaa_color_memory = null;
+
+        if (self.headless_image != null) c.vkDestroyImage(vk, self.headless_image, null);
+        if (self.headless_memory != null) c.vkFreeMemory(vk, self.headless_memory, null);
+        self.headless_image = null;
+        self.headless_memory = null;
     }
 
     pub fn recreate(self: *VulkanSwapchain, msaa_samples: u8) !void {
@@ -97,6 +111,54 @@ pub const VulkanSwapchain = struct {
     }
 
     fn createSwapchain(self: *VulkanSwapchain) !void {
+        if (self.headless_mode) {
+            std.log.info("VulkanSwapchain: Initializing in HEADLESS mode (offscreen)", .{});
+            self.image_format = c.VK_FORMAT_B8G8R8A8_UNORM;
+            self.extent = .{ .width = 1920, .height = 1080 };
+            self.pixel_width = 1920;
+            self.pixel_height = 1080;
+            self.logical_width = 1920;
+            self.logical_height = 1080;
+            self.scale = 1.0;
+
+            var image_info = std.mem.zeroes(c.VkImageCreateInfo);
+            image_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            image_info.imageType = c.VK_IMAGE_TYPE_2D;
+            image_info.extent = .{ .width = 1920, .height = 1080, .depth = 1 };
+            image_info.mipLevels = 1;
+            image_info.arrayLayers = 1;
+            image_info.format = self.image_format;
+            image_info.tiling = c.VK_IMAGE_TILING_OPTIMAL;
+            image_info.initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
+            image_info.usage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            image_info.samples = c.VK_SAMPLE_COUNT_1_BIT;
+            image_info.sharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
+
+            try checkVk(c.vkCreateImage(self.device.vk_device, &image_info, null, &self.headless_image));
+
+            var mem_reqs: c.VkMemoryRequirements = undefined;
+            c.vkGetImageMemoryRequirements(self.device.vk_device, self.headless_image, &mem_reqs);
+            var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
+            alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            alloc_info.allocationSize = mem_reqs.size;
+            alloc_info.memoryTypeIndex = try self.device.findMemoryType(mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            try checkVk(c.vkAllocateMemory(self.device.vk_device, &alloc_info, null, &self.headless_memory));
+            try checkVk(c.vkBindImageMemory(self.device.vk_device, self.headless_image, self.headless_memory, 0));
+
+            try self.images.append(self.allocator, self.headless_image);
+
+            var view_info = std.mem.zeroes(c.VkImageViewCreateInfo);
+            view_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            view_info.image = self.headless_image;
+            view_info.viewType = c.VK_IMAGE_VIEW_TYPE_2D;
+            view_info.format = self.image_format;
+            view_info.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
+            var view: c.VkImageView = null;
+            try checkVk(c.vkCreateImageView(self.device.vk_device, &view_info, null, &view));
+            try self.image_views.append(self.allocator, view);
+            return;
+        }
+
         var cap: c.VkSurfaceCapabilitiesKHR = undefined;
         _ = c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.device.physical_device, self.device.surface, &cap);
 
@@ -315,7 +377,7 @@ pub const VulkanSwapchain = struct {
             resolve_attachment.loadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             resolve_attachment.storeOp = c.VK_ATTACHMENT_STORE_OP_STORE;
             resolve_attachment.initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
-            resolve_attachment.finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            resolve_attachment.finalLayout = if (self.headless_mode) c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL else c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
             var color_ref = c.VkAttachmentReference{ .attachment = 0, .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
             var depth_ref = c.VkAttachmentReference{ .attachment = 1, .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
@@ -354,7 +416,7 @@ pub const VulkanSwapchain = struct {
             color_attachment.loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR;
             color_attachment.storeOp = c.VK_ATTACHMENT_STORE_OP_STORE;
             color_attachment.initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
-            color_attachment.finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            color_attachment.finalLayout = if (self.headless_mode) c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL else c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
             var depth_attachment = std.mem.zeroes(c.VkAttachmentDescription);
             depth_attachment.format = depth_format;
