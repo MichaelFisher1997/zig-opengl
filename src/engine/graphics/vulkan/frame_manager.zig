@@ -166,10 +166,8 @@ pub const FrameManager = struct {
         };
 
         if (swapchain.skip_present) {
-            std.log.debug("FrameManager.endFrame: skip_present is true, waiting for device idle", .{});
-            if (self.vulkan_device.vk_device != null) {
-                _ = c.vkDeviceWaitIdle(self.vulkan_device.vk_device);
-            }
+            std.log.debug("FrameManager.endFrame: skip_present is true, waiting for fence", .{});
+            _ = c.vkWaitForFences(self.vulkan_device.vk_device, 1, &self.in_flight_fences[self.current_frame], c.VK_TRUE, std.math.maxInt(u64));
         }
 
         self.current_frame = (self.current_frame + 1) % rhi.MAX_FRAMES_IN_FLIGHT;
