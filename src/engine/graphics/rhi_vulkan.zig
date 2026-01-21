@@ -1970,7 +1970,9 @@ fn createMainPipelines(ctx: *VulkanContext) !void {
 
 fn destroyMainRenderPassAndPipelines(ctx: *VulkanContext) void {
     if (ctx.vulkan_device.vk_device == null) return;
-    _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
+    if (!ctx.swapchain.skip_present) {
+        _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
+    }
 
     if (ctx.pipeline != null) {
         c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.pipeline, null);
@@ -2234,9 +2236,9 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
 
 fn deinit(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    if (ctx.vulkan_device.vk_device == null) return;
-
-    _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
+    if (!ctx.swapchain.skip_present and ctx.vulkan_device.vk_device != null) {
+        _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
+    }
 
     destroyMainRenderPassAndPipelines(ctx);
     destroyGPassResources(ctx);
@@ -2292,7 +2294,9 @@ fn destroyBuffer(ctx_ptr: *anyopaque, handle: rhi.BufferHandle) void {
 }
 
 fn recreateSwapchainInternal(ctx: *VulkanContext) void {
-    _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
+    if (!ctx.swapchain.skip_present and ctx.vulkan_device.vk_device != null) {
+        _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
+    }
 
     var w: c_int = 0;
     var h: c_int = 0;
@@ -2873,7 +2877,7 @@ fn endMainPass(ctx_ptr: *anyopaque) void {
 
 fn waitIdle(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    if (ctx.vulkan_device.vk_device != null) {
+    if (!ctx.swapchain.skip_present and ctx.vulkan_device.vk_device != null) {
         _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
     }
 }

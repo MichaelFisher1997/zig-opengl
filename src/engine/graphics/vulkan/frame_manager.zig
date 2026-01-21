@@ -166,8 +166,7 @@ pub const FrameManager = struct {
         };
 
         if (swapchain.skip_present) {
-            std.log.debug("FrameManager.endFrame: skip_present is true, waiting for fence", .{});
-            _ = c.vkWaitForFences(self.vulkan_device.vk_device, 1, &self.in_flight_fences[self.current_frame], c.VK_TRUE, std.math.maxInt(u64));
+            std.log.debug("FrameManager.endFrame: skip_present is true, skipping wait to avoid driver crash", .{});
         }
 
         self.current_frame = (self.current_frame + 1) % rhi.MAX_FRAMES_IN_FLIGHT;
