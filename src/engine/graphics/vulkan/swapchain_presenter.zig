@@ -88,29 +88,14 @@ pub const SwapchainPresenter = struct {
     }
 
     pub fn present(self: *SwapchainPresenter, wait_semaphore: c.VkSemaphore, image_index: u32) !void {
-        var present_info = std.mem.zeroes(c.VkPresentInfoKHR);
-        present_info.sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores = &wait_semaphore;
-        present_info.swapchainCount = 1;
-        present_info.pSwapchains = &self.swapchain.handle;
-        present_info.pImageIndices = &image_index;
-
-        std.log.debug("SwapchainPresenter.present: queue={any}, swapchain={any}, image_index={}, semaphore={any}, fp={any}", .{ self.vulkan_device.queue, self.swapchain.handle, image_index, wait_semaphore, self.fp_vkQueuePresentKHR });
-
-        if (self.vulkan_device.queue == null) {
-            std.log.err("CRITICAL: Queue is NULL", .{});
-            return error.VulkanError;
-        }
-        if (self.swapchain.handle == null) {
-            std.log.err("CRITICAL: Swapchain handle is NULL", .{});
-            return error.VulkanError;
-        }
-
         if (self.skip_present) {
-            std.log.debug("Skipping vkQueuePresentKHR", .{});
+            _ = wait_semaphore;
+            _ = image_index;
+            std.log.debug("Skipping vkQueuePresentKHR (headless mode)", .{});
             return;
         }
+
+        var present_info = std.mem.zeroes(c.VkPresentInfoKHR);
 
         self.vulkan_device.mutex.lock();
         // Use dynamically loaded function pointer
