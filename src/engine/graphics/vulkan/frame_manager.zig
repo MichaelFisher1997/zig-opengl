@@ -18,8 +18,12 @@ pub const FrameManager = struct {
     current_frame: usize = 0,
     current_image_index: u32 = 0,
     frame_in_progress: bool = false,
+    dry_run: bool = false,
 
     pub fn init(vulkan_device: *VulkanDevice) !FrameManager {
+        const skip_env = std.posix.getenv("ZIGCRAFT_SKIP_PRESENT");
+        const dry_run_active = if (skip_env) |val| (std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true")) else false;
+
         var self = FrameManager{
             .vulkan_device = vulkan_device,
             .command_pool = null,
@@ -27,6 +31,7 @@ pub const FrameManager = struct {
             .image_available_semaphores = undefined,
             .render_finished_semaphores = undefined,
             .in_flight_fences = undefined,
+            .dry_run = dry_run_active,
         };
 
         var pool_info = std.mem.zeroes(c.VkCommandPoolCreateInfo);
@@ -79,11 +84,13 @@ pub const FrameManager = struct {
         const device = self.vulkan_device.vk_device;
 
         // Wait for previous frame
-        _ = c.vkWaitForFences(device, 1, &self.in_flight_fences[self.current_frame], c.VK_TRUE, std.math.maxInt(u64));
+        if (!self.dry_run) {
+            _ = c.vkWaitForFences(device, 1, &self.in_flight_fences[self.current_frame], c.VK_TRUE, std.math.maxInt(u64));
+        }
 
         // Acquire image
-        if (swapchain.skip_present) {
-            // In headless mode, we skip image acquisition to avoid WSI/driver crashes.
+        if (self.dry_run) {
+            // In dry-run/headless mode, we skip image acquisition to avoid WSI/driver crashes.
             // We just use image 0 as our target.
             self.current_image_index = 0;
         } else {
@@ -97,7 +104,9 @@ pub const FrameManager = struct {
         }
 
         // Reset fence
-        _ = c.vkResetFences(device, 1, &self.in_flight_fences[self.current_frame]);
+        if (!self.dry_run) {
+            _ = c.vkResetFences(device, 1, &self.in_flight_fences[self.current_frame]);
+        }
 
         // Begin command buffer
         const cb = self.command_buffers[self.current_frame];
@@ -151,26 +160,24 @@ pub const FrameManager = struct {
         submit_info.commandBufferCount = cb_count;
         submit_info.pCommandBuffers = &command_buffers[0];
 
-        // Only signal render_finished_semaphore if we're going to present.
-        // If skip_present is true, signaling would leave an orphaned semaphore
-        // that crashes Lavapipe when any wait operation is called.
-        if (!swapchain.skip_present) {
-            submit_info.signalSemaphoreCount = 1;
-            submit_info.pSignalSemaphores = &self.render_finished_semaphores[self.current_frame];
-        }
-
-        try self.vulkan_device.submitGuarded(submit_info, self.in_flight_fences[self.current_frame]);
-
-        swapchain.present(self.render_finished_semaphores[self.current_frame], self.current_image_index) catch |err| {
-            if (err == error.OutOfDate) {
-                // Resize needed, handled by next frame
-            } else {
-                return err;
+        if (!self.dry_run) {
+            // Only signal render_finished_semaphore if we're going to present.
+            // If skip_present is true, signaling would leave an orphaned semaphore
+            // that crashes Lavapipe when any wait operation is called.
+            if (!swapchain.skip_present) {
+                submit_info.signalSemaphoreCount = 1;
+                submit_info.pSignalSemaphores = &self.render_finished_semaphores[self.current_frame];
             }
-        };
 
-        if (swapchain.skip_present) {
-            _ = c.vkWaitForFences(self.vulkan_device.vk_device, 1, &self.in_flight_fences[self.current_frame], c.VK_TRUE, std.math.maxInt(u64));
+            try self.vulkan_device.submitGuarded(submit_info, self.in_flight_fences[self.current_frame]);
+
+            swapchain.present(self.render_finished_semaphores[self.current_frame], self.current_image_index) catch |err| {
+                if (err == error.OutOfDate) {
+                    // Resize needed, handled by next frame
+                } else {
+                    return err;
+                }
+            };
         }
 
         self.current_frame = (self.current_frame + 1) % rhi.MAX_FRAMES_IN_FLIGHT;

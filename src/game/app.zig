@@ -287,43 +287,27 @@ pub const App = struct {
     }
 
     pub fn deinit(self: *App) void {
-        log.log.debug("App.deinit: ensuring GPU is idle", .{});
         self.rhi.waitIdle();
 
-        log.log.debug("App.deinit: cleaning up UI", .{});
         if (self.ui) |*u| u.deinit();
 
-        log.log.debug("App.deinit: cleaning up screen manager", .{});
         self.screen_manager.deinit();
 
-        log.log.debug("App.deinit: cleaning up render graph", .{});
         self.render_graph.deinit();
-        log.log.debug("App.deinit: cleaning up atmosphere system", .{});
         self.atmosphere_system.deinit();
-        log.log.debug("App.deinit: cleaning up material system", .{});
         self.material_system.deinit();
-        log.log.debug("App.deinit: cleaning up audio system", .{});
         self.audio_system.deinit();
-        log.log.debug("App.deinit: cleaning up atlas", .{});
         self.atlas.deinit();
-        log.log.debug("App.deinit: cleaning up env map", .{});
         if (self.env_map) |*t| t.deinit();
-        log.log.debug("App.deinit: cleaning up resource pack manager", .{});
         self.resource_pack_manager.deinit();
-        log.log.debug("App.deinit: cleaning up settings", .{});
         settings_pkg.persistence.deinit(&self.settings, self.allocator);
         settings_pkg.deinitPresets(self.allocator);
-        log.log.debug("App.deinit: destroying shader", .{});
         if (self.shader != rhi_pkg.InvalidShaderHandle) self.rhi.destroyShader(self.shader);
-        log.log.debug("App.deinit: cleaning up RHI", .{});
         self.rhi.deinit();
 
-        log.log.debug("App.deinit: cleaning up input", .{});
         self.input.deinit();
-        log.log.debug("App.deinit: cleaning up window manager", .{});
         self.window_manager.deinit();
 
-        log.log.debug("App.deinit: destroying App", .{});
         self.allocator.destroy(self);
     }
 

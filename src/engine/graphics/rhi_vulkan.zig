@@ -2234,7 +2234,9 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
 
 fn deinit(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
+    if (!ctx.frames.dry_run) {
+        _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
+    }
 
     destroyMainRenderPassAndPipelines(ctx);
     destroyGPassResources(ctx);
@@ -2871,7 +2873,7 @@ fn endMainPass(ctx_ptr: *anyopaque) void {
 
 fn waitIdle(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    if (ctx.vulkan_device.vk_device != null) {
+    if (!ctx.frames.dry_run and ctx.vulkan_device.vk_device != null) {
         _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
     }
 }
