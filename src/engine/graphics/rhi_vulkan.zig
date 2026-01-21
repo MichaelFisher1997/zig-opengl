@@ -2253,6 +2253,39 @@ fn deinit(ctx_ptr: *anyopaque) void {
     }
     if (ctx.cloud_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.cloud_pipeline_layout, null);
 
+    // Destroy internal buffers and resources
+    // Helper to destroy raw VulkanBuffers
+    const device = ctx.vulkan_device.vk_device;
+    {
+        if (ctx.model_ubo.buffer != null) c.vkDestroyBuffer(device, ctx.model_ubo.buffer, null);
+        if (ctx.model_ubo.memory != null) c.vkFreeMemory(device, ctx.model_ubo.memory, null);
+
+        if (ctx.dummy_instance_buffer.buffer != null) c.vkDestroyBuffer(device, ctx.dummy_instance_buffer.buffer, null);
+        if (ctx.dummy_instance_buffer.memory != null) c.vkFreeMemory(device, ctx.dummy_instance_buffer.memory, null);
+
+        if (ctx.ssao_kernel_ubo.buffer != null) c.vkDestroyBuffer(device, ctx.ssao_kernel_ubo.buffer, null);
+        if (ctx.ssao_kernel_ubo.memory != null) c.vkFreeMemory(device, ctx.ssao_kernel_ubo.memory, null);
+
+        for (ctx.ui_vbos) |buf| {
+            if (buf.buffer != null) c.vkDestroyBuffer(device, buf.buffer, null);
+            if (buf.memory != null) c.vkFreeMemory(device, buf.memory, null);
+        }
+    }
+
+    if (comptime build_options.debug_shadows) {
+        if (ctx.debug_shadow.vbo.buffer != null) c.vkDestroyBuffer(device, ctx.debug_shadow.vbo.buffer, null);
+        if (ctx.debug_shadow.vbo.memory != null) c.vkFreeMemory(device, ctx.debug_shadow.vbo.memory, null);
+    }
+    // Note: cloud_vbo is managed by resource manager and destroyed there
+
+    // Destroy dummy textures
+    ctx.resources.destroyTexture(ctx.dummy_texture);
+    ctx.resources.destroyTexture(ctx.dummy_normal_texture);
+    ctx.resources.destroyTexture(ctx.dummy_roughness_texture);
+    if (ctx.dummy_shadow_view != null) c.vkDestroyImageView(ctx.vulkan_device.vk_device, ctx.dummy_shadow_view, null);
+    if (ctx.dummy_shadow_image != null) c.vkDestroyImage(ctx.vulkan_device.vk_device, ctx.dummy_shadow_image, null);
+    if (ctx.dummy_shadow_memory != null) c.vkFreeMemory(ctx.vulkan_device.vk_device, ctx.dummy_shadow_memory, null);
+
     ctx.shadow_system.deinit(ctx.vulkan_device.vk_device);
 
     ctx.descriptors.deinit();
