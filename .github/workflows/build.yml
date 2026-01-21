@@ -116,6 +116,10 @@ jobs:
         XDG_RUNTIME_DIR: /tmp/runtime-runner
         WAYLAND_DISPLAY: headless
         VK_ICD_FILENAMES: /run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json
+        # Skip presentation to avoid Lavapipe/Wayland driver crash in CI
+        ZIGCRAFT_SKIP_PRESENT: "1"
+        # Limit frames to 3 to avoid swapchain deadlock when skipping present
+        ZIGCRAFT_SMOKE_FRAMES: "3"
       run: |
         # Find the actual path to the mesa driver in the nix store
         LVP_PATH=$(nix build --no-link --print-out-paths nixpkgs#mesa.drivers)/share/vulkan/icd.d/lvp_icd.x86_64.json

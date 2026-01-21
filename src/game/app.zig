@@ -377,8 +377,15 @@ pub const App = struct {
         const build_options = @import("build_options");
         if (build_options.smoke_test) {
             self.smoke_test_frames += 1;
-            if (self.smoke_test_frames >= 120) {
-                log.log.info("SMOKE TEST COMPLETE: 120 frames rendered. Exiting.", .{});
+            var target_frames: u32 = 120;
+            if (std.posix.getenv("ZIGCRAFT_SMOKE_FRAMES")) |val| {
+                if (std.fmt.parseInt(u32, val, 10)) |parsed| {
+                    target_frames = parsed;
+                } else |_| {}
+            }
+
+            if (self.smoke_test_frames >= target_frames) {
+                log.log.info("SMOKE TEST COMPLETE: {} frames rendered. Exiting.", .{target_frames});
                 self.input.should_quit = true;
             }
         }
