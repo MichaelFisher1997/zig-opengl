@@ -105,9 +105,9 @@ pub const SwapchainPresenter = struct {
 
         if (self.skip_present) {
             std.log.debug("Skipping vkQueuePresentKHR", .{});
-            // Wait for GPU to complete all work to avoid leaving semaphores in invalid state
-            // and prevent driver/WSI crashes when present is skipped
-            _ = c.vkDeviceWaitIdle(self.vulkan_device.vk_device);
+            // Wait for graphics queue to complete to avoid leaving semaphores in invalid state.
+            // Use vkQueueWaitIdle instead of vkDeviceWaitIdle to avoid WSI layer issues in Lavapipe.
+            _ = c.vkQueueWaitIdle(self.vulkan_device.queue);
             return;
         }
 
