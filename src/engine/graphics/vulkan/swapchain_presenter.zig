@@ -21,6 +21,7 @@ pub const SwapchainPresenter = struct {
 
     // Dynamic function pointers for extensions
     fp_vkQueuePresentKHR: c.PFN_vkQueuePresentKHR = null,
+    skip_present: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, vulkan_device: *VulkanDevice, window: *c.SDL_Window, msaa_samples: u8) !SwapchainPresenter {
         const swapchain = try VulkanSwapchain.init(allocator, vulkan_device, window, msaa_samples);
@@ -32,6 +33,10 @@ pub const SwapchainPresenter = struct {
             return error.ExtensionNotPresent;
         }
 
+        const skip_env = std.posix.getenv("ZIGCRAFT_SKIP_PRESENT");
+        const skip = if (skip_env) |val| (std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true")) else false;
+        if (skip) std.log.warn("ZIGCRAFT_SKIP_PRESENT enabled: Skipping vkQueuePresentKHR (will deadlock after swapchain exhaustion)", .{});
+
         return SwapchainPresenter{
             .allocator = allocator,
             .vulkan_device = vulkan_device,
@@ -39,6 +44,7 @@ pub const SwapchainPresenter = struct {
             .swapchain = swapchain,
             .msaa_samples = msaa_samples,
             .fp_vkQueuePresentKHR = @ptrCast(fp_present),
+            .skip_present = skip,
         };
     }
 
@@ -95,6 +101,11 @@ pub const SwapchainPresenter = struct {
         if (self.swapchain.handle == null) {
             std.log.err("CRITICAL: Swapchain handle is NULL", .{});
             return error.VulkanError;
+        }
+
+        if (self.skip_present) {
+            std.log.debug("Skipping vkQueuePresentKHR", .{});
+            return;
         }
 
         self.vulkan_device.mutex.lock();
