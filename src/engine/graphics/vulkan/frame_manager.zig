@@ -145,8 +145,13 @@ pub const FrameManager = struct {
         submit_info.commandBufferCount = cb_count;
         submit_info.pCommandBuffers = &command_buffers[0];
 
-        submit_info.signalSemaphoreCount = 1;
-        submit_info.pSignalSemaphores = &self.render_finished_semaphores[self.current_frame];
+        // Only signal render_finished_semaphore if we're going to present.
+        // If skip_present is true, signaling would leave an orphaned semaphore
+        // that crashes Lavapipe when any wait operation is called.
+        if (!swapchain.skip_present) {
+            submit_info.signalSemaphoreCount = 1;
+            submit_info.pSignalSemaphores = &self.render_finished_semaphores[self.current_frame];
+        }
 
         std.log.debug("FrameManager.endFrame: calling submitGuarded", .{});
         try self.vulkan_device.submitGuarded(submit_info, self.in_flight_fences[self.current_frame]);
