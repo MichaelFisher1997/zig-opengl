@@ -165,6 +165,14 @@ pub const FrameManager = struct {
             }
         };
 
+        // If we are skipping presentation, we must wait for the GPU to finish
+        // before we can safely reuse resources or return to the main loop,
+        // because we won't have the swapchain presentation to provide implicit synchronization.
+        if (swapchain.skip_present) {
+            std.log.debug("FrameManager.endFrame: skip_present is true, waiting for fence", .{});
+            _ = c.vkWaitForFences(self.vulkan_device.vk_device, 1, &self.in_flight_fences[self.current_frame], c.VK_TRUE, std.math.maxInt(u64));
+        }
+
         self.current_frame = (self.current_frame + 1) % rhi.MAX_FRAMES_IN_FLIGHT;
         self.frame_in_progress = false;
         std.log.debug("FrameManager.endFrame: done", .{});
