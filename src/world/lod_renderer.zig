@@ -150,3 +150,144 @@ pub fn LODRenderer(comptime RHI: type) type {
         }
     };
 }
+
+// Tests
+test "LODRenderer init/deinit lifecycle" {
+    const allocator = std.testing.allocator;
+
+    const MockRHIState = struct {
+        buffers_created: u32 = 0,
+        buffers_destroyed: u32 = 0,
+    };
+
+    const MockRHI = struct {
+        state: *MockRHIState,
+
+        pub fn createBuffer(self: @This(), _: usize, _: anytype) !u32 {
+            self.state.buffers_created += 1;
+            return self.state.buffers_created;
+        }
+        pub fn destroyBuffer(self: @This(), _: u32) void {
+            self.state.buffers_destroyed += 1;
+        }
+        pub fn getFrameIndex(_: @This()) usize {
+            return 0;
+        }
+        pub fn setModelMatrix(_: @This(), _: Mat4, _: Vec3, _: f32) void {}
+        pub fn draw(_: @This(), _: u32, _: u32, _: anytype) void {}
+    };
+
+    var mock_state = MockRHIState{};
+    const mock_rhi = MockRHI{ .state = &mock_state };
+
+    const Renderer = LODRenderer(MockRHI);
+    const renderer = try Renderer.init(allocator, mock_rhi);
+
+    // Verify init created buffers for each frame in flight
+    try std.testing.expectEqual(@as(u32, rhi_types.MAX_FRAMES_IN_FLIGHT), mock_state.buffers_created);
+    try std.testing.expectEqual(@as(u32, 0), mock_state.buffers_destroyed);
+
+    renderer.deinit();
+
+    // Verify deinit destroyed all buffers
+    try std.testing.expectEqual(@as(u32, rhi_types.MAX_FRAMES_IN_FLIGHT), mock_state.buffers_destroyed);
+}
+
+test "LODRenderer render draw path" {
+    const allocator = std.testing.allocator;
+
+    const MockRHIState = struct {
+        draw_calls: u32 = 0,
+        set_matrix_calls: u32 = 0,
+        last_vertex_count: u32 = 0,
+        last_buffer_handle: u32 = 0,
+    };
+
+    const MockRHI = struct {
+        state: *MockRHIState,
+
+        pub fn createBuffer(_: @This(), _: usize, _: anytype) !u32 {
+            return 1;
+        }
+        pub fn destroyBuffer(_: @This(), _: u32) void {}
+        pub fn getFrameIndex(_: @This()) usize {
+            return 0;
+        }
+        pub fn setModelMatrix(self: @This(), _: Mat4, _: Vec3, _: f32) void {
+            self.state.set_matrix_calls += 1;
+        }
+        pub fn draw(self: @This(), handle: u32, count: u32, _: anytype) void {
+            self.state.draw_calls += 1;
+            self.state.last_buffer_handle = handle;
+            self.state.last_vertex_count = count;
+        }
+    };
+
+    var mock_state = MockRHIState{};
+    const mock_rhi = MockRHI{ .state = &mock_state };
+
+    const Renderer = LODRenderer(MockRHI);
+    const renderer = try Renderer.init(allocator, mock_rhi);
+    defer renderer.deinit();
+
+    // Create mock mesh
+    var mesh = LODMesh.init(allocator, .lod1);
+    mesh.buffer_handle = 42;
+    mesh.vertex_count = 100;
+    mesh.ready = true;
+
+    // Create mock LODChunk in renderable state
+    var chunk = LODChunk.init(0, 0, .lod1);
+    chunk.state = .renderable;
+
+    // Create mock manager with meshes and regions
+    const MeshMap = std.HashMap(LODRegionKey, *LODMesh, LODRegionKeyContext, 80);
+    const RegionMap = std.HashMap(LODRegionKey, *LODChunk, LODRegionKeyContext, 80);
+
+    var meshes: [LODLevel.count]MeshMap = undefined;
+    var regions: [LODLevel.count]RegionMap = undefined;
+    for (0..LODLevel.count) |i| {
+        meshes[i] = MeshMap.init(allocator);
+        regions[i] = RegionMap.init(allocator);
+    }
+    defer {
+        for (0..LODLevel.count) |i| {
+            meshes[i].deinit();
+            regions[i].deinit();
+        }
+    }
+
+    // Add mesh and region at LOD1
+    const key = LODRegionKey{ .rx = 0, .rz = 0, .lod = .lod1 };
+    try meshes[1].put(key, &mesh);
+    try regions[1].put(key, &chunk);
+
+    const MockManager = struct {
+        meshes: *[LODLevel.count]MeshMap,
+        regions: *[LODLevel.count]RegionMap,
+
+        pub fn unloadLODWhereChunksLoaded(_: @This(), _: anytype, _: anytype) void {}
+        pub fn areAllChunksLoaded(_: @This(), _: anytype, _: anytype, _: anytype) bool {
+            return false; // Not loaded, so LOD should render
+        }
+    };
+
+    const mock_manager = MockManager{
+        .meshes = &meshes,
+        .regions = &regions,
+    };
+
+    // Create view-projection matrix that includes origin (where our chunk is)
+    // Use identity for simplicity - frustum will include everything
+    const view_proj = Mat4.identity;
+    const camera_pos = Vec3.zero;
+
+    // Call render
+    renderer.render(mock_manager, view_proj, camera_pos, null, null);
+
+    // Verify draw was called with correct parameters
+    try std.testing.expectEqual(@as(u32, 1), mock_state.draw_calls);
+    try std.testing.expectEqual(@as(u32, 1), mock_state.set_matrix_calls);
+    try std.testing.expectEqual(@as(u32, 42), mock_state.last_buffer_handle);
+    try std.testing.expectEqual(@as(u32, 100), mock_state.last_vertex_count);
+}
