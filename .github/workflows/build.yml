@@ -21,7 +21,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
@@ -72,12 +72,14 @@ jobs:
 
     - name: Run unit tests
       run: nix develop --command zig build test
+      env:
+        ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-global
 
   integration-test:
     permissions:
       contents: read
       id-token: write
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
@@ -92,9 +94,37 @@ jobs:
         restore-prefixes-first-match: nix-${{ runner.os }}-
         paths: ~/.cache/nix
 
+    - name: Start headless Wayland compositor
+      run: |
+        mkdir -p /tmp/runtime-runner
+        chmod 700 /tmp/runtime-runner
+        export XDG_RUNTIME_DIR=/tmp/runtime-runner
+        nix develop --command weston --socket=headless --backend=headless-backend.so --width=1280 --height=720 &
+        echo "WAYLAND_DISPLAY=headless" >> $GITHUB_ENV
+        echo "XDG_RUNTIME_DIR=/tmp/runtime-runner" >> $GITHUB_ENV
+        sleep 5 # Wait for Weston to start up properly
+
     - name: Run integration smoke test
       env:
-        XDG_RUNTIME_DIR: /tmp/runtime-runner
+        ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-global
       run: |
-        mkdir -p $XDG_RUNTIME_DIR
-        xvfb-run -a nix develop --command zig build test-integration
+        nix develop --command zig build test-integration
+
+    - name: Run world load smoke test (headless)
+      env:
+        ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-global
+        XDG_RUNTIME_DIR: /tmp/runtime-runner
+        WAYLAND_DISPLAY: headless
+        VK_ICD_FILENAMES: /run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json
+        # Skip presentation and use dry-run mode to avoid driver crashes in CI
+        # Using build option -Dskip-present=true to guarantee it's baked in
+        # 3 frames is enough to test multi-frame synchronization logic in dry-run
+        ZIGCRAFT_SMOKE_FRAMES: "3"
+        ZIGCRAFT_SAFE_MODE: "1"
+      run: |
+        # Find the actual path to the mesa driver and validation layers in the nix store
+        LVP_PATH=$(nix build --no-link --print-out-paths nixpkgs#mesa.drivers)/share/vulkan/icd.d/lvp_icd.x86_64.json
+        LAYER_PATH=$(nix build --no-link --print-out-paths nixpkgs#vulkan-validation-layers)/share/vulkan/explicit_layer.d
+        export VK_ICD_FILENAMES=$LVP_PATH
+        export VK_LAYER_PATH=$LAYER_PATH
+        nix develop --command zig build run -Dsmoke-test=true -Dskip-present=true

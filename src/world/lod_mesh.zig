@@ -218,7 +218,7 @@ pub const LODMesh = struct {
     }
 
     /// Upload pending vertices to GPU
-    pub fn upload(self: *LODMesh, rhi: RHI) void {
+    pub fn upload(self: *LODMesh, rhi: RHI) rhi_mod.RhiError!void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -241,12 +241,12 @@ pub const LODMesh = struct {
             if (self.buffer_handle != 0) {
                 rhi.destroyBuffer(self.buffer_handle);
             }
-            self.buffer_handle = rhi.createBuffer(needed_capacity, .vertex);
+            self.buffer_handle = try rhi.createBuffer(needed_capacity, .vertex);
             self.capacity = @intCast(needed_capacity / @sizeOf(Vertex));
         }
 
         // Upload data
-        rhi.uploadBuffer(self.buffer_handle, std.mem.sliceAsBytes(pending));
+        try rhi.uploadBuffer(self.buffer_handle, std.mem.sliceAsBytes(pending));
         self.vertex_count = @intCast(pending.len);
 
         self.allocator.free(pending);

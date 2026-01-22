@@ -29,6 +29,7 @@ const screen_pkg = @import("screen.zig");
 const ScreenManager = screen_pkg.ScreenManager;
 const EngineContext = screen_pkg.EngineContext;
 const HomeScreen = @import("screens/home.zig").HomeScreen;
+const WorldScreen = @import("screens/world.zig").WorldScreen;
 
 pub const App = struct {
     allocator: std.mem.Allocator,
@@ -65,6 +66,7 @@ pub const App = struct {
     disable_gpass_draw: bool,
     disable_ssao: bool,
     disable_clouds: bool,
+    smoke_test_frames: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) !*App {
         // Load settings first to get window resolution
@@ -77,18 +79,22 @@ pub const App = struct {
 
         const settings = settings_pkg.persistence.load(allocator);
 
-        const wm = try WindowManager.init(allocator, true, settings.window_width, settings.window_height);
+        var wm = try WindowManager.init(allocator, true, settings.window_width, settings.window_height);
+        errdefer wm.deinit();
 
         var input = Input.init(allocator);
+        errdefer input.deinit();
         input.initWindowSize(wm.window);
         const time = Time.init();
 
         log.log.info("Initializing Vulkan backend...", .{});
         const rhi = try rhi_vulkan.createRHI(allocator, wm.window, null, settings.getShadowResolution(), settings.msaa_samples, settings.anisotropic_filtering);
+        errdefer rhi.deinit();
 
         try rhi.init(allocator, null);
 
         var resource_pack_manager = ResourcePackManager.init(allocator);
+        errdefer resource_pack_manager.deinit();
         try resource_pack_manager.scanPacks();
         if (resource_pack_manager.packExists(settings.texture_pack)) {
             try resource_pack_manager.setActivePack(settings.texture_pack);
@@ -161,6 +167,8 @@ pub const App = struct {
         }
 
         const atlas = try TextureAtlas.init(allocator, rhi, &resource_pack_manager, settings.max_texture_resolution);
+        var atlas_mut = atlas;
+        errdefer atlas_mut.deinit();
         atlas.bind(1);
         // Bind PBR textures if available
         atlas.bindNormal(6);
@@ -171,7 +179,7 @@ pub const App = struct {
         var env_map: ?Texture = null;
         if (!std.mem.eql(u8, settings.environment_map, "default")) {
             if (resource_pack_manager.loadImageFileFloat(settings.environment_map)) |tex_data| {
-                env_map = Texture.initFloat(rhi, tex_data.width, tex_data.height, tex_data.pixels);
+                env_map = try Texture.initFloat(rhi, tex_data.width, tex_data.height, tex_data.pixels);
                 env_map.?.bind(9);
                 log.log.info("Loaded Environment Map: {s}", .{settings.environment_map});
                 var td = tex_data;
@@ -180,25 +188,31 @@ pub const App = struct {
                 log.log.warn("Could not load environment map: {s}", .{settings.environment_map});
                 // Fallback to white
                 const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
-                env_map = Texture.initFloat(rhi, 1, 1, &white_pixel);
+                env_map = try Texture.initFloat(rhi, 1, 1, &white_pixel);
                 env_map.?.bind(9);
             }
         } else {
             // Default white
             const white_pixel = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
-            env_map = Texture.initFloat(rhi, 1, 1, &white_pixel);
+            env_map = try Texture.initFloat(rhi, 1, 1, &white_pixel);
             env_map.?.bind(9);
         }
+        errdefer if (env_map) |*t| t.deinit();
 
         const atmosphere_system = try AtmosphereSystem.init(allocator, rhi);
+        errdefer atmosphere_system.deinit();
         const audio_system = try AudioSystem.init(allocator);
+        errdefer audio_system.deinit();
 
         const ui = try UISystem.init(rhi, input.window_width, input.window_height);
+        var ui_mut = ui;
+        errdefer ui_mut.deinit();
 
         // Load custom bindings
         const input_mapper = InputSettings.loadAndReturnMapper(allocator);
 
         const app = try allocator.create(App);
+        errdefer allocator.destroy(app);
         app.* = .{
             .allocator = allocator,
             .window_manager = wm,
@@ -234,11 +248,15 @@ pub const App = struct {
             .disable_gpass_draw = disable_gpass_draw,
             .disable_ssao = disable_ssao,
             .disable_clouds = disable_clouds,
+            .smoke_test_frames = 0,
         };
+        errdefer app.screen_manager.deinit();
+        errdefer app.render_graph.deinit();
 
         // EngineContext uses rhi as a pointer; App owns the instance.
 
         app.material_system = try MaterialSystem.init(allocator, rhi, &app.atlas);
+        errdefer app.material_system.deinit();
 
         // Build RenderGraph (OCP: We can easily modify this list based on quality)
         if (!safe_render_mode) {
@@ -255,13 +273,22 @@ pub const App = struct {
         }
 
         const engine_ctx = app.engineContext();
-        const home_screen = try HomeScreen.init(allocator, engine_ctx);
-        app.screen_manager.setScreen(home_screen.screen());
+        const build_options = @import("build_options");
+        if (build_options.smoke_test) {
+            log.log.info("SMOKE TEST MODE: Bypassing menu and loading world", .{});
+            const world_screen = try WorldScreen.init(allocator, engine_ctx, 12345, 0);
+            app.screen_manager.setScreen(world_screen.screen());
+        } else {
+            const home_screen = try HomeScreen.init(allocator, engine_ctx);
+            app.screen_manager.setScreen(home_screen.screen());
+        }
 
         return app;
     }
 
     pub fn deinit(self: *App) void {
+        self.rhi.waitIdle();
+
         if (self.ui) |*u| u.deinit();
 
         self.screen_manager.deinit();
@@ -326,11 +353,9 @@ pub const App = struct {
         self.input.beginFrame();
         self.input.pollEvents();
 
-        self.rhi.setViewport(self.input.window_width, self.input.window_height);
         if (self.ui) |*u| u.resize(self.input.window_width, self.input.window_height);
 
-        // Update current screen. Transitions happen here.
-        try self.screen_manager.update(self.time.delta_time);
+        self.rhi.setViewport(self.input.window_width, self.input.window_height);
 
         // Check for GPU faults and attempt recovery
         self.rhi.recover() catch |err| {
@@ -338,16 +363,39 @@ pub const App = struct {
             self.input.should_quit = true;
         };
 
-        // Early out if no screen is active (e.g. during transition or shutdown)
-        if (self.screen_manager.stack.items.len == 0) return;
-
         self.rhi.beginFrame();
+        errdefer self.rhi.endFrame();
+
+        // Update current screen. Transitions happen here.
+        try self.screen_manager.update(self.time.delta_time);
+
+        // Early out if no screen is active (e.g. during transition or shutdown)
+        if (self.screen_manager.stack.items.len == 0) {
+            self.rhi.endFrame();
+            return;
+        }
 
         if (self.ui) |*u| {
             try self.screen_manager.draw(u);
         }
 
         self.rhi.endFrame();
+
+        const build_options = @import("build_options");
+        if (build_options.smoke_test) {
+            self.smoke_test_frames += 1;
+            var target_frames: u32 = 120;
+            if (std.posix.getenv("ZIGCRAFT_SMOKE_FRAMES")) |val| {
+                if (std.fmt.parseInt(u32, val, 10)) |parsed| {
+                    target_frames = parsed;
+                } else |_| {}
+            }
+
+            if (self.smoke_test_frames >= target_frames) {
+                log.log.info("SMOKE TEST COMPLETE: {} frames rendered. Exiting.", .{target_frames});
+                self.input.should_quit = true;
+            }
+        }
     }
 
     pub fn run(self: *App) !void {

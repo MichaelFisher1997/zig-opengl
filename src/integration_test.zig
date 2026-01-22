@@ -12,6 +12,48 @@ const testing = std.testing;
 const App = @import("game/app.zig").App;
 
 const WorldScreen = @import("game/screens/world.zig").WorldScreen;
+const Screen = @import("game/screen.zig");
+const rhi = @import("engine/graphics/rhi.zig");
+const c = @import("c.zig").c;
+
+const EngineContext = Screen.EngineContext;
+const IScreen = Screen.IScreen;
+
+const UploadScreen = struct {
+    context: EngineContext,
+    buffer: rhi.BufferHandle,
+    payload: [64]u8 = [_]u8{0} ** 64,
+    tick: u8 = 0,
+
+    pub const vtable = IScreen.VTable{
+        .deinit = deinit,
+        .update = update,
+    };
+
+    pub fn init(allocator: std.mem.Allocator, context: EngineContext) !*UploadScreen {
+        const upload_screen = try allocator.create(UploadScreen);
+        const buffer = try context.rhi.createBuffer(upload_screen.payload.len, .vertex);
+        upload_screen.* = .{ .context = context, .buffer = buffer };
+        return upload_screen;
+    }
+
+    fn deinit(ptr: *anyopaque) void {
+        const self: *UploadScreen = @ptrCast(@alignCast(ptr));
+        self.context.rhi.destroyBuffer(self.buffer);
+        self.context.allocator.destroy(self);
+    }
+
+    fn update(ptr: *anyopaque, _: f32) !void {
+        const self: *UploadScreen = @ptrCast(@alignCast(ptr));
+        self.payload[0] = self.tick;
+        self.tick +%= 1;
+        try self.context.rhi.updateBuffer(self.buffer, 0, self.payload[0..]);
+    }
+
+    pub fn screen(self: *UploadScreen) IScreen {
+        return Screen.makeScreen(@This(), self);
+    }
+};
 
 test "smoke test: launch, generate, render, exit" {
     const test_allocator = testing.allocator;
@@ -38,4 +80,27 @@ test "smoke test: launch, generate, render, exit" {
     const stats = world_screen.session.world.getStats();
 
     try testing.expect(stats.chunks_loaded > 0);
+
+    const upload_screen = try UploadScreen.init(test_allocator, app.engineContext());
+    app.screen_manager.setScreen(upload_screen.screen());
+
+    const frame_count = rhi.MAX_FRAMES_IN_FLIGHT + 2;
+    for (0..frame_count) |_| {
+        try app.runSingleFrame();
+    }
+
+    const resize_width: u32 = 1024;
+    const resize_height: u32 = 720;
+    app.window_manager.setSize(resize_width, resize_height);
+    app.input.initWindowSize(app.window_manager.window);
+    try app.runSingleFrame();
+
+    var actual_w: c_int = 0;
+    var actual_h: c_int = 0;
+    _ = c.SDL_GetWindowSizeInPixels(app.window_manager.window, &actual_w, &actual_h);
+    const extent = app.rhi.context().getNativeSwapchainExtent();
+    try testing.expectEqual(@as(u32, @intCast(actual_w)), extent[0]);
+    try testing.expectEqual(@as(u32, @intCast(actual_h)), extent[1]);
+
+    try testing.expectEqual(@as(u32, 0), app.rhi.getValidationErrorCount());
 }

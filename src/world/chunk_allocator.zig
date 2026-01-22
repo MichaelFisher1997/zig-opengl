@@ -28,12 +28,7 @@ pub const GlobalVertexAllocator = struct {
 
     pub fn init(allocator: std.mem.Allocator, rhi: RHI, capacity_mb: usize) !GlobalVertexAllocator {
         const capacity = capacity_mb * 1024 * 1024;
-        const buffer = rhi.createBuffer(capacity, .vertex);
-
-        if (buffer == 0) {
-            std.log.err("Failed to create GlobalVertexAllocator buffer of {}MB!", .{capacity_mb});
-            return error.OutOfMemory;
-        }
+        const buffer = try rhi.createBuffer(capacity, .vertex);
 
         var free_blocks = std.ArrayListUnmanaged(FreeBlock){};
         try free_blocks.append(allocator, .{ .offset = 0, .size = capacity });
@@ -107,7 +102,7 @@ pub const GlobalVertexAllocator = struct {
             };
 
             // Upload at the correct offset within the megabuffer
-            self.rhi.updateBuffer(self.buffer, block.offset, std.mem.sliceAsBytes(vertices));
+            try self.rhi.updateBuffer(self.buffer, block.offset, std.mem.sliceAsBytes(vertices));
 
             // Update free block
             if (block.size > size_needed) {

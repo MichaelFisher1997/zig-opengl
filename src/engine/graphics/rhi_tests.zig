@@ -203,29 +203,72 @@ const MockContext = struct {
     const MOCK_RESOURCES_VTABLE = rhi.IResourceFactory.VTable{
         .createBuffer = createBuffer,
         .uploadBuffer = uploadBuffer,
-        .updateBuffer = undefined,
+        .updateBuffer = updateBuffer,
         .destroyBuffer = destroyBuffer,
-        .createTexture = undefined,
-        .destroyTexture = undefined,
-        .updateTexture = undefined,
-        .createShader = undefined,
-        .destroyShader = undefined,
-        .mapBuffer = undefined,
-        .unmapBuffer = undefined,
+        .createTexture = createTexture,
+        .destroyTexture = destroyTexture,
+        .updateTexture = updateTexture,
+        .createShader = createShader,
+        .destroyShader = destroyShader,
+        .mapBuffer = mapBuffer,
+        .unmapBuffer = unmapBuffer,
     };
 
-    fn createBuffer(ptr: *anyopaque, size: usize, usage: rhi.BufferUsage) rhi.BufferHandle {
+    fn createBuffer(ptr: *anyopaque, size: usize, usage: rhi.BufferUsage) rhi.RhiError!rhi.BufferHandle {
         _ = ptr;
         _ = size;
         _ = usage;
         return 1;
     }
-    fn uploadBuffer(ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8) void {
+    fn uploadBuffer(ptr: *anyopaque, handle: rhi.BufferHandle, data: []const u8) rhi.RhiError!void {
         _ = ptr;
         _ = handle;
         _ = data;
     }
+    fn updateBuffer(ptr: *anyopaque, handle: rhi.BufferHandle, offset: usize, data: []const u8) rhi.RhiError!void {
+        _ = ptr;
+        _ = handle;
+        _ = offset;
+        _ = data;
+    }
     fn destroyBuffer(ptr: *anyopaque, handle: rhi.BufferHandle) void {
+        _ = ptr;
+        _ = handle;
+    }
+    fn createTexture(ptr: *anyopaque, width: u32, height: u32, format: rhi.TextureFormat, config: rhi.TextureConfig, data: ?[]const u8) rhi.RhiError!rhi.TextureHandle {
+        _ = ptr;
+        _ = width;
+        _ = height;
+        _ = format;
+        _ = config;
+        _ = data;
+        return 1;
+    }
+    fn destroyTexture(ptr: *anyopaque, handle: rhi.TextureHandle) void {
+        _ = ptr;
+        _ = handle;
+    }
+    fn updateTexture(ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u8) rhi.RhiError!void {
+        _ = ptr;
+        _ = handle;
+        _ = data;
+    }
+    fn createShader(ptr: *anyopaque, vertex_src: [*c]const u8, fragment_src: [*c]const u8) rhi.RhiError!rhi.ShaderHandle {
+        _ = ptr;
+        _ = vertex_src;
+        _ = fragment_src;
+        return 1;
+    }
+    fn destroyShader(ptr: *anyopaque, handle: rhi.ShaderHandle) void {
+        _ = ptr;
+        _ = handle;
+    }
+    fn mapBuffer(ptr: *anyopaque, handle: rhi.BufferHandle) rhi.RhiError!?*anyopaque {
+        _ = ptr;
+        _ = handle;
+        return null;
+    }
+    fn unmapBuffer(ptr: *anyopaque, handle: rhi.BufferHandle) void {
         _ = ptr;
         _ = handle;
     }
@@ -236,6 +279,7 @@ const MockContext = struct {
         .getMaxAnisotropy = undefined,
         .getMaxMSAASamples = undefined,
         .getFaultCount = undefined,
+        .getValidationErrorCount = undefined,
         .waitIdle = undefined,
     };
 

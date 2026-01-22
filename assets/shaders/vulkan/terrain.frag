@@ -111,7 +111,7 @@ float findBlocker(vec2 uv, float zReceiver, int layer) {
         for (int j = -1; j <= 1; j++) {
             vec2 offset = vec2(i, j) * searchRadius;
             float depth = texture(uShadowMapsRegular, vec3(uv + offset, float(layer))).r;
-            if (depth < zReceiver) {
+            if (depth > zReceiver) {
                 blockerDepthSum += depth;
                 numBlockers++;
             }
@@ -168,7 +168,7 @@ float calculateShadow(vec3 fragPosWorld, float nDotL, int layer) {
     float avgBlockerDepth = findBlocker(projCoords.xy, currentDepth, layer);
     if (avgBlockerDepth == -1.0) return 0.0; // No blockers
     
-    float penumbraSize = (currentDepth - avgBlockerDepth) / avgBlockerDepth;
+    float penumbraSize = (avgBlockerDepth - currentDepth) / max(avgBlockerDepth, 0.0001);
     float filterRadius = penumbraSize * 0.01; // Adjust multiplier for softness
     filterRadius = clamp(filterRadius, 0.0005, 0.005); // Min/max blur
 
@@ -196,7 +196,7 @@ float getVolShadow(vec3 p, float viewDepth) {
     
     if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0) return 1.0;
     
-    return texture(uShadowMaps, vec4(proj.xy, float(layer), proj.z - 0.002));
+    return texture(uShadowMaps, vec4(proj.xy, float(layer), proj.z + 0.002));
 }
 
 // Raymarched God Rays (Phase 4)

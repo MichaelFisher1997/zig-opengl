@@ -168,7 +168,7 @@ pub const LODManager = struct {
 
         // Init MDI buffers (capacity for ~2048 LOD regions)
         const max_regions = 2048;
-        const instance_buffer = rhi.createBuffer(max_regions * @sizeOf(rhi_mod.InstanceData), .storage);
+        const instance_buffer = try rhi.createBuffer(max_regions * @sizeOf(rhi_mod.InstanceData), .storage);
         var instance_buffers: [rhi_mod.MAX_FRAMES_IN_FLIGHT]rhi_mod.BufferHandle = undefined;
         for (0..rhi_mod.MAX_FRAMES_IN_FLIGHT) |i| {
             instance_buffers[i] = instance_buffer;
@@ -585,7 +585,10 @@ pub const LODManager = struct {
                     .lod = chunk.lod_level,
                 };
                 if (self.lod3_meshes.get(key)) |mesh| {
-                    mesh.upload(self.rhi);
+                    mesh.upload(self.rhi) catch |err| {
+                        log.log.err("Failed to upload LOD3 mesh: {}", .{err});
+                        continue;
+                    };
                 }
                 chunk.state = .renderable;
                 uploads += 1;
@@ -601,7 +604,10 @@ pub const LODManager = struct {
                     .lod = chunk.lod_level,
                 };
                 if (self.lod2_meshes.get(key)) |mesh| {
-                    mesh.upload(self.rhi);
+                    mesh.upload(self.rhi) catch |err| {
+                        log.log.err("Failed to upload LOD2 mesh: {}", .{err});
+                        continue;
+                    };
                 }
                 chunk.state = .renderable;
                 uploads += 1;
@@ -617,7 +623,10 @@ pub const LODManager = struct {
                     .lod = chunk.lod_level,
                 };
                 if (self.lod1_meshes.get(key)) |mesh| {
-                    mesh.upload(self.rhi);
+                    mesh.upload(self.rhi) catch |err| {
+                        log.log.err("Failed to upload LOD1 mesh: {}", .{err});
+                        continue;
+                    };
                 }
                 chunk.state = .renderable;
                 uploads += 1;

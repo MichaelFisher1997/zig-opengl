@@ -67,6 +67,7 @@
             pkgs.zls
             pkgs.pkg-config
             pkgs.glslang
+            pkgs.weston
           ];
 
           buildInputs = [
@@ -74,6 +75,7 @@
             pkgs.vulkan-loader
             pkgs.vulkan-headers
             pkgs.vulkan-validation-layers
+            pkgs.mesa.drivers
           ];
 
           shellHook = ''

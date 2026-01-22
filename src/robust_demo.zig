@@ -25,6 +25,7 @@ pub fn main() !void {
     // 2. Create Robust Vulkan Device
     std.log.info("Initializing robust Vulkan device...", .{});
     var device = try VulkanDevice.init(allocator, window.?);
+    device.initDebugMessenger();
     defer device.deinit();
 
     // 3. Create command pool
