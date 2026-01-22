@@ -117,6 +117,15 @@ const LODTransition = struct {
     priority: i32,
 };
 
+/// Expected RHI interface for LODManager:
+/// - createBuffer(size: usize, usage: BufferUsage) !BufferHandle
+/// - destroyBuffer(handle: BufferHandle) void
+/// - uploadBuffer(handle: BufferHandle, data: []const u8) !void
+/// - waitIdle() void
+/// - getFrameIndex() usize
+/// - setModelMatrix(model: Mat4, color: Vec3, mask_radius: f32) void
+/// - draw(handle: BufferHandle, count: u32, mode: DrawMode) void
+///
 /// Main LOD Manager - coordinates all LOD levels
 /// Generic over RHI type to allow mocking/DIP
 pub fn LODManager(comptime RHI: type) type {
@@ -871,6 +880,41 @@ test "LODManager initialization" {
         pub fn draw(_: @This(), _: u32, _: u32, _: anytype) void {}
     };
 
+    const MockGenerator = struct {
+        fn generate(_: *anyopaque, _: *Chunk, _: ?*const bool) void {}
+        fn generateHeightmapOnly(_: *anyopaque, _: *LODSimplifiedData, _: i32, _: i32, _: LODLevel) void {}
+        fn maybeRecenterCache(_: *anyopaque, _: i32, _: i32) bool {
+            return false;
+        }
+        fn getSeed(_: *anyopaque) u64 {
+            return 0;
+        }
+        fn getRegionInfo(_: *anyopaque, _: i32, _: i32) @import("worldgen/region.zig").RegionInfo {
+            return undefined;
+        }
+        fn getColumnInfo(_: *anyopaque, _: f32, _: f32) @import("worldgen/generator_interface.zig").ColumnInfo {
+            return undefined;
+        }
+        fn deinit(_: *anyopaque, _: std.mem.Allocator) void {}
+
+        const vtable = Generator.VTable{
+            .generate = generate,
+            .generateHeightmapOnly = generateHeightmapOnly,
+            .maybeRecenterCache = maybeRecenterCache,
+            .getSeed = getSeed,
+            .getRegionInfo = getRegionInfo,
+            .getColumnInfo = getColumnInfo,
+            .deinit = deinit,
+        };
+    };
+
+    var mock_gen_impl = MockGenerator{};
+    const mock_gen = Generator{
+        .ptr = &mock_gen_impl,
+        .vtable = &MockGenerator.vtable,
+        .info = .{ .name = "Mock", .description = "Mock Generator" },
+    };
+
     // We can't fully test without RHI, but we can test the config
     const config = LODConfig{
         .radii = .{ 8, 16, 32, 64 },
@@ -878,16 +922,13 @@ test "LODManager initialization" {
 
     // Test that we can instantiate the generic manager with MockRHI
     const Manager = LODManager(MockRHI);
-    // Note: We don't actually call init() here because it requires a Generator instance
-    // which is hard to mock due to function pointers, but compilation of the type is a good check.
-    _ = Manager;
+    var mgr = try Manager.init(allocator, config, MockRHI{}, mock_gen);
+    defer mgr.deinit();
 
     try std.testing.expectEqual(LODLevel.lod0, config.getLODForDistance(5));
     try std.testing.expectEqual(LODLevel.lod1, config.getLODForDistance(12));
     try std.testing.expectEqual(LODLevel.lod2, config.getLODForDistance(24));
     try std.testing.expectEqual(LODLevel.lod3, config.getLODForDistance(50));
-
-    _ = allocator;
 }
 
 test "LODStats aggregation" {
