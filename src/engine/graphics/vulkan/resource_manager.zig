@@ -308,7 +308,9 @@ pub const ResourceManager = struct {
             return;
         };
         _ = self.buffers.remove(handle);
-        self.buffer_deletion_queue[self.current_frame_index].append(self.allocator, .{ .buffer = buf.buffer, .memory = buf.memory }) catch {};
+        self.buffer_deletion_queue[self.current_frame_index].append(self.allocator, .{ .buffer = buf.buffer, .memory = buf.memory }) catch |err| {
+            std.log.err("Failed to queue buffer deletion: {}", .{err});
+        };
     }
 
     pub fn uploadBuffer(self: *ResourceManager, handle: rhi.BufferHandle, data: []const u8) rhi.RhiError!void {
@@ -599,7 +601,9 @@ pub const ResourceManager = struct {
             .memory = tex.memory,
             .view = tex.view,
             .sampler = tex.sampler,
-        }) catch {};
+        }) catch |err| {
+            std.log.err("Failed to queue texture deletion: {}", .{err});
+        };
     }
 
     pub fn updateTexture(self: *ResourceManager, handle: rhi.TextureHandle, data: []const u8) rhi.RhiError!void {

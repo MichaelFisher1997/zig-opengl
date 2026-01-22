@@ -342,7 +342,7 @@ pub const VulkanDevice = struct {
         try checkVk(create_result);
         c.vkGetDeviceQueue(self.vk_device, self.graphics_family, 0, &self.queue);
 
-        if (self.supports_device_fault) {
+        if (self.supports_device_fault and self.vk_device != null) {
             const proc = c.vkGetDeviceProcAddr(self.vk_device, "vkGetDeviceFaultInfoEXT");
             if (proc != null) {
                 self.vkGetDeviceFaultInfoEXT = @ptrCast(proc);
