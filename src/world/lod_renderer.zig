@@ -14,6 +14,7 @@ const Frustum = @import("../engine/math/frustum.zig").Frustum;
 const AABB = @import("../engine/math/aabb.zig").AABB;
 const RHI = @import("../engine/graphics/rhi.zig").RHI;
 const rhi_mod = @import("../engine/graphics/rhi.zig");
+const log = @import("../engine/core/log.zig");
 
 // Import LODManager for type definitions
 const lod_manager_mod = @import("lod_manager.zig");
@@ -85,15 +86,18 @@ pub const LODRenderer = struct {
         self.draw_list.clearRetainingCapacity();
 
         // Collect visible meshes
-        // Process LOD3, LOD2, LOD1 in order
-        self.collectVisibleMeshes(manager, &manager.lod3_meshes, &manager.lod3_regions, view_proj, camera_pos, frustum, lod_y_offset, chunk_checker, checker_ctx) catch {};
-        self.collectVisibleMeshes(manager, &manager.lod2_meshes, &manager.lod2_regions, view_proj, camera_pos, frustum, lod_y_offset, chunk_checker, checker_ctx) catch {};
-        self.collectVisibleMeshes(manager, &manager.lod1_meshes, &manager.lod1_regions, view_proj, camera_pos, frustum, lod_y_offset, chunk_checker, checker_ctx) catch {};
+        // Process from highest LOD down
+        var i: usize = LODLevel.count - 1;
+        while (i > 0) : (i -= 1) {
+            self.collectVisibleMeshes(manager, &manager.meshes[i], &manager.regions[i], view_proj, camera_pos, frustum, lod_y_offset, chunk_checker, checker_ctx) catch |err| {
+                log.log.err("Failed to collect visible meshes for LOD{}: {}", .{ i, err });
+            };
+        }
 
         if (self.instance_data.items.len == 0) return;
 
-        for (self.draw_list.items, 0..) |mesh, i| {
-            const instance = self.instance_data.items[i];
+        for (self.draw_list.items, 0..) |mesh, idx| {
+            const instance = self.instance_data.items[idx];
             self.rhi.setModelMatrix(instance.model, Vec3.one, instance.mask_radius);
             self.rhi.draw(mesh.buffer_handle, mesh.vertex_count, .triangles);
         }
