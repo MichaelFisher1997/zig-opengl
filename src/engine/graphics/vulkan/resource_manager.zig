@@ -449,11 +449,11 @@ pub const ResourceManager = struct {
         view_info.subresourceRange.baseArrayLayer = 0;
         view_info.subresourceRange.layerCount = 1;
 
-        try Utils.checkVk(c.vkCreateImageView(device, &view_info, null, &view));
-        errdefer c.vkDestroyImageView(device, view, null);
-
         const sampler = try Utils.createSampler(self.vulkan_device, config, mip_levels, self.vulkan_device.max_anisotropy);
         errdefer c.vkDestroySampler(device, sampler, null);
+
+        try Utils.checkVk(c.vkCreateImageView(device, &view_info, null, &view));
+        errdefer c.vkDestroyImageView(device, view, null);
 
         // Upload data if present
         if (data_opt) |data| {
