@@ -8,7 +8,7 @@ const BlockType = @import("block.zig").BlockType;
 const Face = @import("block.zig").Face;
 
 /// Rendering pass for the block
-const MAX_BLOCK_TYPES = @import("block.zig").MAX_BLOCK_TYPES;
+const MAX_BLOCK_TYPES = @import("chunk.zig").MAX_BLOCK_TYPES;
 
 pub const RenderPass = enum {
     /// Opaque blocks (e.g., stone, dirt).
@@ -88,14 +88,14 @@ pub const BLOCK_REGISTRY = blk: {
     }
 
     // Validate that all enum fields are covered by the registry size
-    if (@typeInfo(BlockType).@"enum".fields.len > 256) {
-        @compileError("BlockType has more fields than BLOCK_REGISTRY size (256)");
+    if (@typeInfo(BlockType).@"enum".fields.len > MAX_BLOCK_TYPES) {
+        @compileError("BlockType has more fields than BLOCK_REGISTRY size");
     }
 
-    var definitions = [_]BlockDefinition{undefined} ** 256; // Max u8 blocks
+    var definitions = [_]BlockDefinition{undefined} ** MAX_BLOCK_TYPES; // Max u8 blocks
 
     // Default "Air" definition for all slots first
-    for (0..256) |i| {
+    for (0..MAX_BLOCK_TYPES) |i| {
         definitions[i] = .{
             .id = .air,
             .name = "unknown",

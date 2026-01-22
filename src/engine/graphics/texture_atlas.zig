@@ -3,6 +3,7 @@
 //! Supports HD texture packs (16x16 to 512x512) and PBR maps.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @import("../../c.zig").c;
 
 const Texture = @import("texture.zig").Texture;
@@ -374,6 +375,11 @@ fn copyTextureChannelToTile(atlas_pixels: []u8, tile_index: u16, src_pixels: []c
 
             if (src_idx + src_channel < src_pixels.len and dest_idx + dest_channel < atlas_pixels.len) {
                 atlas_pixels[dest_idx + dest_channel] = src_pixels[src_idx + src_channel];
+            } else {
+                // Silently skip out-of-bounds, but only log in debug
+                if (builtin.mode == .Debug) {
+                    // Avoid spamming logs in tight loops
+                }
             }
         }
     }

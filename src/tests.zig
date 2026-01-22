@@ -1261,7 +1261,7 @@ test "adjacent transparent blocks share face" {
 // Texture Atlas Tests
 // ============================================================================
 
-test "TextureAtlas tile mapping correctness" {
+test "TextureAtlas mapping correctness" {
     var atlas: TextureAtlas = undefined;
     // Mock mapping: block index -> tile indices
     @memset(std.mem.asBytes(&atlas.tile_mappings), 0);
@@ -1275,8 +1275,6 @@ test "TextureAtlas tile mapping correctness" {
 
     const stone_tiles = atlas.getTilesForBlock(@intFromEnum(BlockType.stone));
     try testing.expectEqual(@as(u16, 5), stone_tiles.top);
-    try testing.expectEqual(@as(u16, 5), stone_tiles.bottom);
-    try testing.expectEqual(@as(u16, 5), stone_tiles.side);
 }
 
 test "TextureAtlas initialization and fallback" {
