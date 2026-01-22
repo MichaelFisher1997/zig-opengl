@@ -15,6 +15,12 @@ const AABB = @import("../engine/math/aabb.zig").AABB;
 const rhi_types = @import("../engine/graphics/rhi_types.zig");
 const log = @import("../engine/core/log.zig");
 
+/// Expected RHI interface for LODRenderer:
+/// - createBuffer(size: usize, usage: BufferUsage) !BufferHandle
+/// - destroyBuffer(handle: BufferHandle) void
+/// - getFrameIndex() usize
+/// - setModelMatrix(model: Mat4, color: Vec3, mask_radius: f32) void
+/// - draw(handle: BufferHandle, count: u32, mode: DrawMode) void
 pub fn LODRenderer(comptime RHI: type) type {
     return struct {
         const Self = @This();

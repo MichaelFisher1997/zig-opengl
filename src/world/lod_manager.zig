@@ -925,6 +925,12 @@ test "LODManager initialization" {
     var mgr = try Manager.init(allocator, config, MockRHI{}, mock_gen);
     defer mgr.deinit();
 
+    // Verify initial state
+    const stats = mgr.getStats();
+    try std.testing.expectEqual(@as(u32, 0), stats.totalLoaded());
+    try std.testing.expectEqual(@as(u32, 0), stats.totalGenerating());
+
+    // Check config values
     try std.testing.expectEqual(LODLevel.lod0, config.getLODForDistance(5));
     try std.testing.expectEqual(LODLevel.lod1, config.getLODForDistance(12));
     try std.testing.expectEqual(LODLevel.lod2, config.getLODForDistance(24));
