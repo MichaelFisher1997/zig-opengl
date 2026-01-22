@@ -307,6 +307,10 @@ pub const IRenderContext = struct {
         return self.vtable.getStateContext(self.ptr);
     }
 
+    pub fn getNativeSwapchainExtent(self: IRenderContext) [2]u32 {
+        return self.vtable.getNativeSwapchainExtent(self.ptr);
+    }
+
     // Pass-throughs to encoder (convenience)
     pub fn bindShader(self: IRenderContext, handle: ShaderHandle) void {
         self.getEncoder().bindShader(handle);
@@ -351,6 +355,7 @@ pub const IDeviceQuery = struct {
         getMaxAnisotropy: *const fn (ptr: *anyopaque) u8,
         getMaxMSAASamples: *const fn (ptr: *anyopaque) u8,
         getFaultCount: *const fn (ptr: *anyopaque) u32,
+        getValidationErrorCount: *const fn (ptr: *anyopaque) u32,
         waitIdle: *const fn (ptr: *anyopaque) void,
     };
 
@@ -362,6 +367,9 @@ pub const IDeviceQuery = struct {
     }
     pub fn getFaultCount(self: IDeviceQuery) u32 {
         return self.vtable.getFaultCount(self.ptr);
+    }
+    pub fn getValidationErrorCount(self: IDeviceQuery) u32 {
+        return self.vtable.getValidationErrorCount(self.ptr);
     }
 };
 
@@ -498,6 +506,9 @@ pub const RHI = struct {
     }
     pub fn getFaultCount(self: RHI) u32 {
         return self.vtable.query.getFaultCount(self.ptr);
+    }
+    pub fn getValidationErrorCount(self: RHI) u32 {
+        return self.vtable.query.getValidationErrorCount(self.ptr);
     }
 
     // Lifecycle

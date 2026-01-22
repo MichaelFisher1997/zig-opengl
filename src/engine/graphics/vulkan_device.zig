@@ -20,6 +20,21 @@ const std = @import("std");
 const c = @import("../../c.zig").c;
 const rhi = @import("rhi.zig");
 
+fn debugCallback(
+    severity: c.VkDebugUtilsMessageSeverityFlagBitsEXT,
+    _: c.VkDebugUtilsMessageTypeFlagsEXT,
+    _: ?*const c.VkDebugUtilsMessengerCallbackDataEXT,
+    user_data: ?*anyopaque,
+) callconv(.c) c.VkBool32 {
+    if (user_data) |ptr| {
+        const device: *VulkanDevice = @ptrCast(@alignCast(ptr));
+        if ((severity & c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
+            _ = device.validation_error_count.fetchAdd(1, .monotonic);
+        }
+    }
+    return c.VK_FALSE;
+}
+
 pub const VulkanDevice = struct {
     allocator: std.mem.Allocator,
     instance: c.VkInstance = null,
@@ -30,6 +45,10 @@ pub const VulkanDevice = struct {
     graphics_family: u32 = 0,
     supports_device_fault: bool = false,
     mutex: std.Thread.Mutex = .{},
+
+    debug_messenger: c.VkDebugUtilsMessengerEXT = null,
+    validation_error_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    debug_utils_enabled: bool = false,
 
     // Extension function pointers
     vkGetDeviceFaultInfoEXT: ?*const fn (
@@ -57,8 +76,13 @@ pub const VulkanDevice = struct {
         const extensions_ptr = c.SDL_Vulkan_GetInstanceExtensions(&count);
         if (extensions_ptr == null) return error.VulkanExtensionsFailed;
 
+        const enable_validation = std.debug.runtime_safety;
+
         const props2_name: [*:0]const u8 = @ptrCast(c.VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
         const props2_name_slice = std.mem.span(props2_name);
+
+        const debug_utils_name: [*:0]const u8 = @ptrCast(c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        const debug_utils_name_slice = std.mem.span(debug_utils_name);
 
         var instance_ext_count: u32 = 0;
         _ = c.vkEnumerateInstanceExtensionProperties(null, &instance_ext_count, null);
@@ -67,38 +91,54 @@ pub const VulkanDevice = struct {
         _ = c.vkEnumerateInstanceExtensionProperties(null, &instance_ext_count, instance_ext_props.ptr);
 
         var props2_supported = false;
+        var debug_utils_supported = false;
         for (instance_ext_props) |prop| {
             const name: [*:0]const u8 = @ptrCast(&prop.extensionName);
             if (std.mem.eql(u8, std.mem.span(name), props2_name_slice)) {
                 props2_supported = true;
-                break;
+            }
+            if (std.mem.eql(u8, std.mem.span(name), debug_utils_name_slice)) {
+                debug_utils_supported = true;
             }
         }
 
         const sdl_extension_count: usize = @intCast(count);
         const sdl_extensions = extensions_ptr[0..sdl_extension_count];
         var props2_in_sdl = false;
+        var debug_utils_in_sdl = false;
         for (sdl_extensions) |ext| {
             if (std.mem.eql(u8, std.mem.span(ext), props2_name_slice)) {
                 props2_in_sdl = true;
-                break;
+            }
+            if (std.mem.eql(u8, std.mem.span(ext), debug_utils_name_slice)) {
+                debug_utils_in_sdl = true;
             }
         }
 
         const enable_props2 = props2_supported and !props2_in_sdl;
-        const instance_extension_count: usize = sdl_extension_count + @intFromBool(enable_props2);
+        const enable_debug_utils = enable_validation and debug_utils_supported and !debug_utils_in_sdl;
+        const instance_extension_count: usize = sdl_extension_count + @intFromBool(enable_props2) + @intFromBool(enable_debug_utils);
         const instance_extensions = try allocator.alloc([*c]const u8, instance_extension_count);
         defer allocator.free(instance_extensions);
         for (sdl_extensions, 0..) |ext, i| instance_extensions[i] = ext;
         if (enable_props2) {
             instance_extensions[sdl_extension_count] = c.VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
         }
+        if (enable_debug_utils) {
+            const offset = sdl_extension_count + @intFromBool(enable_props2);
+            instance_extensions[offset] = c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+        }
 
         const props2_enabled = props2_supported and (props2_in_sdl or enable_props2);
+        const debug_utils_enabled = enable_validation and debug_utils_supported and (debug_utils_in_sdl or enable_debug_utils);
+        self.debug_utils_enabled = debug_utils_enabled;
         if (props2_supported and enable_props2) {
             std.log.info("Enabling VK_KHR_get_physical_device_properties2", .{});
         } else if (!props2_supported) {
             std.log.warn("VK_KHR_get_physical_device_properties2 not supported by instance", .{});
+        }
+        if (enable_validation and !debug_utils_enabled) {
+            std.log.warn("VK_EXT_debug_utils not available; validation errors will not be counted", .{});
         }
 
         var app_info = std.mem.zeroes(c.VkApplicationInfo);
@@ -106,7 +146,6 @@ pub const VulkanDevice = struct {
         app_info.pApplicationName = "ZigCraft";
         app_info.apiVersion = c.VK_API_VERSION_1_0;
 
-        const enable_validation = std.debug.runtime_safety;
         const validation_layers = [_][*c]const u8{"VK_LAYER_KHRONOS_validation"};
 
         var create_info = std.mem.zeroes(c.VkInstanceCreateInfo);
@@ -309,7 +348,42 @@ pub const VulkanDevice = struct {
         return self;
     }
 
+    pub fn initDebugMessenger(self: *VulkanDevice) void {
+        if (!self.debug_utils_enabled) return;
+        if (self.debug_messenger != null) return;
+
+        const create_proc = c.vkGetInstanceProcAddr(self.instance, "vkCreateDebugUtilsMessengerEXT");
+        if (create_proc) |proc| {
+            const create_fn: c.PFN_vkCreateDebugUtilsMessengerEXT = @ptrCast(proc);
+            if (create_fn) |func| {
+                var debug_info = std.mem.zeroes(c.VkDebugUtilsMessengerCreateInfoEXT);
+                debug_info.sType = c.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+                debug_info.messageSeverity = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+                debug_info.messageType = c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+                debug_info.pfnUserCallback = debugCallback;
+                debug_info.pUserData = self;
+                if (func(self.instance, &debug_info, null, &self.debug_messenger) != c.VK_SUCCESS) {
+                    std.log.warn("Failed to create debug utils messenger", .{});
+                }
+            } else {
+                std.log.warn("vkCreateDebugUtilsMessengerEXT not available", .{});
+            }
+        } else {
+            std.log.warn("vkCreateDebugUtilsMessengerEXT not found; validation errors will not be counted", .{});
+        }
+    }
+
     pub fn deinit(self: *VulkanDevice) void {
+        if (self.debug_messenger != null) {
+            const destroy_proc = c.vkGetInstanceProcAddr(self.instance, "vkDestroyDebugUtilsMessengerEXT");
+            if (destroy_proc) |proc| {
+                const destroy_fn: c.PFN_vkDestroyDebugUtilsMessengerEXT = @ptrCast(proc);
+                if (destroy_fn) |func| {
+                    func(self.instance, self.debug_messenger, null);
+                }
+            }
+            self.debug_messenger = null;
+        }
         c.vkDestroyDevice(self.vk_device, null);
         c.vkDestroySurfaceKHR(self.instance, self.surface, null);
         c.vkDestroyInstance(self.instance, null);

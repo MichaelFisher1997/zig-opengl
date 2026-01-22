@@ -279,6 +279,7 @@ const MockContext = struct {
         .getMaxAnisotropy = undefined,
         .getMaxMSAASamples = undefined,
         .getFaultCount = undefined,
+        .getValidationErrorCount = undefined,
         .waitIdle = undefined,
     };
 

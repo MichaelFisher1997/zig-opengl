@@ -727,7 +727,7 @@ fn createShadowResources(ctx: *VulkanContext) !void {
         sampler_info.maxAnisotropy = 1.0;
         sampler_info.borderColor = c.VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
         sampler_info.compareEnable = c.VK_TRUE;
-        sampler_info.compareOp = c.VK_COMPARE_OP_LESS;
+        sampler_info.compareOp = c.VK_COMPARE_OP_GREATER_OR_EQUAL;
 
         try Utils.checkVk(c.vkCreateSampler(ctx.vulkan_device.vk_device, &sampler_info, null, &ctx.shadow_system.shadow_sampler));
     }
@@ -2016,6 +2016,7 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
     ctx.render_device = render_device;
 
     ctx.vulkan_device = try VulkanDevice.init(allocator, ctx.window);
+    ctx.vulkan_device.initDebugMessenger();
     ctx.resources = try ResourceManager.init(allocator, &ctx.vulkan_device);
     ctx.frames = try FrameManager.init(&ctx.vulkan_device);
     ctx.swapchain = try SwapchainPresenter.init(allocator, &ctx.vulkan_device, ctx.window, ctx.msaa_samples);
@@ -2378,20 +2379,20 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
     }
 
     // Begin frame (acquire image, reset fences/CBs)
-    if (ctx.frames.beginFrame(&ctx.swapchain) catch |err| {
+    const frame_started = ctx.frames.beginFrame(&ctx.swapchain) catch |err| {
         if (err == error.OutOfDate) {
             recreateSwapchainInternal(ctx);
         } else {
             std.log.err("beginFrame failed: {}", .{err});
         }
         return;
-    }) {
-        // Frame started successfully
-    } else {
-        return;
-    }
+    };
 
     ctx.resources.setCurrentFrame(ctx.frames.current_frame);
+
+    if (!frame_started) {
+        return;
+    }
 
     applyPendingDescriptorUpdates(ctx, ctx.frames.current_frame);
 
@@ -3363,6 +3364,11 @@ fn getFaultCount(ctx_ptr: *anyopaque) u32 {
     return ctx.vulkan_device.fault_count;
 }
 
+fn getValidationErrorCount(ctx_ptr: *anyopaque) u32 {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.vulkan_device.validation_error_count.load(.monotonic);
+}
+
 fn drawIndexed(ctx_ptr: *anyopaque, vbo_handle: rhi.BufferHandle, ebo_handle: rhi.BufferHandle, count: u32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frames.frame_in_progress) return;
@@ -4198,6 +4204,7 @@ const VULKAN_RHI_VTABLE = rhi.RHI.VTable{
         .getMaxAnisotropy = getMaxAnisotropy,
         .getMaxMSAASamples = getMaxMSAASamples,
         .getFaultCount = getFaultCount,
+        .getValidationErrorCount = getValidationErrorCount,
         .waitIdle = waitIdle,
     },
     .setWireframe = setWireframe,

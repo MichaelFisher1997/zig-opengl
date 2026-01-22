@@ -355,8 +355,7 @@ pub const App = struct {
 
         if (self.ui) |*u| u.resize(self.input.window_width, self.input.window_height);
 
-        // Update current screen. Transitions happen here.
-        try self.screen_manager.update(self.time.delta_time);
+        self.rhi.setViewport(self.input.window_width, self.input.window_height);
 
         // Check for GPU faults and attempt recovery
         self.rhi.recover() catch |err| {
@@ -364,10 +363,17 @@ pub const App = struct {
             self.input.should_quit = true;
         };
 
-        // Early out if no screen is active (e.g. during transition or shutdown)
-        if (self.screen_manager.stack.items.len == 0) return;
-
         self.rhi.beginFrame();
+        errdefer self.rhi.endFrame();
+
+        // Update current screen. Transitions happen here.
+        try self.screen_manager.update(self.time.delta_time);
+
+        // Early out if no screen is active (e.g. during transition or shutdown)
+        if (self.screen_manager.stack.items.len == 0) {
+            self.rhi.endFrame();
+            return;
+        }
 
         if (self.ui) |*u| {
             try self.screen_manager.draw(u);

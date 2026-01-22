@@ -65,7 +65,7 @@ float getVolShadow(vec3 p, float viewDepth) {
     
     if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0) return 1.0;
     
-    return texture(uShadowMaps, vec4(proj.xy, float(layer), proj.z - 0.002));
+    return texture(uShadowMaps, vec4(proj.xy, float(layer), proj.z + 0.002));
 }
 
 // Raymarched God Rays (Phase 4)
