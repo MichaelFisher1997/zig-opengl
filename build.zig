@@ -152,6 +152,22 @@ pub fn build(b: *std.Build) void {
     const test_robustness_step = b.step("test-robustness", "Run robustness integration test");
     test_robustness_step.dependOn(&test_robustness_run.step);
 
+    const docgen = b.addExecutable(.{
+        .name = "docgen",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/docgen.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    b.installArtifact(docgen);
+
+    const docs_step = b.step("docs", "Generate MDX documentation");
+    const run_docgen = b.addRunArtifact(docgen);
+    run_docgen.addArgs(&.{ "--source=src", "--output=docs/generated" });
+    docs_step.dependOn(&run_docgen.step);
+
     const run_robust_cmd = b.addRunArtifact(robust_demo);
     run_robust_cmd.step.dependOn(b.getInstallStep());
 

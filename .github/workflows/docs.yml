@@ -1,0 +1,45 @@
+name: Documentation
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/**/*.zig'
+      - 'tools/docgen.zig'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@v16
+
+    - name: Cache Nix Store
+      uses: nix-community/cache-nix-action@v7
+      with:
+        primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-prefixes-first-match: nix-${{ runner.os }}-
+        paths: ~/.cache/nix
+
+    - name: Generate Documentation
+      run: |
+        nix develop --command zig build docs
+
+    - name: Prepare Documentation Artifact
+      run: |
+        mkdir -p dist-docs
+        cp -r docs/generated/* dist-docs/
+
+    - name: Upload Documentation Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: zigcraft-docs
+        path: dist-docs/
+        retention-days: 7
