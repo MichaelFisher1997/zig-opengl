@@ -56,7 +56,6 @@ const UploadScreen = struct {
         ui.begin();
         ui.end();
     }
-
     pub fn screen(self: *UploadScreen) IScreen {
         return Screen.makeScreen(@This(), self);
     }
