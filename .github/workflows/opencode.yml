@@ -40,6 +40,6 @@ jobs:
       - name: Run opencode
         uses: anomalyco/opencode/github@latest
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
         with:
-          model: openrouter/minimax/minimax-m2.1
+          model: minimax-coding-plan/MiniMax-M2.1

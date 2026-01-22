@@ -36,9 +36,9 @@ jobs:
       - name: Run opencode
         uses: anomalyco/opencode/github@latest
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
         with:
-          model: openrouter/minimax/minimax-m2.1
+          model: minimax-coding-plan/MiniMax-M2.1
           prompt: |
             1. If the PR tags or references any issues (e.g., "Fixes #123"), verify if the implementation fully satisfies the requirements of those issues. If no issues are tagged, proceed without mentioning it.
             2. If there are previous code reviews on this PR, verify if the feedback has been addressed. If there are no previous reviews, do not mention their absence.
