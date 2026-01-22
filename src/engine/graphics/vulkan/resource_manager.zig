@@ -402,6 +402,16 @@ pub const ResourceManager = struct {
             usage_flags |= c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         }
 
+        var staging_offset: u64 = 0;
+        var staging_ptr: ?*StagingBuffer = null;
+        if (data_opt) |data| {
+            const staging = &self.staging_buffers[self.current_frame_index];
+            const offset = staging.allocate(data.len) orelse return error.OutOfMemory;
+            if (staging.mapped_ptr == null) return error.OutOfMemory;
+            staging_offset = offset;
+            staging_ptr = staging;
+        }
+
         const device = self.vulkan_device.vk_device;
 
         var image: c.VkImage = null;
@@ -439,11 +449,8 @@ pub const ResourceManager = struct {
 
         // Upload data if present
         if (data_opt) |data| {
-            const staging = &self.staging_buffers[self.current_frame_index];
-            const offset = staging.allocate(data.len) orelse return error.OutOfMemory;
-
-            if (staging.mapped_ptr == null) return error.OutOfMemory;
-            const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + offset;
+            const staging = staging_ptr orelse return error.OutOfMemory;
+            const dest = @as([*]u8, @ptrCast(staging.mapped_ptr.?)) + staging_offset;
             @memcpy(dest[0..data.len], data);
 
             const transfer_cb = try self.prepareTransfer();
@@ -466,7 +473,7 @@ pub const ResourceManager = struct {
             c.vkCmdPipelineBarrier(transfer_cb, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, c.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &barrier);
 
             var region = std.mem.zeroes(c.VkBufferImageCopy);
-            region.bufferOffset = offset;
+            region.bufferOffset = staging_offset;
             region.imageSubresource.aspectMask = aspect_mask;
             region.imageSubresource.layerCount = 1;
             region.imageExtent = .{ .width = width, .height = height, .depth = 1 };
