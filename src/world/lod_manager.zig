@@ -651,6 +651,9 @@ pub const LODManager = struct {
     /// Render all LOD meshes
     /// chunk_checker: Optional callback to check if regular chunks cover this region.
     ///                If all chunks in region are loaded, the LOD region is skipped.
+    ///
+    /// NOTE: Acquires a shared lock on LODManager. LODRenderer must NOT attempt to acquire
+    /// a write lock on LODManager during rendering to avoid deadlocks.
     pub fn render(self: *LODManager, view_proj: Mat4, camera_pos: Vec3, chunk_checker: ?ChunkChecker, checker_ctx: ?*anyopaque) void {
         self.mutex.lockShared();
         defer self.mutex.unlockShared();
