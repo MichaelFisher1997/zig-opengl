@@ -127,7 +127,6 @@ fn matches(settings: *const Settings, preset: PresetConfig) bool {
         std.math.approxEqAbs(f32, settings.volumetric_density, preset.volumetric_density, epsilon) and
         settings.volumetric_steps == preset.volumetric_steps and
         std.math.approxEqAbs(f32, settings.volumetric_scattering, preset.volumetric_scattering, epsilon) and
-        settings.ssao_enabled == preset.ssao_enabled and
         settings.lod_enabled == preset.lod_enabled and
         settings.fxaa_enabled == preset.fxaa_enabled and
         settings.bloom_enabled == preset.bloom_enabled and
