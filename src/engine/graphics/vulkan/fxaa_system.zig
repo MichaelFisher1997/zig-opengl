@@ -112,6 +112,7 @@ pub const FXAASystem = struct {
         {
             var pp_to_fxaa_attachment = color_attachment;
             pp_to_fxaa_attachment.loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR;
+            pp_to_fxaa_attachment.initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
             pp_to_fxaa_attachment.finalLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
             var pp_rp_info = rp_info;

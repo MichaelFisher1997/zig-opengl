@@ -67,9 +67,9 @@
     "ssao_enabled": true,
     "lod_enabled": true,
     "render_distance": 18,
-    "fxaa_enabled": true,
+    "fxaa_enabled": false,
     "bloom_enabled": true,
-    "bloom_intensity": 0.7
+    "bloom_intensity": 0.8
   },
   {
     "name": "ULTRA",
@@ -91,7 +91,7 @@
     "ssao_enabled": true,
     "lod_enabled": true,
     "render_distance": 28,
-    "fxaa_enabled": true,
+    "fxaa_enabled": false,
     "bloom_enabled": true,
     "bloom_intensity": 1.0
   }

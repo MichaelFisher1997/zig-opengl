@@ -146,6 +146,7 @@ pub const BloomSystem = struct {
         // 4. Descriptor Set Layout
         var dsl_bindings = [_]c.VkDescriptorSetLayoutBinding{
             .{ .binding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+            .{ .binding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
         };
         var layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
         layout_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -306,28 +307,41 @@ pub const BloomSystem = struct {
                     .sampler = self.sampler,
                 };
 
-                var write = std.mem.zeroes(c.VkWriteDescriptorSet);
-                write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                write.dstSet = self.descriptor_sets[frame][i];
-                write.dstBinding = 0;
-                write.dstArrayElement = 0;
-                write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                write.descriptorCount = 1;
-                write.pImageInfo = &image_info_src;
+                // Add a dummy info for binding 1 (previous mip).
+                // Rationale: The descriptor set layout includes binding 1 (used by the upsample pass),
+                // but the downsample shader does not use it. We bind the HDR view as a safe placeholder
+                // to satisfy Vulkan validation without needing a separate layout.
+                var image_info_dummy = c.VkDescriptorImageInfo{
+                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    .imageView = if (i == 0) hdr_image_view else self.mip_views[i - 1],
+                    .sampler = self.sampler,
+                };
 
-                c.vkUpdateDescriptorSets(vk, 1, &write, 0, null);
+                var writes = [_]c.VkWriteDescriptorSet{
+                    .{
+                        .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        .dstSet = self.descriptor_sets[frame][i],
+                        .dstBinding = 0,
+                        .dstArrayElement = 0,
+                        .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        .descriptorCount = 1,
+                        .pImageInfo = &image_info_src,
+                    },
+                    .{
+                        .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        .dstSet = self.descriptor_sets[frame][i],
+                        .dstBinding = 1,
+                        .dstArrayElement = 0,
+                        .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        .descriptorCount = 1,
+                        .pImageInfo = &image_info_dummy,
+                    },
+                };
+
+                c.vkUpdateDescriptorSets(vk, 2, &writes[0], 0, null);
             }
 
             // Upsample Sets (BLOOM_MIP_COUNT to 2*BLOOM_MIP_COUNT-1)
-            // Upsample pass i reads from mip i+1 (smaller mip)
-            // E.g. pass for mip 3 reads from mip 4.
-            // Loop from 0 to BLOOM_MIP_COUNT-2?
-            // Upsample loop in computeBloom: for (0..BLOOM_MIP_COUNT - 1) |pass|
-            //   target_mip = (BLOOM_MIP_COUNT - 2) - pass.
-            //   src_mip = target_mip + 1.
-            //   We bind descriptor set [BLOOM_MIP_COUNT + pass]
-            //   So we need to map:
-            //   Set Index [BLOOM_MIP_COUNT + pass] -> Source Image [target_mip + 1]
             for (0..BLOOM_MIP_COUNT - 1) |pass| {
                 const target_mip = (BLOOM_MIP_COUNT - 2) - pass;
                 const src_mip = target_mip + 1;
@@ -338,16 +352,34 @@ pub const BloomSystem = struct {
                     .sampler = self.sampler,
                 };
 
-                var write = std.mem.zeroes(c.VkWriteDescriptorSet);
-                write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                write.dstSet = self.descriptor_sets[frame][BLOOM_MIP_COUNT + pass];
-                write.dstBinding = 0;
-                write.dstArrayElement = 0;
-                write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                write.descriptorCount = 1;
-                write.pImageInfo = &image_info_src;
+                var image_info_prev = c.VkDescriptorImageInfo{
+                    .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    .imageView = self.mip_views[target_mip],
+                    .sampler = self.sampler,
+                };
 
-                c.vkUpdateDescriptorSets(vk, 1, &write, 0, null);
+                var writes = [_]c.VkWriteDescriptorSet{
+                    .{
+                        .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        .dstSet = self.descriptor_sets[frame][BLOOM_MIP_COUNT + pass],
+                        .dstBinding = 0,
+                        .dstArrayElement = 0,
+                        .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        .descriptorCount = 1,
+                        .pImageInfo = &image_info_src,
+                    },
+                    .{
+                        .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                        .dstSet = self.descriptor_sets[frame][BLOOM_MIP_COUNT + pass],
+                        .dstBinding = 1,
+                        .dstArrayElement = 0,
+                        .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        .descriptorCount = 1,
+                        .pImageInfo = &image_info_prev,
+                    },
+                };
+
+                c.vkUpdateDescriptorSets(vk, 2, &writes[0], 0, null);
             }
         }
     }

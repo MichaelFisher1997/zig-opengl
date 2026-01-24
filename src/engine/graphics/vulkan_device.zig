@@ -73,6 +73,7 @@ pub const VulkanDevice = struct {
     max_msaa_samples: u8 = 1,
     multi_draw_indirect: bool = false,
     draw_indirect_first_instance: bool = false,
+    timestamp_period: f32 = 1.0,
 
     pub fn init(allocator: std.mem.Allocator, window: *c.SDL_Window) !VulkanDevice {
         var self = VulkanDevice{ .allocator = allocator };
@@ -205,6 +206,7 @@ pub const VulkanDevice = struct {
         var device_properties: c.VkPhysicalDeviceProperties = undefined;
         c.vkGetPhysicalDeviceProperties(self.physical_device, &device_properties);
         self.max_anisotropy = device_properties.limits.maxSamplerAnisotropy;
+        self.timestamp_period = device_properties.limits.timestampPeriod;
 
         const color_samples = device_properties.limits.framebufferColorSampleCounts;
         const depth_samples = device_properties.limits.framebufferDepthSampleCounts;

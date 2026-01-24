@@ -116,16 +116,26 @@ pub const WorldRenderer = struct {
         self.visible_chunks.clearRetainingCapacity();
 
         const frustum = Frustum.fromViewProj(view_proj);
-        const pc = worldToChunk(@intFromFloat(camera_pos.x), @intFromFloat(camera_pos.z));
-        const render_dist = if (lod_manager) |mgr| @min(render_distance, mgr.config.getRadii()[0]) else render_distance;
 
-        var cz = pc.chunk_z - render_dist;
-        while (cz <= pc.chunk_z + render_dist) : (cz += 1) {
-            var cx = pc.chunk_x - render_dist;
-            while (cx <= pc.chunk_x + render_dist) : (cx += 1) {
-                if (self.storage.chunks.get(.{ .x = cx, .z = cz })) |data| {
+        // Safety: Check for NaN/Inf camera position
+        if (!std.math.isFinite(camera_pos.x) or !std.math.isFinite(camera_pos.z)) return;
+
+        // Use i64 for calculations to avoid overflow
+        const world_x: i64 = @intFromFloat(camera_pos.x);
+        const world_z: i64 = @intFromFloat(camera_pos.z);
+        const pc_x = @divFloor(world_x, CHUNK_SIZE_X);
+        const pc_z = @divFloor(world_z, CHUNK_SIZE_Z);
+
+        const r_dist_val: i32 = if (lod_manager) |mgr| @min(render_distance, @as(i32, @intCast(mgr.config.getRadii()[0]))) else render_distance;
+        const r_dist: i64 = @as(i64, @intCast(r_dist_val));
+
+        var cz = pc_z - r_dist;
+        while (cz <= pc_z + r_dist) : (cz += 1) {
+            var cx = pc_x - r_dist;
+            while (cx <= pc_x + r_dist) : (cx += 1) {
+                if (self.storage.chunks.get(.{ .x = @as(i32, @intCast(cx)), .z = @as(i32, @intCast(cz)) })) |data| {
                     if (data.chunk.state == .renderable or data.mesh.solid_allocation != null or data.mesh.fluid_allocation != null) {
-                        if (frustum.intersectsChunkRelative(cx, cz, camera_pos.x, camera_pos.y, camera_pos.z)) {
+                        if (frustum.intersectsChunkRelative(@as(i32, @intCast(cx)), @as(i32, @intCast(cz)), camera_pos.x, camera_pos.y, camera_pos.z)) {
                             self.visible_chunks.append(self.allocator, data) catch {};
                         } else {
                             self.last_render_stats.chunks_culled += 1;
@@ -169,19 +179,29 @@ pub const WorldRenderer = struct {
         defer self.storage.chunks_mutex.unlockShared();
 
         const frustum = shadow_frustum;
-        const pc = worldToChunk(@intFromFloat(camera_pos.x), @intFromFloat(camera_pos.z));
-        const render_dist = if (lod_manager) |mgr| @min(render_distance, mgr.config.getRadii()[0]) else render_distance;
 
-        var cz = pc.chunk_z - render_dist;
-        while (cz <= pc.chunk_z + render_dist) : (cz += 1) {
-            var cx = pc.chunk_x - render_dist;
-            while (cx <= pc.chunk_x + render_dist) : (cx += 1) {
-                if (self.storage.chunks.get(.{ .x = cx, .z = cz })) |data| {
+        // Safety: Check for NaN/Inf camera position
+        if (!std.math.isFinite(camera_pos.x) or !std.math.isFinite(camera_pos.z)) return;
+
+        // Use i64 for calculations to avoid overflow
+        const world_x: i64 = @intFromFloat(camera_pos.x);
+        const world_z: i64 = @intFromFloat(camera_pos.z);
+        const pc_x = @divFloor(world_x, CHUNK_SIZE_X);
+        const pc_z = @divFloor(world_z, CHUNK_SIZE_Z);
+
+        const r_dist_val: i32 = if (lod_manager) |mgr| @min(render_distance, @as(i32, @intCast(mgr.config.getRadii()[0]))) else render_distance;
+        const r_dist: i64 = @as(i64, @intCast(r_dist_val));
+
+        var cz = pc_z - r_dist;
+        while (cz <= pc_z + r_dist) : (cz += 1) {
+            var cx = pc_x - r_dist;
+            while (cx <= pc_x + r_dist) : (cx += 1) {
+                if (self.storage.chunks.get(.{ .x = @as(i32, @intCast(cx)), .z = @as(i32, @intCast(cz)) })) |data| {
                     if (data.chunk.state == .renderable or data.mesh.solid_allocation != null or data.mesh.fluid_allocation != null) {
                         const chunk_world_x: f32 = @floatFromInt(data.chunk.chunk_x * CHUNK_SIZE_X);
                         const chunk_world_z: f32 = @floatFromInt(data.chunk.chunk_z * CHUNK_SIZE_Z);
 
-                        if (!frustum.intersectsChunkRelative(cx, cz, camera_pos.x, camera_pos.y, camera_pos.z)) {
+                        if (!frustum.intersectsChunkRelative(@as(i32, @intCast(cx)), @as(i32, @intCast(cz)), camera_pos.x, camera_pos.y, camera_pos.z)) {
                             continue;
                         }
 
