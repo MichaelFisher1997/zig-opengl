@@ -44,6 +44,12 @@ const fxaa_system_pkg = @import("vulkan/fxaa_system.zig");
 const FXAASystem = fxaa_system_pkg.FXAASystem;
 const FXAAPushConstants = fxaa_system_pkg.FXAAPushConstants;
 
+/// Push constants for post-process pass (tonemapping + bloom integration)
+const PostProcessPushConstants = extern struct {
+    bloom_enabled: f32, // 0.0 = disabled, 1.0 = enabled
+    bloom_intensity: f32, // Final bloom blend intensity
+};
+
 const MAX_FRAMES_IN_FLIGHT = rhi.MAX_FRAMES_IN_FLIGHT;
 const BLOOM_MIP_COUNT = rhi.BLOOM_MIP_COUNT;
 const DEPTH_FORMAT = c.VK_FORMAT_D32_SFLOAT;
@@ -776,11 +782,18 @@ fn createPostProcessResources(ctx: *VulkanContext) !void {
     layout_info.pBindings = &bindings[0];
     try Utils.checkVk(c.vkCreateDescriptorSetLayout(vk, &layout_info, null, &ctx.post_process_descriptor_set_layout));
 
-    // 3. Pipeline Layout
+    // 3. Pipeline Layout (with push constants for bloom parameters)
+    var post_push_constant = std.mem.zeroes(c.VkPushConstantRange);
+    post_push_constant.stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT;
+    post_push_constant.offset = 0;
+    post_push_constant.size = 8; // 2 floats: bloomEnabled, bloomIntensity
+
     var pipe_layout_info = std.mem.zeroes(c.VkPipelineLayoutCreateInfo);
     pipe_layout_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipe_layout_info.setLayoutCount = 1;
     pipe_layout_info.pSetLayouts = &ctx.post_process_descriptor_set_layout;
+    pipe_layout_info.pushConstantRangeCount = 1;
+    pipe_layout_info.pPushConstantRanges = &post_push_constant;
     try Utils.checkVk(c.vkCreatePipelineLayout(vk, &pipe_layout_info, null, &ctx.post_process_pipeline_layout));
 
     // 4. Create Linear Sampler
@@ -3812,6 +3825,10 @@ fn computeBloomInternal(ctx: *VulkanContext) void {
     if (ctx.bloom.upsample_pipeline == null) return;
     if (ctx.bloom.render_pass == null) return;
     if (ctx.hdr_image == null) return;
+    if (!ctx.frames.frame_in_progress) return;
+
+    // Ensure any active render passes are ended before issuing barriers
+    ensureNoRenderPassActiveInternal(ctx);
 
     const command_buffer = ctx.frames.command_buffers[ctx.frames.current_frame];
     const frame = ctx.frames.current_frame;
@@ -4193,6 +4210,13 @@ fn beginPostProcessPassInternal(ctx: *VulkanContext) void {
             return;
         }
         c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.post_process_pipeline_layout, 0, 1, &pp_ds, 0, null);
+
+        // Push bloom parameters
+        const push = PostProcessPushConstants{
+            .bloom_enabled = if (ctx.bloom.enabled) 1.0 else 0.0,
+            .bloom_intensity = ctx.bloom.intensity,
+        };
+        c.vkCmdPushConstants(command_buffer, ctx.post_process_pipeline_layout, c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PostProcessPushConstants), &push);
 
         var viewport = std.mem.zeroes(c.VkViewport);
         viewport.x = 0.0;
