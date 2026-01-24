@@ -21,7 +21,11 @@ pub const PresetConfig = struct {
     volumetric_steps: u32,
     volumetric_scattering: f32,
     ssao_enabled: bool,
+    lod_enabled: bool,
     render_distance: i32,
+    fxaa_enabled: bool,
+    bloom_enabled: bool,
+    bloom_intensity: f32,
 };
 
 pub var graphics_presets: std.ArrayListUnmanaged(PresetConfig) = .empty;
@@ -39,6 +43,9 @@ pub fn initPresets(allocator: std.mem.Allocator) !void {
     const parsed = try std.json.parseFromSlice([]PresetConfig, allocator, content, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
+    // Ensure we clean up on error
+    errdefer deinitPresets(allocator);
+
     for (parsed.value) |preset| {
         var p = preset;
         // Validate preset values against metadata constraints
@@ -51,8 +58,12 @@ pub fn initPresets(allocator: std.mem.Allocator) !void {
         if (p.volumetric_scattering < 0.0 or p.volumetric_scattering > 1.0) {
             return error.InvalidVolumetricScattering;
         }
+        if (p.bloom_intensity < 0.0 or p.bloom_intensity > 2.0) {
+            return error.InvalidBloomIntensity;
+        }
         // Duplicate name because parsed.deinit() will free strings
         p.name = try allocator.dupe(u8, preset.name);
+        errdefer allocator.free(p.name);
         try graphics_presets.append(allocator, p);
     }
     std.log.info("Loaded {} graphics presets", .{graphics_presets.items.len});
@@ -84,7 +95,11 @@ pub fn apply(settings: *Settings, preset_idx: usize) void {
     settings.volumetric_steps = config.volumetric_steps;
     settings.volumetric_scattering = config.volumetric_scattering;
     settings.ssao_enabled = config.ssao_enabled;
+    settings.lod_enabled = config.lod_enabled;
     settings.render_distance = config.render_distance;
+    settings.fxaa_enabled = config.fxaa_enabled;
+    settings.bloom_enabled = config.bloom_enabled;
+    settings.bloom_intensity = config.bloom_intensity;
 }
 
 pub fn getIndex(settings: *const Settings) usize {
@@ -112,7 +127,11 @@ fn matches(settings: *const Settings, preset: PresetConfig) bool {
         std.math.approxEqAbs(f32, settings.volumetric_density, preset.volumetric_density, epsilon) and
         settings.volumetric_steps == preset.volumetric_steps and
         std.math.approxEqAbs(f32, settings.volumetric_scattering, preset.volumetric_scattering, epsilon) and
-        settings.ssao_enabled == preset.ssao_enabled;
+        settings.ssao_enabled == preset.ssao_enabled and
+        settings.lod_enabled == preset.lod_enabled and
+        settings.fxaa_enabled == preset.fxaa_enabled and
+        settings.bloom_enabled == preset.bloom_enabled and
+        std.math.approxEqAbs(f32, settings.bloom_intensity, preset.bloom_intensity, epsilon);
 }
 
 pub fn getPresetName(idx: usize) []const u8 {

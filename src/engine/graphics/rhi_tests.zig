@@ -171,8 +171,13 @@ const MockContext = struct {
         .abortFrame = undefined,
         .beginMainPass = undefined,
         .endMainPass = undefined,
+        .beginPostProcessPass = undefined,
+        .endPostProcessPass = undefined,
         .beginGPass = undefined,
         .endGPass = undefined,
+        .beginFXAAPass = undefined,
+        .endFXAAPass = undefined,
+        .computeBloom = undefined,
         .getEncoder = MockContext.getEncoder,
         .getStateContext = MockContext.getStateContext,
         .setClearColor = undefined,
@@ -298,6 +303,9 @@ const MockContext = struct {
         .setVolumetricDensity = undefined,
         .setMSAA = undefined,
         .recover = undefined,
+        .setFXAA = undefined,
+        .setBloom = undefined,
+        .setBloomIntensity = undefined,
     };
 
     const MOCK_ENCODER_VTABLE = rhi.IGraphicsCommandEncoder.VTable{

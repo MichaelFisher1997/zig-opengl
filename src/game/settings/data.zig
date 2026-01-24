@@ -42,7 +42,7 @@ pub const Settings = struct {
     ui_scale: f32 = 1.0, // Manual UI scale multiplier (0.5 to 2.0)
     window_width: u32 = 1920,
     window_height: u32 = 1080,
-    lod_enabled: bool = false, // Disabled by default due to performance issues
+    lod_enabled: bool = false,
     texture_pack: []const u8 = "default",
     environment_map: []const u8 = "default", // "default" or filename.exr/hdr
 
@@ -65,6 +65,13 @@ pub const Settings = struct {
     volumetric_steps: u32 = 16, // Raymarching steps
     volumetric_scattering: f32 = 0.8, // Mie scattering anisotropy (G)
     ssao_enabled: bool = true,
+
+    // FXAA Settings (Phase 3)
+    fxaa_enabled: bool = true,
+
+    // Bloom Settings (Phase 3)
+    bloom_enabled: bool = true,
+    bloom_intensity: f32 = 0.5,
 
     // Texture Settings
     max_texture_resolution: u32 = 512, // 16, 32, 64, 128, 256, 512
@@ -155,9 +162,28 @@ pub const Settings = struct {
             .label = "CLOUD SHADOWS",
             .kind = .toggle,
         };
+        pub const lod_enabled = SettingMetadata{
+            .label = "LOD SYSTEM",
+            .description = "Enables high-distance simplified terrain rendering",
+            .kind = .toggle,
+        };
         pub const ssao_enabled = SettingMetadata{
             .label = "SSAO",
             .kind = .toggle,
+        };
+        pub const fxaa_enabled = SettingMetadata{
+            .label = "FXAA",
+            .description = "Fast Approximate Anti-Aliasing",
+            .kind = .toggle,
+        };
+        pub const bloom_enabled = SettingMetadata{
+            .label = "BLOOM",
+            .description = "HDR glow effect",
+            .kind = .toggle,
+        };
+        pub const bloom_intensity = SettingMetadata{
+            .label = "BLOOM INTENSITY",
+            .kind = .{ .slider = .{ .min = 0.0, .max = 2.0, .step = 0.1 } },
         };
         pub const volumetric_density = SettingMetadata{
             .label = "FOG DENSITY",
