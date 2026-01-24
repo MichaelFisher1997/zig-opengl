@@ -165,6 +165,27 @@ const MockContext = struct {
         return .{ .ptr = ptr, .vtable = &MOCK_STATE_VTABLE };
     }
 
+    fn isTimingEnabled(ptr: *anyopaque) bool {
+        _ = ptr;
+        return false;
+    }
+    fn setTimingEnabled(ptr: *anyopaque, enabled: bool) void {
+        _ = ptr;
+        _ = enabled;
+    }
+    fn beginPassTiming(ptr: *anyopaque, name: []const u8) void {
+        _ = ptr;
+        _ = name;
+    }
+    fn endPassTiming(ptr: *anyopaque, name: []const u8) void {
+        _ = ptr;
+        _ = name;
+    }
+    fn getTimingResults(ptr: *anyopaque) rhi.GpuTimingResults {
+        _ = ptr;
+        return std.mem.zeroes(rhi.GpuTimingResults);
+    }
+
     const MOCK_RENDER_VTABLE = rhi.IRenderContext.VTable{
         .beginFrame = undefined,
         .endFrame = undefined,
@@ -296,6 +317,13 @@ const MockContext = struct {
         .shadow = undefined,
         .ui = undefined,
         .query = MOCK_QUERY_VTABLE,
+        .timing = .{
+            .beginPassTiming = beginPassTiming,
+            .endPassTiming = endPassTiming,
+            .getTimingResults = getTimingResults,
+            .isTimingEnabled = isTimingEnabled,
+            .setTimingEnabled = setTimingEnabled,
+        },
         .setWireframe = undefined,
         .setTexturesEnabled = undefined,
         .setVSync = undefined,

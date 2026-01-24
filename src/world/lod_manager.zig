@@ -404,7 +404,7 @@ pub fn LODManager(comptime RHI: type) type {
                     // Check circular distance to avoid thrashing corner chunks
                     const dx = rx - player_rx;
                     const dz = rz - player_rz;
-                    if (dx * dx + dz * dz > region_radius * region_radius) continue;
+                    if (@as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz) > @as(i64, region_radius) * @as(i64, region_radius)) continue;
 
                     const key = LODRegionKey{ .rx = rx, .rz = rz, .lod = lod };
 
@@ -442,10 +442,10 @@ pub fn LODManager(comptime RHI: type) type {
 
                         // Calculate velocity-weighted priority
                         // (dx, dz calculated above)
-                        const dist_sq = dx * dx + dz * dz;
+                        const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
                         // Scale priority to match chunk-distance units used by meshing jobs (which are prioritized by chunk dist)
                         // This ensures generation doesn't starve meshing
-                        var priority = dist_sq * scale * scale;
+                        var priority = @as(i32, @intCast(dist_sq * @as(i64, scale) * @as(i64, scale)));
                         if (has_velocity) {
                             const fdx: f32 = @floatFromInt(dx);
                             const fdz: f32 = @floatFromInt(dz);
@@ -493,12 +493,14 @@ pub fn LODManager(comptime RHI: type) type {
                         const scale = @as(i32, @intCast(lod.chunksPerSide()));
                         const dx = chunk.region_x * scale - self.player_cx;
                         const dz = chunk.region_z * scale - self.player_cz;
-                        const dist_sq = dx * dx + dz * dz;
+                        const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
+                        const lod_bits = @as(i32, @intCast(i)) << 28;
 
                         chunk.state = .meshing;
                         try self.gen_queues[LODLevel.count - 1].push(.{
                             .type = .chunk_meshing,
-                            .dist_sq = (dist_sq & 0x0FFFFFFF) | (@as(i32, @intCast(@intFromEnum(lod))) << 28),
+                            // Encode LOD level in high bits of dist_sq
+                            .dist_sq = @as(i32, @intCast(dist_sq & 0x0FFFFFFF)) | lod_bits,
                             .data = .{
                                 .chunk = .{
                                     .x = chunk.region_x,
@@ -577,7 +579,10 @@ pub fn LODManager(comptime RHI: type) type {
                 const dx = key.rx - player_rx;
                 const dz = key.rz - player_rz;
 
-                if (dx * dx + dz * dz > region_radius * region_radius) {
+                const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
+                const rad_sq = @as(i64, region_radius) * @as(i64, region_radius);
+
+                if (dist_sq > rad_sq) {
                     if (!chunk.isPinned() and
                         chunk.state != .generating and
                         chunk.state != .meshing and
@@ -836,7 +841,10 @@ pub fn LODManager(comptime RHI: type) type {
             const radius = radii[lod_idx];
             const region_radius = @divFloor(radius, scale) + 2;
 
-            if (dx * dx + dz * dz > region_radius * region_radius) {
+            const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
+            const rad_sq = @as(i64, region_radius) * @as(i64, region_radius);
+
+            if (dist_sq > rad_sq) {
                 if (chunk.state == .generating or chunk.state == .meshing) {
                     chunk.state = .missing;
                 }

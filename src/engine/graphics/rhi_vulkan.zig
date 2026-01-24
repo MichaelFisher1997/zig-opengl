@@ -44,6 +44,23 @@ const fxaa_system_pkg = @import("vulkan/fxaa_system.zig");
 const FXAASystem = fxaa_system_pkg.FXAASystem;
 const FXAAPushConstants = fxaa_system_pkg.FXAAPushConstants;
 
+/// GPU Render Passes for profiling
+const GpuPass = enum {
+    shadow_0,
+    shadow_1,
+    shadow_2,
+    g_pass,
+    ssao,
+    sky,
+    opaque_pass,
+    cloud,
+    bloom,
+    fxaa,
+    post_process,
+
+    pub const COUNT = 11;
+};
+
 /// Push constants for post-process pass (tonemapping + bloom integration)
 const PostProcessPushConstants = extern struct {
     bloom_enabled: f32, // 0.0 = disabled, 1.0 = enabled
@@ -70,6 +87,9 @@ const GlobalUniforms = extern struct {
     volumetric_params: [4]f32, // x = enabled, y = density, z = steps, w = scattering
     viewport_size: [4]f32, // xy = width/height, zw = unused
 };
+
+const QUERY_COUNT_PER_FRAME = GpuPass.COUNT * 2;
+const TOTAL_QUERY_COUNT = QUERY_COUNT_PER_FRAME * MAX_FRAMES_IN_FLIGHT;
 
 const SSAOParams = extern struct {
     projection: Mat4,
@@ -324,6 +344,11 @@ const VulkanContext = struct {
     velocity_view: c.VkImageView = null,
     velocity_handle: rhi.TextureHandle = 0,
     view_proj_prev: Mat4 = Mat4.identity,
+
+    // GPU Timing
+    query_pool: c.VkQueryPool = null,
+    timing_enabled: bool = true, // Default to true for debugging
+    timing_results: rhi.GpuTimingResults = undefined,
 };
 
 fn destroyHDRResources(ctx: *VulkanContext) void {
@@ -2627,6 +2652,21 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
     try ctx.resources.flushTransfer();
     // Reset to frame 0 after initialization. Dummy textures created at index 1 are safe.
     ctx.resources.setCurrentFrame(0);
+
+    // Ensure shadow image is in readable layout initially (in case ShadowPass is skipped)
+    if (ctx.shadow_system.shadow_image != null) {
+        try transitionImagesToShaderRead(ctx, &[_]c.VkImage{ctx.shadow_system.shadow_image}, true);
+        for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
+            ctx.shadow_system.shadow_image_layouts[i] = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+    }
+
+    // 11. GPU Timing Query Pool
+    var query_pool_info = std.mem.zeroes(c.VkQueryPoolCreateInfo);
+    query_pool_info.sType = c.VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    query_pool_info.queryType = c.VK_QUERY_TYPE_TIMESTAMP;
+    query_pool_info.queryCount = TOTAL_QUERY_COUNT;
+    try Utils.checkVk(c.vkCreateQueryPool(ctx.vulkan_device.vk_device, &query_pool_info, null, &ctx.query_pool));
 }
 
 fn deinit(ctx_ptr: *anyopaque) void {
@@ -2694,6 +2734,11 @@ fn deinit(ctx_ptr: *anyopaque) void {
     ctx.swapchain.deinit();
     ctx.frames.deinit();
     ctx.resources.deinit();
+
+    if (ctx.query_pool != null) {
+        c.vkDestroyQueryPool(ctx.vulkan_device.vk_device, ctx.query_pool, null);
+    }
+
     ctx.vulkan_device.deinit();
 
     ctx.allocator.destroy(ctx);
@@ -2770,7 +2815,41 @@ fn recreateSwapchainInternal(ctx: *VulkanContext) void {
     ctx.bloom.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.hdr_view, ctx.swapchain.getExtent().width, ctx.swapchain.getExtent().height, c.VK_FORMAT_R16G16B16A16_SFLOAT) catch |err| std.log.err("Failed to recreate Bloom resources: {}", .{err});
     updatePostProcessDescriptorsWithBloom(ctx);
 
+    // Ensure all recreated images are in a known layout
+    {
+        var list: [16]c.VkImage = undefined;
+        var count: usize = 0;
+        const candidates = [_]c.VkImage{ ctx.hdr_image, ctx.g_normal_image, ctx.ssao_image, ctx.ssao_blur_image, ctx.ssao_noise_image, ctx.velocity_image };
+        for (candidates) |img| {
+            if (img != null) {
+                list[count] = img;
+                count += 1;
+            }
+        }
+        if (count > 0) {
+            transitionImagesToShaderRead(ctx, list[0..count], false) catch |err| std.log.warn("Failed to transition images: {}", .{err});
+        }
+
+        if (ctx.g_depth_image != null) {
+            transitionImagesToShaderRead(ctx, &[_]c.VkImage{ctx.g_depth_image}, true) catch |err| std.log.warn("Failed to transition G-depth image: {}", .{err});
+        }
+        if (ctx.shadow_system.shadow_image != null) {
+            transitionImagesToShaderRead(ctx, &[_]c.VkImage{ctx.shadow_system.shadow_image}, true) catch |err| std.log.warn("Failed to transition Shadow image: {}", .{err});
+            for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
+                ctx.shadow_system.shadow_image_layouts[i] = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            }
+        }
+    }
+
+    // Transition Bloom mips
+    for (ctx.bloom.mip_images) |img| {
+        if (img != null) {
+            transitionImagesToShaderRead(ctx, &[_]c.VkImage{img}, false) catch {};
+        }
+    }
+
     ctx.framebuffer_resized = false;
+
     ctx.pipeline_rebuild_needed = false;
     std.debug.print("recreateSwapchainInternal: done.\n", .{});
 }
@@ -2802,13 +2881,23 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
 
     // Begin frame (acquire image, reset fences/CBs)
     const frame_started = ctx.frames.beginFrame(&ctx.swapchain) catch |err| {
-        if (err == error.OutOfDate) {
-            recreateSwapchainInternal(ctx);
+        if (err == error.GpuLost) {
+            ctx.gpu_fault_detected = true;
         } else {
             std.log.err("beginFrame failed: {}", .{err});
         }
         return;
     };
+
+    if (frame_started) {
+        processTimingResults(ctx);
+
+        const current_frame = ctx.frames.current_frame;
+        const command_buffer = ctx.frames.command_buffers[current_frame];
+        if (ctx.query_pool != null) {
+            c.vkCmdResetQueryPool(command_buffer, ctx.query_pool, @intCast(current_frame * QUERY_COUNT_PER_FRAME), QUERY_COUNT_PER_FRAME);
+        }
+    }
 
     ctx.resources.setCurrentFrame(ctx.frames.current_frame);
 
@@ -3300,12 +3389,14 @@ fn computeBloomInternal(ctx: *VulkanContext) void {
     const command_buffer = ctx.frames.command_buffers[ctx.frames.current_frame];
     const frame = ctx.frames.current_frame;
 
-    // Transition HDR image to shader read layout if needed
+    // The HDR image is already transitioned to SHADER_READ_ONLY_OPTIMAL by the main render pass (via finalLayout).
+    // However, we still need a pipeline barrier for memory visibility and to ensure the GPU has finished
+    // writing to the HDR image before we start downsampling.
     var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
     barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.srcAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
-    barrier.oldLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier.oldLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; // Current layout after main pass
     barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barrier.image = ctx.hdr_image;
     barrier.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
@@ -3590,7 +3681,7 @@ fn beginMainPassInternal(ctx: *VulkanContext) void {
         }
         render_pass_info.pClearValues = &clear_values[0];
 
-        std.debug.print("beginMainPass: calling vkCmdBeginRenderPass (cb={}, rp={}, fb={})\n", .{ command_buffer != null, ctx.hdr_render_pass != null, ctx.main_framebuffer != null });
+        // std.debug.print("beginMainPass: calling vkCmdBeginRenderPass (cb={}, rp={}, fb={})\n", .{ command_buffer != null, ctx.hdr_render_pass != null, ctx.main_framebuffer != null });
         c.vkCmdBeginRenderPass(command_buffer, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
         ctx.main_pass_active = true;
     }
@@ -5050,6 +5141,13 @@ const VULKAN_RHI_VTABLE = rhi.RHI.VTable{
         .getValidationErrorCount = getValidationErrorCount,
         .waitIdle = waitIdle,
     },
+    .timing = .{
+        .beginPassTiming = beginPassTiming,
+        .endPassTiming = endPassTiming,
+        .getTimingResults = getTimingResults,
+        .isTimingEnabled = isTimingEnabled,
+        .setTimingEnabled = setTimingEnabled,
+    },
     .setWireframe = setWireframe,
     .setTexturesEnabled = setTexturesEnabled,
     .setVSync = setVSync,
@@ -5061,6 +5159,125 @@ const VULKAN_RHI_VTABLE = rhi.RHI.VTable{
     .setBloom = setBloom,
     .setBloomIntensity = setBloomIntensity,
 };
+
+fn mapPassName(name: []const u8) ?GpuPass {
+    if (std.mem.eql(u8, name, "ShadowPass0")) return .shadow_0;
+    if (std.mem.eql(u8, name, "ShadowPass1")) return .shadow_1;
+    if (std.mem.eql(u8, name, "ShadowPass2")) return .shadow_2;
+    if (std.mem.eql(u8, name, "GPass")) return .g_pass;
+    if (std.mem.eql(u8, name, "SSAOPass")) return .ssao;
+    if (std.mem.eql(u8, name, "SkyPass")) return .sky;
+    if (std.mem.eql(u8, name, "OpaquePass")) return .opaque_pass;
+    if (std.mem.eql(u8, name, "CloudPass")) return .cloud;
+    if (std.mem.eql(u8, name, "BloomPass")) return .bloom;
+    if (std.mem.eql(u8, name, "FXAAPass")) return .fxaa;
+    if (std.mem.eql(u8, name, "PostProcessPass")) return .post_process;
+    return null;
+}
+
+fn beginPassTiming(ctx_ptr: *anyopaque, pass_name: []const u8) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (!ctx.timing_enabled or ctx.query_pool == null) return;
+
+    const pass = mapPassName(pass_name) orelse return;
+    const cmd = ctx.frames.command_buffers[ctx.frames.current_frame];
+    if (cmd == null) return;
+
+    const query_index = @as(u32, @intCast(ctx.frames.current_frame * QUERY_COUNT_PER_FRAME)) + @as(u32, @intFromEnum(pass)) * 2;
+    c.vkCmdWriteTimestamp(cmd, c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, ctx.query_pool, query_index);
+}
+
+fn endPassTiming(ctx_ptr: *anyopaque, pass_name: []const u8) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    if (!ctx.timing_enabled or ctx.query_pool == null) return;
+
+    const pass = mapPassName(pass_name) orelse return;
+    const cmd = ctx.frames.command_buffers[ctx.frames.current_frame];
+    if (cmd == null) return;
+
+    const query_index = @as(u32, @intCast(ctx.frames.current_frame * QUERY_COUNT_PER_FRAME)) + @as(u32, @intFromEnum(pass)) * 2 + 1;
+    c.vkCmdWriteTimestamp(cmd, c.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ctx.query_pool, query_index);
+}
+
+fn getTimingResults(ctx_ptr: *anyopaque) rhi.GpuTimingResults {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.timing_results;
+}
+
+fn isTimingEnabled(ctx_ptr: *anyopaque) bool {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.timing_enabled;
+}
+
+fn setTimingEnabled(ctx_ptr: *anyopaque, enabled: bool) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.timing_enabled = enabled;
+}
+
+fn processTimingResults(ctx: *VulkanContext) void {
+    if (!ctx.timing_enabled or ctx.query_pool == null) return;
+    if (!ctx.timing_enabled or ctx.query_pool == null) return;
+    if (ctx.frame_index < MAX_FRAMES_IN_FLIGHT) return;
+
+    const frame = ctx.frames.current_frame;
+    const offset = frame * QUERY_COUNT_PER_FRAME;
+    var results: [QUERY_COUNT_PER_FRAME]u64 = .{0} ** QUERY_COUNT_PER_FRAME;
+
+    const res = c.vkGetQueryPoolResults(
+        ctx.vulkan_device.vk_device,
+        ctx.query_pool,
+        @intCast(offset),
+        QUERY_COUNT_PER_FRAME,
+        @sizeOf(@TypeOf(results)),
+        &results,
+        @sizeOf(u64),
+        c.VK_QUERY_RESULT_64_BIT,
+    );
+
+    if (res == c.VK_SUCCESS) {
+        const period = ctx.vulkan_device.timestamp_period;
+
+        ctx.timing_results.shadow_pass_ms[0] = @as(f32, @floatFromInt(results[1] -% results[0])) * period / 1e6;
+        ctx.timing_results.shadow_pass_ms[1] = @as(f32, @floatFromInt(results[3] -% results[2])) * period / 1e6;
+        ctx.timing_results.shadow_pass_ms[2] = @as(f32, @floatFromInt(results[5] -% results[4])) * period / 1e6;
+        ctx.timing_results.g_pass_ms = @as(f32, @floatFromInt(results[7] -% results[6])) * period / 1e6;
+        ctx.timing_results.ssao_pass_ms = @as(f32, @floatFromInt(results[9] -% results[8])) * period / 1e6;
+        ctx.timing_results.sky_pass_ms = @as(f32, @floatFromInt(results[11] -% results[10])) * period / 1e6;
+        ctx.timing_results.opaque_pass_ms = @as(f32, @floatFromInt(results[13] -% results[12])) * period / 1e6;
+        ctx.timing_results.cloud_pass_ms = @as(f32, @floatFromInt(results[15] -% results[14])) * period / 1e6;
+        ctx.timing_results.bloom_pass_ms = @as(f32, @floatFromInt(results[17] -% results[16])) * period / 1e6;
+        ctx.timing_results.fxaa_pass_ms = @as(f32, @floatFromInt(results[19] -% results[18])) * period / 1e6;
+        ctx.timing_results.post_process_pass_ms = @as(f32, @floatFromInt(results[21] -% results[20])) * period / 1e6;
+
+        ctx.timing_results.main_pass_ms = ctx.timing_results.sky_pass_ms + ctx.timing_results.opaque_pass_ms + ctx.timing_results.cloud_pass_ms;
+
+        ctx.timing_results.validate();
+
+        ctx.timing_results.total_gpu_ms = 0;
+        ctx.timing_results.total_gpu_ms += ctx.timing_results.shadow_pass_ms[0];
+        ctx.timing_results.total_gpu_ms += ctx.timing_results.shadow_pass_ms[1];
+        ctx.timing_results.total_gpu_ms += ctx.timing_results.shadow_pass_ms[2];
+        ctx.timing_results.total_gpu_ms += ctx.timing_results.g_pass_ms;
+        ctx.timing_results.total_gpu_ms += ctx.timing_results.ssao_pass_ms;
+        ctx.timing_results.total_gpu_ms += ctx.timing_results.main_pass_ms;
+        ctx.timing_results.total_gpu_ms += ctx.timing_results.bloom_pass_ms;
+        ctx.timing_results.total_gpu_ms += ctx.timing_results.fxaa_pass_ms;
+        ctx.timing_results.total_gpu_ms += ctx.timing_results.post_process_pass_ms;
+
+        if (ctx.timing_enabled) {
+            std.debug.print("GPU Frame Time: {d:.2}ms (Shadow: {d:.2}, G-Pass: {d:.2}, SSAO: {d:.2}, Main: {d:.2}, Bloom: {d:.2}, FXAA: {d:.2}, Post: {d:.2})\n", .{
+                ctx.timing_results.total_gpu_ms,
+                ctx.timing_results.shadow_pass_ms[0] + ctx.timing_results.shadow_pass_ms[1] + ctx.timing_results.shadow_pass_ms[2],
+                ctx.timing_results.g_pass_ms,
+                ctx.timing_results.ssao_pass_ms,
+                ctx.timing_results.main_pass_ms,
+                ctx.timing_results.bloom_pass_ms,
+                ctx.timing_results.fxaa_pass_ms,
+                ctx.timing_results.post_process_pass_ms,
+            });
+        }
+    }
+}
 
 pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_device: ?*RenderDevice, shadow_resolution: u32, msaa_samples: u8, anisotropic_filtering: u8) !rhi.RHI {
     const ctx = try allocator.create(VulkanContext);
@@ -5108,6 +5325,8 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.ui_mapped_ptr = null;
     ctx.ui_vertex_offset = 0;
     ctx.frame_index = 0;
+    ctx.timing_enabled = false; // Will be enabled via RHI call
+    ctx.timing_results = std.mem.zeroes(rhi.GpuTimingResults);
     ctx.frames.current_frame = 0;
     ctx.frames.current_image_index = 0;
 

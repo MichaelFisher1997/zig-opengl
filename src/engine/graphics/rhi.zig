@@ -38,6 +38,7 @@ pub const ShadowConfig = rhi_types.ShadowConfig;
 pub const ShadowParams = rhi_types.ShadowParams;
 pub const Color = rhi_types.Color;
 pub const Rect = rhi_types.Rect;
+pub const GpuTimingResults = rhi_types.GpuTimingResults;
 
 // --- Segregated Interfaces ---
 
@@ -396,6 +397,35 @@ pub const IDeviceQuery = struct {
     }
 };
 
+pub const IDeviceTiming = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        beginPassTiming: *const fn (ptr: *anyopaque, pass_name: []const u8) void,
+        endPassTiming: *const fn (ptr: *anyopaque, pass_name: []const u8) void,
+        getTimingResults: *const fn (ptr: *anyopaque) GpuTimingResults,
+        isTimingEnabled: *const fn (ptr: *anyopaque) bool,
+        setTimingEnabled: *const fn (ptr: *anyopaque, enabled: bool) void,
+    };
+
+    pub fn beginPassTiming(self: IDeviceTiming, pass_name: []const u8) void {
+        self.vtable.beginPassTiming(self.ptr, pass_name);
+    }
+    pub fn endPassTiming(self: IDeviceTiming, pass_name: []const u8) void {
+        self.vtable.endPassTiming(self.ptr, pass_name);
+    }
+    pub fn getTimingResults(self: IDeviceTiming) GpuTimingResults {
+        return self.vtable.getTimingResults(self.ptr);
+    }
+    pub fn isTimingEnabled(self: IDeviceTiming) bool {
+        return self.vtable.isTimingEnabled(self.ptr);
+    }
+    pub fn setTimingEnabled(self: IDeviceTiming, enabled: bool) void {
+        self.vtable.setTimingEnabled(self.ptr, enabled);
+    }
+};
+
 /// Composite RHI structure for backward compatibility during refactoring
 pub const RHI = struct {
     ptr: *anyopaque,
@@ -412,6 +442,7 @@ pub const RHI = struct {
         shadow: IShadowContext.VTable,
         ui: IUIContext.VTable,
         query: IDeviceQuery.VTable,
+        timing: IDeviceTiming.VTable,
 
         // Options
         setWireframe: *const fn (ctx: *anyopaque, enabled: bool) void,
@@ -447,6 +478,9 @@ pub const RHI = struct {
     }
     pub fn query(self: RHI) IDeviceQuery {
         return .{ .ptr = self.ptr, .vtable = &self.vtable.query };
+    }
+    pub fn timing(self: RHI) IDeviceTiming {
+        return .{ .ptr = self.ptr, .vtable = &self.vtable.timing };
     }
 
     // Legacy wrappers (redirecting to sub-interfaces)

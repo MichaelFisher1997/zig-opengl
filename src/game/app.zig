@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("../c.zig").c;
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 
 const log = @import("../engine/core/log.zig");
 const WindowManager = @import("../engine/core/window.zig").WindowManager;
@@ -20,6 +21,7 @@ const AtmosphereSystem = @import("../engine/graphics/atmosphere_system.zig").Atm
 const MaterialSystem = @import("../engine/graphics/material_system.zig").MaterialSystem;
 const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").ResourcePackManager;
 const AudioSystem = @import("../engine/audio/system.zig").AudioSystem;
+const TimingOverlay = @import("../engine/ui/timing_overlay.zig").TimingOverlay;
 
 const settings_pkg = @import("settings.zig");
 const Settings = settings_pkg.Settings;
@@ -60,6 +62,7 @@ pub const App = struct {
     time: Time,
 
     ui: ?UISystem,
+    timing_overlay: TimingOverlay,
 
     screen_manager: ScreenManager,
     safe_render_mode: bool,
@@ -238,14 +241,15 @@ pub const App = struct {
             .sky_pass = .{},
             .opaque_pass = .{},
             .cloud_pass = .{},
-            .bloom_pass = .{},
+            .bloom_pass = .{ .enabled = true },
             .post_process_pass = .{},
-            .fxaa_pass = .{},
+            .fxaa_pass = .{ .enabled = true },
             .settings = settings,
             .input = input,
             .input_mapper = input_mapper,
             .time = time,
             .ui = ui,
+            .timing_overlay = .{ .enabled = build_options.smoke_test },
             .screen_manager = ScreenManager.init(allocator),
             .safe_render_mode = safe_render_mode,
             .skip_world_update = skip_world_update,
@@ -269,6 +273,10 @@ pub const App = struct {
         app.rhi.setBloom(settings.bloom_enabled);
         app.rhi.setBloomIntensity(settings.bloom_intensity);
 
+        if (build_options.smoke_test) {
+            app.rhi.timing().setTimingEnabled(true);
+        }
+
         // Build RenderGraph (OCP: We can easily modify this list based on quality)
         if (!safe_render_mode) {
             try app.render_graph.addPass(app.shadow_passes[0].pass());
@@ -287,7 +295,6 @@ pub const App = struct {
         }
 
         const engine_ctx = app.engineContext();
-        const build_options = @import("build_options");
         if (build_options.smoke_test) {
             log.log.info("SMOKE TEST MODE: Bypassing menu and loading world", .{});
             const world_screen = try WorldScreen.init(allocator, engine_ctx, 12345, 0);
@@ -367,6 +374,11 @@ pub const App = struct {
         self.input.beginFrame();
         self.input.pollEvents();
 
+        if (self.input.isKeyPressed(.f3)) {
+            self.timing_overlay.toggle();
+            self.rhi.timing().setTimingEnabled(self.timing_overlay.enabled);
+        }
+
         if (self.ui) |*u| u.resize(self.input.window_width, self.input.window_height);
 
         self.rhi.setViewport(self.input.window_width, self.input.window_height);
@@ -391,11 +403,18 @@ pub const App = struct {
 
         if (self.ui) |*u| {
             try self.screen_manager.draw(u);
+
+            if (self.timing_overlay.enabled) {
+                u.begin();
+                const timing = self.rhi.timing();
+                const results = timing.getTimingResults();
+                self.timing_overlay.draw(u, results);
+                u.end();
+            }
         }
 
         self.rhi.endFrame();
 
-        const build_options = @import("build_options");
         if (build_options.smoke_test) {
             self.smoke_test_frames += 1;
             var target_frames: u32 = 120;
