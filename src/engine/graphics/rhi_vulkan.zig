@@ -268,6 +268,7 @@ const VulkanContext = struct {
     g_pass_active: bool = false,
     ssao_pass_active: bool = false,
     post_process_ran_this_frame: bool = false,
+    fxaa_ran_this_frame: bool = false,
     pipeline_rebuild_needed: bool = false,
 
     // Frame state
@@ -293,6 +294,10 @@ const VulkanContext = struct {
     ui_pipeline_layout: c.VkPipelineLayout = null,
     ui_tex_pipeline: c.VkPipeline = null,
     ui_tex_pipeline_layout: c.VkPipelineLayout = null,
+    ui_swapchain_pipeline: c.VkPipeline = null,
+    ui_swapchain_tex_pipeline: c.VkPipeline = null,
+    ui_swapchain_render_pass: c.VkRenderPass = null,
+    ui_swapchain_framebuffers: std.ArrayListUnmanaged(c.VkFramebuffer) = .empty,
     ui_tex_descriptor_set_layout: c.VkDescriptorSetLayout = null,
     ui_tex_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
     ui_tex_descriptor_pool: [MAX_FRAMES_IN_FLIGHT][64]c.VkDescriptorSet = .{.{null} ** 64} ** MAX_FRAMES_IN_FLIGHT,
@@ -300,6 +305,7 @@ const VulkanContext = struct {
     ui_vbos: [MAX_FRAMES_IN_FLIGHT]VulkanBuffer = .{VulkanBuffer{}} ** MAX_FRAMES_IN_FLIGHT,
     ui_screen_width: f32 = 0.0,
     ui_screen_height: f32 = 0.0,
+    ui_using_swapchain: bool = false,
     ui_in_progress: bool = false,
     ui_vertex_offset: u64 = 0,
     ui_flushed_vertex_count: u32 = 0,
@@ -400,18 +406,18 @@ fn destroyPostProcessResources(ctx: *VulkanContext) void {
         c.vkDestroyPipelineLayout(vk, ctx.post_process_pipeline_layout, null);
         ctx.post_process_pipeline_layout = null;
     }
-    if (ctx.post_process_descriptor_set_layout != null) {
-        c.vkDestroyDescriptorSetLayout(vk, ctx.post_process_descriptor_set_layout, null);
-        ctx.post_process_descriptor_set_layout = null;
-    }
+    // Note: post_process_descriptor_set_layout is created once in initContext and NOT destroyed here
     if (ctx.post_process_render_pass != null) {
         c.vkDestroyRenderPass(vk, ctx.post_process_render_pass, null);
         ctx.post_process_render_pass = null;
     }
+
+    destroySwapchainUIResources(ctx);
 }
 
 fn destroyGPassResources(ctx: *VulkanContext) void {
     const vk = ctx.vulkan_device.vk_device;
+    destroyVelocityResources(ctx);
     if (ctx.g_pipeline != null) {
         c.vkDestroyPipeline(vk, ctx.g_pipeline, null);
         ctx.g_pipeline = null;
@@ -557,9 +563,44 @@ fn destroySSAOResources(ctx: *VulkanContext) void {
         c.vkFreeMemory(vk, ctx.ssao_kernel_ubo.memory, null);
         ctx.ssao_kernel_ubo.memory = null;
     }
+    if (ctx.ssao_sampler != null) {
+        c.vkDestroySampler(vk, ctx.ssao_sampler, null);
+        ctx.ssao_sampler = null;
+    }
+}
+
+fn destroySwapchainUIPipelines(ctx: *VulkanContext) void {
+    const vk = ctx.vulkan_device.vk_device;
+    if (vk == null) return;
+
+    if (ctx.ui_swapchain_pipeline != null) {
+        c.vkDestroyPipeline(vk, ctx.ui_swapchain_pipeline, null);
+        ctx.ui_swapchain_pipeline = null;
+    }
+    if (ctx.ui_swapchain_tex_pipeline != null) {
+        c.vkDestroyPipeline(vk, ctx.ui_swapchain_tex_pipeline, null);
+        ctx.ui_swapchain_tex_pipeline = null;
+    }
+}
+
+fn destroySwapchainUIResources(ctx: *VulkanContext) void {
+    const vk = ctx.vulkan_device.vk_device;
+    if (vk == null) return;
+
+    for (ctx.ui_swapchain_framebuffers.items) |fb| {
+        c.vkDestroyFramebuffer(vk, fb, null);
+    }
+    ctx.ui_swapchain_framebuffers.deinit(ctx.allocator);
+    ctx.ui_swapchain_framebuffers = .empty;
+
+    if (ctx.ui_swapchain_render_pass != null) {
+        c.vkDestroyRenderPass(vk, ctx.ui_swapchain_render_pass, null);
+        ctx.ui_swapchain_render_pass = null;
+    }
 }
 
 fn destroyFXAAResources(ctx: *VulkanContext) void {
+    destroySwapchainUIPipelines(ctx);
     ctx.fxaa.deinit(ctx.vulkan_device.vk_device, ctx.allocator, ctx.descriptors.descriptor_pool);
 }
 
@@ -765,32 +806,41 @@ fn createPostProcessResources(ctx: *VulkanContext) !void {
     try Utils.checkVk(c.vkCreateRenderPass(vk, &rp_info, null, &ctx.post_process_render_pass));
 
     // 2. Descriptor Set Layout (binding 0: HDR scene, binding 1: uniforms, binding 2: bloom)
-    var bindings = [_]c.VkDescriptorSetLayoutBinding{
-        .{ .binding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
-        .{ .binding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
-        .{ .binding = 2, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
-    };
-    var layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
-    layout_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout_info.bindingCount = 3;
-    layout_info.pBindings = &bindings[0];
-    try Utils.checkVk(c.vkCreateDescriptorSetLayout(vk, &layout_info, null, &ctx.post_process_descriptor_set_layout));
+    if (ctx.post_process_descriptor_set_layout == null) {
+        var bindings = [_]c.VkDescriptorSetLayoutBinding{
+            .{ .binding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+            .{ .binding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+            .{ .binding = 2, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+        };
+        var layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
+        layout_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layout_info.bindingCount = 3;
+        layout_info.pBindings = &bindings[0];
+        try Utils.checkVk(c.vkCreateDescriptorSetLayout(vk, &layout_info, null, &ctx.post_process_descriptor_set_layout));
+    }
 
     // 3. Pipeline Layout (with push constants for bloom parameters)
-    var post_push_constant = std.mem.zeroes(c.VkPushConstantRange);
-    post_push_constant.stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT;
-    post_push_constant.offset = 0;
-    post_push_constant.size = 8; // 2 floats: bloomEnabled, bloomIntensity
+    if (ctx.post_process_pipeline_layout == null) {
+        var post_push_constant = std.mem.zeroes(c.VkPushConstantRange);
+        post_push_constant.stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT;
+        post_push_constant.offset = 0;
+        post_push_constant.size = 8; // 2 floats: bloomEnabled, bloomIntensity
 
-    var pipe_layout_info = std.mem.zeroes(c.VkPipelineLayoutCreateInfo);
-    pipe_layout_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipe_layout_info.setLayoutCount = 1;
-    pipe_layout_info.pSetLayouts = &ctx.post_process_descriptor_set_layout;
-    pipe_layout_info.pushConstantRangeCount = 1;
-    pipe_layout_info.pPushConstantRanges = &post_push_constant;
-    try Utils.checkVk(c.vkCreatePipelineLayout(vk, &pipe_layout_info, null, &ctx.post_process_pipeline_layout));
+        var pipe_layout_info = std.mem.zeroes(c.VkPipelineLayoutCreateInfo);
+        pipe_layout_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipe_layout_info.setLayoutCount = 1;
+        pipe_layout_info.pSetLayouts = &ctx.post_process_descriptor_set_layout;
+        pipe_layout_info.pushConstantRangeCount = 1;
+        pipe_layout_info.pPushConstantRanges = &post_push_constant;
+        try Utils.checkVk(c.vkCreatePipelineLayout(vk, &pipe_layout_info, null, &ctx.post_process_pipeline_layout));
+    }
 
     // 4. Create Linear Sampler
+    if (ctx.post_process_sampler != null) {
+        c.vkDestroySampler(vk, ctx.post_process_sampler, null);
+        ctx.post_process_sampler = null;
+    }
+
     var sampler_info = std.mem.zeroes(c.VkSamplerCreateInfo);
     sampler_info.sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     sampler_info.magFilter = c.VK_FILTER_LINEAR;
@@ -870,12 +920,14 @@ fn createPostProcessResources(ctx: *VulkanContext) !void {
 
     // 6. Descriptor Sets
     for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        var alloc_ds_info = std.mem.zeroes(c.VkDescriptorSetAllocateInfo);
-        alloc_ds_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        alloc_ds_info.descriptorPool = ctx.descriptors.descriptor_pool;
-        alloc_ds_info.descriptorSetCount = 1;
-        alloc_ds_info.pSetLayouts = &ctx.post_process_descriptor_set_layout;
-        try Utils.checkVk(c.vkAllocateDescriptorSets(vk, &alloc_ds_info, &ctx.post_process_descriptor_sets[i]));
+        if (ctx.post_process_descriptor_sets[i] == null) {
+            var alloc_ds_info = std.mem.zeroes(c.VkDescriptorSetAllocateInfo);
+            alloc_ds_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            alloc_ds_info.descriptorPool = ctx.descriptors.descriptor_pool;
+            alloc_ds_info.descriptorSetCount = 1;
+            alloc_ds_info.pSetLayouts = &ctx.post_process_descriptor_set_layout;
+            try Utils.checkVk(c.vkAllocateDescriptorSets(vk, &alloc_ds_info, &ctx.post_process_descriptor_sets[i]));
+        }
 
         var image_info_ds = std.mem.zeroes(c.VkDescriptorImageInfo);
         image_info_ds.imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -904,11 +956,24 @@ fn createPostProcessResources(ctx: *VulkanContext) !void {
                 .descriptorCount = 1,
                 .pBufferInfo = &buffer_info_ds,
             },
+            .{
+                .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = ctx.post_process_descriptor_sets[i],
+                .dstBinding = 2,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .pImageInfo = &image_info_ds, // Dummy: use HDR view as placeholder for bloom
+            },
         };
-        c.vkUpdateDescriptorSets(vk, 2, &writes[0], 0, null);
+        c.vkUpdateDescriptorSets(vk, 3, &writes[0], 0, null);
     }
 
     // 7. Create post-process framebuffers (one per swapchain image)
+    for (ctx.post_process_framebuffers.items) |fb| {
+        c.vkDestroyFramebuffer(vk, fb, null);
+    }
+    ctx.post_process_framebuffers.clearRetainingCapacity();
+
     for (ctx.swapchain.getImageViews()) |iv| {
         var fb_info = std.mem.zeroes(c.VkFramebufferCreateInfo);
         fb_info.sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -926,6 +991,65 @@ fn createPostProcessResources(ctx: *VulkanContext) !void {
 
     // Clean up local sampler if not stored in context (but we should probably store it to destroy it later)
     ctx.post_process_sampler = linear_sampler;
+}
+
+fn createSwapchainUIResources(ctx: *VulkanContext) !void {
+    const vk = ctx.vulkan_device.vk_device;
+
+    destroySwapchainUIResources(ctx);
+    errdefer destroySwapchainUIResources(ctx);
+
+    var color_attachment = std.mem.zeroes(c.VkAttachmentDescription);
+    color_attachment.format = ctx.swapchain.getImageFormat();
+    color_attachment.samples = c.VK_SAMPLE_COUNT_1_BIT;
+    color_attachment.loadOp = c.VK_ATTACHMENT_LOAD_OP_LOAD;
+    color_attachment.storeOp = c.VK_ATTACHMENT_STORE_OP_STORE;
+    color_attachment.stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color_attachment.stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    color_attachment.initialLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    color_attachment.finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    var color_ref = c.VkAttachmentReference{ .attachment = 0, .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+
+    var subpass = std.mem.zeroes(c.VkSubpassDescription);
+    subpass.pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &color_ref;
+
+    var dependency = std.mem.zeroes(c.VkSubpassDependency);
+    dependency.srcSubpass = c.VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | c.VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+    dependency.dependencyFlags = c.VK_DEPENDENCY_BY_REGION_BIT;
+
+    var rp_info = std.mem.zeroes(c.VkRenderPassCreateInfo);
+    rp_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rp_info.attachmentCount = 1;
+    rp_info.pAttachments = &color_attachment;
+    rp_info.subpassCount = 1;
+    rp_info.pSubpasses = &subpass;
+    rp_info.dependencyCount = 1;
+    rp_info.pDependencies = &dependency;
+
+    try Utils.checkVk(c.vkCreateRenderPass(vk, &rp_info, null, &ctx.ui_swapchain_render_pass));
+
+    for (ctx.swapchain.getImageViews()) |iv| {
+        var fb_info = std.mem.zeroes(c.VkFramebufferCreateInfo);
+        fb_info.sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fb_info.renderPass = ctx.ui_swapchain_render_pass;
+        fb_info.attachmentCount = 1;
+        fb_info.pAttachments = &iv;
+        fb_info.width = ctx.swapchain.getExtent().width;
+        fb_info.height = ctx.swapchain.getExtent().height;
+        fb_info.layers = 1;
+
+        var fb: c.VkFramebuffer = null;
+        try Utils.checkVk(c.vkCreateFramebuffer(vk, &fb_info, null, &fb));
+        try ctx.ui_swapchain_framebuffers.append(ctx.allocator, fb);
+    }
 }
 
 fn createShadowResources(ctx: *VulkanContext) !void {
@@ -1104,7 +1228,7 @@ fn createMainRenderPass(ctx: *VulkanContext) !void {
         msaa_color_attachment.storeOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
         msaa_color_attachment.stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         msaa_color_attachment.stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        msaa_color_attachment.initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
+        msaa_color_attachment.initialLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         msaa_color_attachment.finalLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
         var depth_attachment = std.mem.zeroes(c.VkAttachmentDescription);
@@ -1124,7 +1248,7 @@ fn createMainRenderPass(ctx: *VulkanContext) !void {
         resolve_attachment.storeOp = c.VK_ATTACHMENT_STORE_OP_STORE;
         resolve_attachment.stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         resolve_attachment.stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        resolve_attachment.initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
+        resolve_attachment.initialLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         resolve_attachment.finalLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         var color_ref = c.VkAttachmentReference{ .attachment = 0, .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
@@ -1180,7 +1304,7 @@ fn createMainRenderPass(ctx: *VulkanContext) !void {
         color_attachment.storeOp = c.VK_ATTACHMENT_STORE_OP_STORE;
         color_attachment.stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         color_attachment.stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        color_attachment.initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
+        color_attachment.initialLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color_attachment.finalLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         var depth_attachment = std.mem.zeroes(c.VkAttachmentDescription);
@@ -2367,6 +2491,118 @@ fn createMainPipelines(ctx: *VulkanContext) !void {
     }
 }
 
+fn createSwapchainUIPipelines(ctx: *VulkanContext) !void {
+    if (ctx.ui_swapchain_render_pass == null) return error.InitializationFailed;
+
+    destroySwapchainUIPipelines(ctx);
+    errdefer destroySwapchainUIPipelines(ctx);
+
+    var viewport_state = std.mem.zeroes(c.VkPipelineViewportStateCreateInfo);
+    viewport_state.sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.viewportCount = 1;
+    viewport_state.scissorCount = 1;
+
+    const dynamic_states = [_]c.VkDynamicState{ c.VK_DYNAMIC_STATE_VIEWPORT, c.VK_DYNAMIC_STATE_SCISSOR };
+    var dynamic_state = std.mem.zeroes(c.VkPipelineDynamicStateCreateInfo);
+    dynamic_state.sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic_state.dynamicStateCount = 2;
+    dynamic_state.pDynamicStates = &dynamic_states;
+
+    var input_assembly = std.mem.zeroes(c.VkPipelineInputAssemblyStateCreateInfo);
+    input_assembly.sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly.topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    var rasterizer = std.mem.zeroes(c.VkPipelineRasterizationStateCreateInfo);
+    rasterizer.sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.lineWidth = 1.0;
+    rasterizer.cullMode = c.VK_CULL_MODE_NONE;
+    rasterizer.frontFace = c.VK_FRONT_FACE_CLOCKWISE;
+
+    var multisampling = std.mem.zeroes(c.VkPipelineMultisampleStateCreateInfo);
+    multisampling.sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT;
+
+    var depth_stencil = std.mem.zeroes(c.VkPipelineDepthStencilStateCreateInfo);
+    depth_stencil.sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depth_stencil.depthTestEnable = c.VK_FALSE;
+    depth_stencil.depthWriteEnable = c.VK_FALSE;
+
+    var ui_color_blend_attachment = std.mem.zeroes(c.VkPipelineColorBlendAttachmentState);
+    ui_color_blend_attachment.colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT;
+    ui_color_blend_attachment.blendEnable = c.VK_TRUE;
+    ui_color_blend_attachment.srcColorBlendFactor = c.VK_BLEND_FACTOR_SRC_ALPHA;
+    ui_color_blend_attachment.dstColorBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    ui_color_blend_attachment.colorBlendOp = c.VK_BLEND_OP_ADD;
+    ui_color_blend_attachment.srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE;
+    ui_color_blend_attachment.dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ZERO;
+    ui_color_blend_attachment.alphaBlendOp = c.VK_BLEND_OP_ADD;
+
+    var ui_color_blending = std.mem.zeroes(c.VkPipelineColorBlendStateCreateInfo);
+    ui_color_blending.sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    ui_color_blending.attachmentCount = 1;
+    ui_color_blending.pAttachments = &ui_color_blend_attachment;
+
+    // UI
+    {
+        const vert_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/ui.vert.spv", ctx.allocator, @enumFromInt(1024 * 1024));
+        defer ctx.allocator.free(vert_code);
+        const frag_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/ui.frag.spv", ctx.allocator, @enumFromInt(1024 * 1024));
+        defer ctx.allocator.free(frag_code);
+        const vert_module = try Utils.createShaderModule(ctx.vulkan_device.vk_device, vert_code);
+        defer c.vkDestroyShaderModule(ctx.vulkan_device.vk_device, vert_module, null);
+        const frag_module = try Utils.createShaderModule(ctx.vulkan_device.vk_device, frag_code);
+        defer c.vkDestroyShaderModule(ctx.vulkan_device.vk_device, frag_module, null);
+        var shader_stages = [_]c.VkPipelineShaderStageCreateInfo{
+            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_VERTEX_BIT, .module = vert_module, .pName = "main" },
+            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT, .module = frag_module, .pName = "main" },
+        };
+        const binding_description = c.VkVertexInputBindingDescription{ .binding = 0, .stride = 6 * @sizeOf(f32), .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX };
+        var attribute_descriptions: [2]c.VkVertexInputAttributeDescription = undefined;
+        attribute_descriptions[0] = .{ .binding = 0, .location = 0, .format = c.VK_FORMAT_R32G32_SFLOAT, .offset = 0 };
+        attribute_descriptions[1] = .{ .binding = 0, .location = 1, .format = c.VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 2 * 4 };
+        var vertex_input_info = std.mem.zeroes(c.VkPipelineVertexInputStateCreateInfo);
+        vertex_input_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertex_input_info.vertexBindingDescriptionCount = 1;
+        vertex_input_info.pVertexBindingDescriptions = &binding_description;
+        vertex_input_info.vertexAttributeDescriptionCount = 2;
+        vertex_input_info.pVertexAttributeDescriptions = &attribute_descriptions[0];
+        var pipeline_info = std.mem.zeroes(c.VkGraphicsPipelineCreateInfo);
+        pipeline_info.sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipeline_info.stageCount = 2;
+        pipeline_info.pStages = &shader_stages[0];
+        pipeline_info.pVertexInputState = &vertex_input_info;
+        pipeline_info.pInputAssemblyState = &input_assembly;
+        pipeline_info.pViewportState = &viewport_state;
+        pipeline_info.pRasterizationState = &rasterizer;
+        pipeline_info.pMultisampleState = &multisampling;
+        pipeline_info.pDepthStencilState = &depth_stencil;
+        pipeline_info.pColorBlendState = &ui_color_blending;
+        pipeline_info.pDynamicState = &dynamic_state;
+        pipeline_info.layout = ctx.ui_pipeline_layout;
+        pipeline_info.renderPass = ctx.ui_swapchain_render_pass;
+        pipeline_info.subpass = 0;
+        try Utils.checkVk(c.vkCreateGraphicsPipelines(ctx.vulkan_device.vk_device, null, 1, &pipeline_info, null, &ctx.ui_swapchain_pipeline));
+
+        // Textured UI
+        const tex_vert_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/ui_tex.vert.spv", ctx.allocator, @enumFromInt(1024 * 1024));
+        defer ctx.allocator.free(tex_vert_code);
+        const tex_frag_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/ui_tex.frag.spv", ctx.allocator, @enumFromInt(1024 * 1024));
+        defer ctx.allocator.free(tex_frag_code);
+        const tex_vert_module = try Utils.createShaderModule(ctx.vulkan_device.vk_device, tex_vert_code);
+        defer c.vkDestroyShaderModule(ctx.vulkan_device.vk_device, tex_vert_module, null);
+        const tex_frag_module = try Utils.createShaderModule(ctx.vulkan_device.vk_device, tex_frag_code);
+        defer c.vkDestroyShaderModule(ctx.vulkan_device.vk_device, tex_frag_module, null);
+        var tex_shader_stages = [_]c.VkPipelineShaderStageCreateInfo{
+            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_VERTEX_BIT, .module = tex_vert_module, .pName = "main" },
+            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT, .module = tex_frag_module, .pName = "main" },
+        };
+        pipeline_info.pStages = &tex_shader_stages[0];
+        pipeline_info.layout = ctx.ui_tex_pipeline_layout;
+        pipeline_info.renderPass = ctx.ui_swapchain_render_pass;
+        try Utils.checkVk(c.vkCreateGraphicsPipelines(ctx.vulkan_device.vk_device, null, 1, &pipeline_info, null, &ctx.ui_swapchain_tex_pipeline));
+    }
+}
+
 fn destroyMainRenderPassAndPipelines(ctx: *VulkanContext) void {
     if (ctx.vulkan_device.vk_device == null) return;
     _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
@@ -2605,9 +2841,11 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
 
     // Post-process resources (depend on HDR views and post-process render pass)
     try createPostProcessResources(ctx);
+    try createSwapchainUIResources(ctx);
 
     // Phase 3: FXAA and Bloom resources (depend on post-process sampler and HDR views)
     try ctx.fxaa.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.swapchain.getExtent(), ctx.swapchain.getImageFormat(), ctx.post_process_sampler, ctx.swapchain.getImageViews());
+    try createSwapchainUIPipelines(ctx);
     try ctx.bloom.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.hdr_view, ctx.swapchain.getExtent().width, ctx.swapchain.getExtent().height, c.VK_FORMAT_R16G16B16A16_SFLOAT);
 
     // Update post-process descriptor sets to include bloom texture (binding 2)
@@ -2661,6 +2899,34 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
         }
     }
 
+    // Ensure all images are in shader-read layout initially
+    {
+        var list: [32]c.VkImage = undefined;
+        var count: usize = 0;
+        const candidates = [_]c.VkImage{ ctx.hdr_image, ctx.hdr_msaa_image, ctx.g_normal_image, ctx.ssao_image, ctx.ssao_blur_image, ctx.ssao_noise_image, ctx.velocity_image };
+        for (candidates) |img| {
+            if (img != null) {
+                list[count] = img;
+                count += 1;
+            }
+        }
+        // Also transition bloom mips
+        for (ctx.bloom.mip_images) |img| {
+            if (img != null) {
+                list[count] = img;
+                count += 1;
+            }
+        }
+
+        if (count > 0) {
+            transitionImagesToShaderRead(ctx, list[0..count], false) catch |err| std.log.err("Failed to transition images during init: {}", .{err});
+        }
+
+        if (ctx.g_depth_image != null) {
+            transitionImagesToShaderRead(ctx, &[_]c.VkImage{ctx.g_depth_image}, true) catch |err| std.log.err("Failed to transition G-depth image during init: {}", .{err});
+        }
+    }
+
     // 11. GPU Timing Query Pool
     var query_pool_info = std.mem.zeroes(c.VkQueryPoolCreateInfo);
     query_pool_info.sType = c.VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
@@ -2689,6 +2955,7 @@ fn deinit(ctx_ptr: *anyopaque) void {
     if (ctx.ui_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.ui_pipeline_layout, null);
     if (ctx.ui_tex_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.ui_tex_pipeline_layout, null);
     if (ctx.ui_tex_descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(ctx.vulkan_device.vk_device, ctx.ui_tex_descriptor_set_layout, null);
+    if (ctx.post_process_descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(ctx.vulkan_device.vk_device, ctx.post_process_descriptor_set_layout, null);
     if (comptime build_options.debug_shadows) {
         if (ctx.debug_shadow.pipeline_layout) |layout| c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, layout, null);
         if (ctx.debug_shadow.descriptor_set_layout) |layout| c.vkDestroyDescriptorSetLayout(ctx.vulkan_device.vk_device, layout, null);
@@ -2811,21 +3078,31 @@ fn recreateSwapchainInternal(ctx: *VulkanContext) void {
     createMainRenderPass(ctx) catch |err| std.log.err("Failed to recreate render pass: {}", .{err});
     createMainPipelines(ctx) catch |err| std.log.err("Failed to recreate pipelines: {}", .{err});
     createPostProcessResources(ctx) catch |err| std.log.err("Failed to recreate post-process resources: {}", .{err});
+    createSwapchainUIResources(ctx) catch |err| std.log.err("Failed to recreate swapchain UI resources: {}", .{err});
     ctx.fxaa.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.swapchain.getExtent(), ctx.swapchain.getImageFormat(), ctx.post_process_sampler, ctx.swapchain.getImageViews()) catch |err| std.log.err("Failed to recreate FXAA resources: {}", .{err});
+    createSwapchainUIPipelines(ctx) catch |err| std.log.err("Failed to recreate swapchain UI pipelines: {}", .{err});
     ctx.bloom.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.hdr_view, ctx.swapchain.getExtent().width, ctx.swapchain.getExtent().height, c.VK_FORMAT_R16G16B16A16_SFLOAT) catch |err| std.log.err("Failed to recreate Bloom resources: {}", .{err});
     updatePostProcessDescriptorsWithBloom(ctx);
 
     // Ensure all recreated images are in a known layout
     {
-        var list: [16]c.VkImage = undefined;
+        var list: [32]c.VkImage = undefined;
         var count: usize = 0;
-        const candidates = [_]c.VkImage{ ctx.hdr_image, ctx.g_normal_image, ctx.ssao_image, ctx.ssao_blur_image, ctx.ssao_noise_image, ctx.velocity_image };
+        const candidates = [_]c.VkImage{ ctx.hdr_image, ctx.hdr_msaa_image, ctx.g_normal_image, ctx.ssao_image, ctx.ssao_blur_image, ctx.ssao_noise_image, ctx.velocity_image };
         for (candidates) |img| {
             if (img != null) {
                 list[count] = img;
                 count += 1;
             }
         }
+        // Also transition bloom mips
+        for (ctx.bloom.mip_images) |img| {
+            if (img != null) {
+                list[count] = img;
+                count += 1;
+            }
+        }
+
         if (count > 0) {
             transitionImagesToShaderRead(ctx, list[0..count], false) catch |err| std.log.warn("Failed to transition images: {}", .{err});
         }
@@ -2838,13 +3115,6 @@ fn recreateSwapchainInternal(ctx: *VulkanContext) void {
             for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
                 ctx.shadow_system.shadow_image_layouts[i] = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             }
-        }
-    }
-
-    // Transition Bloom mips
-    for (ctx.bloom.mip_images) |img| {
-        if (img != null) {
-            transitionImagesToShaderRead(ctx, &[_]c.VkImage{img}, false) catch {};
         }
     }
 
@@ -2911,6 +3181,8 @@ fn beginFrame(ctx_ptr: *anyopaque) void {
     ctx.main_pass_active = false;
     ctx.shadow_system.pass_active = false;
     ctx.post_process_ran_this_frame = false;
+    ctx.fxaa_ran_this_frame = false;
+    ctx.ui_using_swapchain = false;
 
     ctx.terrain_pipeline_bound = false;
     ctx.shadow_system.pipeline_bound = false;
@@ -3348,6 +3620,50 @@ fn beginFXAAPassInternal(ctx: *VulkanContext) void {
     c.vkCmdDraw(command_buffer, 3, 1, 0, 0);
     ctx.draw_call_count += 1;
 
+    ctx.fxaa_ran_this_frame = true;
+    ctx.fxaa.pass_active = true;
+}
+
+fn beginFXAAPassForUI(ctx: *VulkanContext) void {
+    if (!ctx.frames.frame_in_progress) return;
+    if (ctx.fxaa.pass_active) return;
+    if (ctx.ui_swapchain_render_pass == null) return;
+    if (ctx.ui_swapchain_framebuffers.items.len == 0) return;
+
+    const image_index = ctx.frames.current_image_index;
+    if (image_index >= ctx.ui_swapchain_framebuffers.items.len) return;
+
+    ensureNoRenderPassActiveInternal(ctx);
+
+    const command_buffer = ctx.frames.command_buffers[ctx.frames.current_frame];
+    const extent = ctx.swapchain.getExtent();
+
+    var clear_value = std.mem.zeroes(c.VkClearValue);
+    clear_value.color.float32 = .{ 0.0, 0.0, 0.0, 1.0 };
+
+    var rp_begin = std.mem.zeroes(c.VkRenderPassBeginInfo);
+    rp_begin.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp_begin.renderPass = ctx.ui_swapchain_render_pass;
+    rp_begin.framebuffer = ctx.ui_swapchain_framebuffers.items[image_index];
+    rp_begin.renderArea = .{ .offset = .{ .x = 0, .y = 0 }, .extent = extent };
+    rp_begin.clearValueCount = 1;
+    rp_begin.pClearValues = &clear_value;
+
+    c.vkCmdBeginRenderPass(command_buffer, &rp_begin, c.VK_SUBPASS_CONTENTS_INLINE);
+
+    const viewport = c.VkViewport{
+        .x = 0,
+        .y = 0,
+        .width = @floatFromInt(extent.width),
+        .height = @floatFromInt(extent.height),
+        .minDepth = 0.0,
+        .maxDepth = 1.0,
+    };
+    c.vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+
+    const scissor = c.VkRect2D{ .offset = .{ .x = 0, .y = 0 }, .extent = extent };
+    c.vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
     ctx.fxaa.pass_active = true;
 }
 
@@ -3396,7 +3712,7 @@ fn computeBloomInternal(ctx: *VulkanContext) void {
     barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.srcAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
-    barrier.oldLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; // Current layout after main pass
+    barrier.oldLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; // Match finalLayout of main pass
     barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barrier.image = ctx.hdr_image;
     barrier.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
@@ -3567,7 +3883,7 @@ fn endFrame(ctx_ptr: *anyopaque) void {
 
     // If FXAA is enabled and post-process ran but FXAA hasn't, run FXAA pass
     // (Post-process outputs to intermediate texture when FXAA is enabled)
-    if (ctx.fxaa.enabled and ctx.post_process_ran_this_frame and !ctx.fxaa.pass_active) {
+    if (ctx.fxaa.enabled and ctx.post_process_ran_this_frame and !ctx.fxaa_ran_this_frame) {
         beginFXAAPassInternal(ctx);
     }
     if (ctx.fxaa.pass_active) endFXAAPassInternal(ctx);
@@ -3657,6 +3973,22 @@ fn beginMainPassInternal(ctx: *VulkanContext) void {
     const command_buffer = ctx.frames.command_buffers[ctx.frames.current_frame];
     if (!ctx.main_pass_active) {
         ensureNoRenderPassActiveInternal(ctx);
+
+        // Ensure HDR image is in correct layout for resolve
+        if (ctx.hdr_image != null) {
+            var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
+            barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.newLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            barrier.srcQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = c.VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = ctx.hdr_image;
+            barrier.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
+            barrier.srcAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+            barrier.dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+            c.vkCmdPipelineBarrier(command_buffer, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, null, 0, null, 1, &barrier);
+        }
 
         ctx.terrain_pipeline_bound = false;
 
@@ -3760,6 +4092,11 @@ fn beginPostProcessPassInternal(ctx: *VulkanContext) void {
         ctx.post_process_pass_active = true;
         ctx.post_process_ran_this_frame = true;
 
+        if (ctx.post_process_pipeline == null) {
+            std.log.err("Post-process pipeline is null, skipping draw", .{});
+            return;
+        }
+
         c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.post_process_pipeline);
 
         const pp_ds = ctx.post_process_descriptor_sets[ctx.frames.current_frame];
@@ -3822,6 +4159,9 @@ fn waitIdle(ctx_ptr: *anyopaque) void {
 
 fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, sun_color: Vec3, time_val: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32, use_texture: bool, cloud_params: rhi.CloudParams) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
     if (!ctx.frames.frame_in_progress) return;
 
     // Store previous frame's view_proj for velocity buffer before updating
@@ -3839,7 +4179,7 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
         .params = .{ time_val, fog_density, if (fog_enabled) 1.0 else 0.0, sun_intensity },
         .lighting = .{ ambient, if (use_texture) 1.0 else 0.0, if (cloud_params.pbr_enabled) 1.0 else 0.0, 0.15 },
         .cloud_params = .{ cloud_params.cloud_height, @floatFromInt(cloud_params.shadow.pcf_samples), if (cloud_params.shadow.cascade_blend) 1.0 else 0.0, if (cloud_params.cloud_shadows) 1.0 else 0.0 },
-        .pbr_params = .{ @floatFromInt(cloud_params.pbr_quality), cloud_params.exposure, cloud_params.saturation, if (cloud_params.ssao_enabled) 1.0 else 0.0 },
+        .pbr_params = .{ @floatFromInt(cloud_params.pbr_quality), if (cloud_params.exposure == 0) 1.0 else cloud_params.exposure, if (cloud_params.saturation == 0) 1.0 else cloud_params.saturation, if (cloud_params.ssao_enabled) 1.0 else 0.0 },
         .volumetric_params = .{ if (cloud_params.volumetric_enabled) 1.0 else 0.0, cloud_params.volumetric_density, @floatFromInt(cloud_params.volumetric_steps), cloud_params.volumetric_scattering },
         .viewport_size = .{ @floatFromInt(ctx.swapchain.getExtent().width), @floatFromInt(ctx.swapchain.getExtent().height), 0, 0 },
     };
@@ -3847,6 +4187,7 @@ fn updateGlobalUniforms(ctx_ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun
     if (ctx.descriptors.global_ubos_mapped[ctx.frames.current_frame]) |map_ptr| {
         const mapped: *GlobalUniforms = @ptrCast(@alignCast(map_ptr));
         mapped.* = uniforms;
+        // std.log.info("Uniforms updated for frame {}", .{ctx.frames.current_frame});
     }
 }
 
@@ -4094,10 +4435,18 @@ fn updateTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, data: []const u
 
 fn setViewport(ctx_ptr: *anyopaque, width: u32, height: u32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    // We use the pixel dimensions from SDL to trigger resizes correctly on High-DPI
+    const fb_w = width;
+    const fb_h = height;
+    _ = fb_w;
+    _ = fb_h;
 
-    // Check if the requested viewport size matches the current swapchain extent.
-    // If not, flag a resize so the swapchain is recreated at the beginning of the next frame.
-    if (!ctx.swapchain.skip_present and (width != ctx.swapchain.getExtent().width or height != ctx.swapchain.getExtent().height)) {
+    // Use SDL_GetWindowSizeInPixels to check for actual pixel dimension changes
+    var w: c_int = 0;
+    var h: c_int = 0;
+    _ = c.SDL_GetWindowSizeInPixels(ctx.window, &w, &h);
+
+    if (!ctx.swapchain.skip_present and (@as(u32, @intCast(w)) != ctx.swapchain.getExtent().width or @as(u32, @intCast(h)) != ctx.swapchain.getExtent().height)) {
         ctx.framebuffer_resized = true;
     }
 
@@ -4606,7 +4955,9 @@ fn drawOffset(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: r
 }
 
 fn flushUI(ctx: *VulkanContext) void {
-    if (!ctx.main_pass_active) return;
+    if (!ctx.main_pass_active and !ctx.fxaa.pass_active) {
+        return;
+    }
     if (ctx.ui_vertex_offset / (6 * @sizeOf(f32)) > ctx.ui_flushed_vertex_count) {
         const command_buffer = ctx.frames.command_buffers[ctx.frames.current_frame];
 
@@ -4655,13 +5006,30 @@ fn pushConstants(ctx_ptr: *anyopaque, stages: rhi.ShaderStageFlags, offset: u32,
 // 2D Rendering functions
 fn begin2DPass(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    if (!ctx.frames.frame_in_progress) return;
+    if (!ctx.frames.frame_in_progress) {
+        return;
+    }
 
     ctx.mutex.lock();
     defer ctx.mutex.unlock();
 
-    if (!ctx.main_pass_active) beginMainPassInternal(ctx);
-    if (!ctx.main_pass_active) return;
+    const use_swapchain = ctx.post_process_ran_this_frame;
+    const ui_pipeline = if (use_swapchain) ctx.ui_swapchain_pipeline else ctx.ui_pipeline;
+    if (ui_pipeline == null) return;
+
+    // If post-process already ran, render UI directly to swapchain (overlay).
+    // Otherwise, use the main HDR pass so post-process can include UI.
+    if (use_swapchain) {
+        if (!ctx.fxaa.pass_active) {
+            beginFXAAPassForUI(ctx);
+        }
+        if (!ctx.fxaa.pass_active) return;
+    } else {
+        if (!ctx.main_pass_active) beginMainPassInternal(ctx);
+        if (!ctx.main_pass_active) return;
+    }
+
+    ctx.ui_using_swapchain = use_swapchain;
 
     ctx.ui_screen_width = screen_width;
     ctx.ui_screen_height = screen_height;
@@ -4675,7 +5043,7 @@ fn begin2DPass(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void 
 
     // Bind UI pipeline and VBO
     const command_buffer = ctx.frames.command_buffers[ctx.frames.current_frame];
-    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.ui_pipeline);
+    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ui_pipeline);
     ctx.terrain_pipeline_bound = false;
 
     const offset_val: c.VkDeviceSize = 0;
@@ -4703,6 +5071,10 @@ fn end2DPass(ctx_ptr: *anyopaque) void {
     }
 
     flushUI(ctx);
+    if (ctx.ui_using_swapchain) {
+        endFXAAPassInternal(ctx);
+        ctx.ui_using_swapchain = false;
+    }
     ctx.ui_in_progress = false;
 }
 
@@ -4739,6 +5111,13 @@ fn drawRect2D(ctx_ptr: *anyopaque, rect: rhi.Rect, color: rhi.Color) void {
     }
 }
 
+fn getUIPipeline(ctx: *VulkanContext, textured: bool) c.VkPipeline {
+    if (ctx.ui_using_swapchain) {
+        return if (textured) ctx.ui_swapchain_tex_pipeline else ctx.ui_swapchain_pipeline;
+    }
+    return if (textured) ctx.ui_tex_pipeline else ctx.ui_pipeline;
+}
+
 fn bindUIPipeline(ctx_ptr: *anyopaque, textured: bool) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.frames.frame_in_progress) return;
@@ -4748,11 +5127,9 @@ fn bindUIPipeline(ctx_ptr: *anyopaque, textured: bool) void {
 
     const command_buffer = ctx.frames.command_buffers[ctx.frames.current_frame];
 
-    if (textured) {
-        c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.ui_tex_pipeline);
-    } else {
-        c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.ui_pipeline);
-    }
+    const pipeline = getUIPipeline(ctx, textured);
+    if (pipeline == null) return;
+    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 }
 
 fn drawTexture2D(ctx_ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.Rect) void {
@@ -4772,7 +5149,9 @@ fn drawTexture2D(ctx_ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.Rect
     const command_buffer = ctx.frames.command_buffers[ctx.frames.current_frame];
 
     // 2. Bind Textured UI Pipeline
-    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.ui_tex_pipeline);
+    const textured_pipeline = getUIPipeline(ctx, true);
+    if (textured_pipeline == null) return;
+    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, textured_pipeline);
     ctx.terrain_pipeline_bound = false;
 
     // 3. Update & Bind Descriptor Set
@@ -4835,8 +5214,11 @@ fn drawTexture2D(ctx_ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.Rect
     }
 
     // 6. Restore normal UI state for subsequent calls
-    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.ui_pipeline);
-    c.vkCmdPushConstants(command_buffer, ctx.ui_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
+    const restore_pipeline = getUIPipeline(ctx, false);
+    if (restore_pipeline != null) {
+        c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, restore_pipeline);
+        c.vkCmdPushConstants(command_buffer, ctx.ui_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
+    }
 }
 
 fn createShader(ctx_ptr: *anyopaque, vertex_src: [*c]const u8, fragment_src: [*c]const u8) rhi.RhiError!rhi.ShaderHandle {
@@ -5380,6 +5762,10 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.ui_tex_pipeline = null;
     ctx.ui_tex_pipeline_layout = null;
     ctx.ui_tex_descriptor_set_layout = null;
+    ctx.ui_swapchain_pipeline = null;
+    ctx.ui_swapchain_tex_pipeline = null;
+    ctx.ui_swapchain_render_pass = null;
+    ctx.ui_swapchain_framebuffers = .empty;
     if (comptime build_options.debug_shadows) {
         ctx.debug_shadow.pipeline = null;
         ctx.debug_shadow.pipeline_layout = null;

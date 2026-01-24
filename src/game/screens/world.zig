@@ -8,7 +8,6 @@ const Mat4 = @import("../../engine/math/mat4.zig").Mat4;
 const Vec3 = @import("../../engine/math/vec3.zig").Vec3;
 const rhi_pkg = @import("../../engine/graphics/rhi.zig");
 const render_graph_pkg = @import("../../engine/graphics/render_graph.zig");
-const log = @import("../../engine/core/log.zig");
 const PausedScreen = @import("paused.zig").PausedScreen;
 
 pub const WorldScreen = struct {

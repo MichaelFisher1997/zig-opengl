@@ -9,6 +9,7 @@ const Input = @import("../engine/input/input.zig").Input;
 const Time = @import("../engine/core/time.zig").Time;
 const UISystem = @import("../engine/ui/ui_system.zig").UISystem;
 const Vec3 = @import("../engine/math/vec3.zig").Vec3;
+const Mat4 = @import("../engine/math/mat4.zig").Mat4;
 const InputMapper = @import("input_mapper.zig").InputMapper;
 const rhi_pkg = @import("../engine/graphics/rhi.zig");
 const RHI = rhi_pkg.RHI;
@@ -383,14 +384,37 @@ pub const App = struct {
 
         self.rhi.setViewport(self.input.window_width, self.input.window_height);
 
-        // Check for GPU faults and attempt recovery
-        self.rhi.recover() catch |err| {
-            log.log.err("GPU recovery failed: {}. Shutting down.", .{err});
-            self.input.should_quit = true;
-        };
-
         self.rhi.beginFrame();
         errdefer self.rhi.endFrame();
+
+        // Ensure global uniforms are always updated with sane defaults even if no world is loaded.
+        // This prevents black screen in menu due to zero exposure.
+        // Call this AFTER beginFrame so it writes to the correct frame's buffer.
+        self.rhi.updateGlobalUniforms(Mat4.identity, Vec3.zero, Vec3.init(0, -1, 0), Vec3.one, 0, Vec3.zero, 0, false, 1.0, 0.1, false, .{
+            .cam_pos = Vec3.zero,
+            .view_proj = Mat4.identity,
+            .sun_dir = Vec3.init(0, -1, 0),
+            .sun_intensity = 1.0,
+            .fog_color = Vec3.zero,
+            .fog_density = 0,
+            .wind_offset_x = 0,
+            .wind_offset_z = 0,
+            .cloud_scale = 1.0,
+            .cloud_coverage = 0.5,
+            .cloud_height = 100,
+            .base_color = Vec3.one,
+            .pbr_enabled = false,
+            .shadow = .{ .distance = 100, .resolution = 1024, .pcf_samples = 1, .cascade_blend = false },
+            .cloud_shadows = false,
+            .pbr_quality = 0,
+            .exposure = 1.0,
+            .saturation = 1.0,
+            .volumetric_enabled = false,
+            .volumetric_density = 0,
+            .volumetric_steps = 0,
+            .volumetric_scattering = 0,
+            .ssao_enabled = false,
+        });
 
         // Update current screen. Transitions happen here.
         try self.screen_manager.update(self.time.delta_time);

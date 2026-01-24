@@ -334,7 +334,10 @@ pub fn LODManager(comptime RHI: type) type {
                 self.unloadLODWhereChunksLoaded(checker, checker_ctx.?);
             }
 
-            const pc = worldToChunk(@intFromFloat(player_pos.x), @intFromFloat(player_pos.z));
+            // Safety: Check for NaN/Inf player position
+            if (!std.math.isFinite(player_pos.x) or !std.math.isFinite(player_pos.z)) return;
+
+            const pc = worldToChunk(@as(i32, @intFromFloat(player_pos.x)), @as(i32, @intFromFloat(player_pos.z)));
             self.player_cx = pc.chunk_x;
             self.player_cz = pc.chunk_z;
 
@@ -445,7 +448,8 @@ pub fn LODManager(comptime RHI: type) type {
                         const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
                         // Scale priority to match chunk-distance units used by meshing jobs (which are prioritized by chunk dist)
                         // This ensures generation doesn't starve meshing
-                        var priority = @as(i32, @intCast(dist_sq * @as(i64, scale) * @as(i64, scale)));
+                        const priority_full = dist_sq * @as(i64, scale) * @as(i64, scale);
+                        var priority: i32 = @as(i32, @intCast(@min(priority_full, 0x0FFFFFFF)));
                         if (has_velocity) {
                             const fdx: f32 = @floatFromInt(dx);
                             const fdz: f32 = @floatFromInt(dz);
@@ -481,8 +485,9 @@ pub fn LODManager(comptime RHI: type) type {
 
         /// Process state transitions (generated -> meshing -> ready)
         fn processStateTransitions(self: *Self) !void {
-            self.mutex.lockShared();
-            defer self.mutex.unlockShared();
+            // Use exclusive lock since we modify chunk state
+            self.mutex.lock();
+            defer self.mutex.unlock();
 
             for (1..LODLevel.count) |i| {
                 const lod = @as(LODLevel, @enumFromInt(@as(u3, @intCast(i))));
@@ -500,7 +505,7 @@ pub fn LODManager(comptime RHI: type) type {
                         try self.gen_queues[LODLevel.count - 1].push(.{
                             .type = .chunk_meshing,
                             // Encode LOD level in high bits of dist_sq
-                            .dist_sq = @as(i32, @intCast(dist_sq & 0x0FFFFFFF)) | lod_bits,
+                            .dist_sq = @as(i32, @truncate(dist_sq & 0x0FFFFFFF)) | lod_bits,
                             .data = .{
                                 .chunk = .{
                                     .x = chunk.region_x,
@@ -519,6 +524,10 @@ pub fn LODManager(comptime RHI: type) type {
 
         /// Process GPU uploads (limited per frame)
         fn processUploads(self: *Self) void {
+            // Use exclusive lock since we modify chunk state (chunk.state = .renderable)
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
             const max_uploads = self.config.getMaxUploadsPerFrame();
             var uploads: u32 = 0;
 
@@ -570,7 +579,10 @@ pub fn LODManager(comptime RHI: type) type {
             var to_remove = std.ArrayListUnmanaged(LODRegionKey).empty;
             defer to_remove.deinit(self.allocator);
 
+            // Hold lock for entire operation to prevent races with worker threads
             self.mutex.lock();
+            defer self.mutex.unlock();
+
             var iter = storage.iterator();
             while (iter.next()) |entry| {
                 const key = entry.key_ptr.*;
@@ -592,9 +604,8 @@ pub fn LODManager(comptime RHI: type) type {
                     }
                 }
             }
-            self.mutex.unlock();
 
-            // Remove outside of iteration
+            // Remove after iteration (still under lock)
             if (to_remove.items.len > 0) {
                 for (to_remove.items) |key| {
                     if (storage.get(key)) |chunk| {
@@ -704,6 +715,10 @@ pub fn LODManager(comptime RHI: type) type {
 
         /// Free LOD meshes where all underlying chunks are loaded
         pub fn unloadLODWhereChunksLoaded(self: *Self, checker: ChunkChecker, ctx: *anyopaque) void {
+            // Lock exclusive because we modify meshes and regions maps
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
             for (1..LODLevel.count) |i| {
                 const storage = &self.regions[i];
                 const meshes = &self.meshes[i];
@@ -792,6 +807,11 @@ pub fn LODManager(comptime RHI: type) type {
 
             const mesh = try self.getOrCreateMesh(key);
 
+            // Access chunk.data under shared lock - the data is read-only during meshing
+            // and the chunk is pinned, so we just need to ensure visibility
+            self.mutex.lockShared();
+            defer self.mutex.unlockShared();
+
             switch (chunk.data) {
                 .simplified => |*data| {
                     const bounds = chunk.worldBounds();
@@ -818,16 +838,17 @@ pub fn LODManager(comptime RHI: type) type {
                 .lod = lod_level,
             };
 
-            self.mutex.lockShared();
             const lod_idx = @intFromEnum(lod_level);
             if (lod_idx == 0) {
-                self.mutex.unlockShared();
                 return;
             }
+
+            // Phase 1: Acquire lock, validate job, pin chunk
+            self.mutex.lock();
             const storage = &self.regions[lod_idx];
 
             const chunk = storage.get(key) orelse {
-                self.mutex.unlockShared();
+                self.mutex.unlock();
                 return;
             };
 
@@ -848,46 +869,97 @@ pub fn LODManager(comptime RHI: type) type {
                 if (chunk.state == .generating or chunk.state == .meshing) {
                     chunk.state = .missing;
                 }
-                self.mutex.unlockShared();
+                self.mutex.unlock();
                 return;
             }
 
-            // Pin chunk during operation
-            chunk.pin();
-            self.mutex.unlockShared();
-            defer chunk.unpin();
-
             // Skip if token mismatch
-            if (chunk.job_token != job.data.chunk.job_token) return;
+            if (chunk.job_token != job.data.chunk.job_token) {
+                self.mutex.unlock();
+                return;
+            }
 
-            switch (job.type) {
+            // Check state and capture job type before releasing lock
+            const current_state = chunk.state;
+            const job_type = job.type;
+
+            // Validate state matches expected for job type
+            const valid_state = switch (job_type) {
+                .chunk_generation => current_state == .generating,
+                .chunk_meshing => current_state == .meshing,
+                else => false,
+            };
+
+            if (!valid_state) {
+                self.mutex.unlock();
+                return;
+            }
+
+            // Check if we need to generate data (while still holding lock)
+            const needs_data_init = (job_type == .chunk_generation and chunk.data != .simplified);
+
+            // Pin chunk during operation (prevents unload)
+            chunk.pin();
+            self.mutex.unlock();
+
+            // Phase 2: Do expensive work without lock
+            var success = false;
+            var new_state: LODState = .missing;
+
+            switch (job_type) {
                 .chunk_generation => {
-                    if (chunk.state != .generating) return;
-
                     // Initialize simplified data if needed
-                    if (chunk.data != .simplified) {
+                    if (needs_data_init) {
                         var data = LODSimplifiedData.init(self.allocator, lod_level) catch {
-                            chunk.state = .missing;
+                            new_state = .missing;
+                            chunk.unpin();
+                            // Acquire lock briefly to update state
+                            self.mutex.lock();
+                            chunk.state = new_state;
+                            self.mutex.unlock();
                             return;
                         };
 
-                        // Generate heightmap data
+                        // Generate heightmap data (expensive, done without lock)
                         self.generator.generateHeightmapOnly(&data, chunk.region_x, chunk.region_z, lod_level);
+
+                        // Acquire lock to update chunk data
+                        self.mutex.lock();
                         chunk.data = .{ .simplified = data };
+                        self.mutex.unlock();
                     }
-                    chunk.state = .generated;
+                    success = true;
+                    new_state = .generated;
                 },
                 .chunk_meshing => {
-                    if (chunk.state != .meshing) return;
-
+                    // Build mesh (expensive, done without lock)
+                    // Note: buildMeshForChunk -> getOrCreateMesh acquires its own lock
                     self.buildMeshForChunk(chunk) catch |err| {
                         log.log.err("Failed to build LOD{} async mesh: {}", .{ @intFromEnum(lod_level), err });
-                        chunk.state = .generated; // Retry later
+                        new_state = .generated; // Retry later
+                        chunk.unpin();
+                        // Acquire lock briefly to update state
+                        self.mutex.lock();
+                        chunk.state = new_state;
+                        self.mutex.unlock();
                         return;
                     };
-                    chunk.state = .mesh_ready;
+                    success = true;
+                    new_state = .mesh_ready;
                 },
                 else => unreachable,
+            }
+
+            chunk.unpin();
+
+            // Phase 3: Acquire lock briefly to update state
+            if (success) {
+                self.mutex.lock();
+                // Re-verify token hasn't changed while we were working
+                if (chunk.job_token == job.data.chunk.job_token) {
+                    chunk.state = new_state;
+                }
+                self.mutex.unlock();
             }
         }
     };
