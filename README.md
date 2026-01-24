@@ -134,16 +134,6 @@ To bypass in emergencies: `git push --no-verify`
 - `scripts/`: Helper scripts for asset processing.
 - `libs/`: (Planned) Extracted standalone math and noise libraries.
 
-## 🗺️ Roadmap
-
-- [ ] **Data-driven block registry** - Decouple block behavior from `BlockType` enum
-- [ ] **Segregated render context interface** - Split fat `IRenderContext` into focused traits
-- [ ] **RHI subsystem decoupling** - Break monolithic RHI into `ResourceManager`, `RenderCommandQueue`, etc.
-- [ ] **Dynamic texture atlas loading** - Support custom texture packs without code changes
-- [ ] **VRAM optimization** - Texture streaming and compression
-- [ ] **Modding API** - Expose hooks for gameplay mods
-
-See [SOLID_ISSUES.md](SOLID_ISSUES.md) for detailed architectural improvements planned.
 
 ## 🛠️ Texture Pipeline
 
