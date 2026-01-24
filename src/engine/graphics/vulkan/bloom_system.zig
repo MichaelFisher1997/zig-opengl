@@ -149,7 +149,7 @@ pub const BloomSystem = struct {
         };
         var layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
         layout_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layout_info.bindingCount = 1;
+        layout_info.bindingCount = 2;
         layout_info.pBindings = &dsl_bindings[0];
         try Utils.checkVk(c.vkCreateDescriptorSetLayout(vk, &layout_info, null, &self.descriptor_set_layout));
 
