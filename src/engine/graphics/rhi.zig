@@ -202,6 +202,7 @@ pub const IRenderStateContext = struct {
         setModelMatrix: *const fn (ptr: *anyopaque, model: Mat4, color: Vec3, mask_radius: f32) void,
         setInstanceBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle) void,
         setLODInstanceBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle) void,
+        setSelectionMode: *const fn (ptr: *anyopaque, enabled: bool) void,
         updateGlobalUniforms: *const fn (ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, sun_color: Vec3, time: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32, use_texture: bool, cloud_params: CloudParams) void,
         setTextureUniforms: *const fn (ptr: *anyopaque, texture_enabled: bool, shadow_map_handles: [SHADOW_CASCADE_COUNT]TextureHandle) void,
     };
@@ -211,6 +212,12 @@ pub const IRenderStateContext = struct {
     }
     pub fn setInstanceBuffer(self: IRenderStateContext, handle: BufferHandle) void {
         self.vtable.setInstanceBuffer(self.ptr, handle);
+    }
+    pub fn setLODInstanceBuffer(self: IRenderStateContext, handle: BufferHandle) void {
+        self.vtable.setLODInstanceBuffer(self.ptr, handle);
+    }
+    pub fn setSelectionMode(self: IRenderStateContext, enabled: bool) void {
+        self.vtable.setSelectionMode(self.ptr, enabled);
     }
     pub fn updateGlobalUniforms(self: IRenderStateContext, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, sun_color: Vec3, time: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32, use_texture: bool, cloud_params: CloudParams) void {
         self.vtable.updateGlobalUniforms(self.ptr, view_proj, cam_pos, sun_dir, sun_color, time, fog_color, fog_density, fog_enabled, sun_intensity, ambient, use_texture, cloud_params);
@@ -553,6 +560,15 @@ pub const RHI = struct {
     }
     pub fn setModelMatrix(self: RHI, model: Mat4, color: Vec3, mask_radius: f32) void {
         self.state().setModelMatrix(model, color, mask_radius);
+    }
+    pub fn setInstanceBuffer(self: RHI, handle: BufferHandle) void {
+        self.state().setInstanceBuffer(handle);
+    }
+    pub fn setLODInstanceBuffer(self: RHI, handle: BufferHandle) void {
+        self.state().setLODInstanceBuffer(handle);
+    }
+    pub fn setSelectionMode(self: RHI, enabled: bool) void {
+        self.state().setSelectionMode(enabled);
     }
     pub fn pushConstants(self: RHI, stages: ShaderStageFlags, offset: u32, size: u32, data: *const anyopaque) void {
         self.encoder().pushConstants(stages, offset, size, data);

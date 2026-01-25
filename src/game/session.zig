@@ -101,6 +101,7 @@ pub const GameSession = struct {
 
     pub fn init(allocator: std.mem.Allocator, rhi: *RHI, atlas: *const TextureAtlas, seed: u64, render_distance: i32, lod_enabled: bool, generator_index: usize) !*GameSession {
         const session = try allocator.create(GameSession);
+        errdefer allocator.destroy(session);
 
         const safe_mode_env = std.posix.getenv("ZIGCRAFT_SAFE_MODE");
         const safe_mode = if (safe_mode_env) |val|
@@ -114,7 +115,7 @@ pub const GameSession = struct {
             std.log.warn("ZIGCRAFT_SAFE_MODE enabled: render distance capped to {} and LOD disabled", .{effective_render_distance});
         }
 
-        var lod_config = if (safe_mode)
+        const lod_config = if (safe_mode)
             LODConfig{
                 .radii = .{
                     @min(effective_render_distance, 8),
@@ -133,8 +134,11 @@ pub const GameSession = struct {
                 },
             };
 
+        session.* = undefined;
+        session.lod_config = lod_config;
+
         const world = if (effective_lod_enabled)
-            try World.initGenWithLOD(generator_index, allocator, effective_render_distance, seed, rhi.*, lod_config.interface(), atlas)
+            try World.initGenWithLOD(generator_index, allocator, effective_render_distance, seed, rhi.*, session.lod_config.interface(), atlas)
         else
             try World.initGen(generator_index, allocator, effective_render_distance, seed, rhi.*, atlas);
 
@@ -163,28 +167,12 @@ pub const GameSession = struct {
             .rhi = rhi,
             .atmosphere = atmosphere,
             .clouds = CloudState{},
-            .lod_config = lod_config,
+            .lod_config = session.lod_config,
             .creative_mode = true,
         };
 
         // Force map update initially
         session.map_controller.map_needs_update = true;
-
-        // Spawn a test entity
-        const test_entity = session.ecs_registry.create();
-        try session.ecs_registry.transforms.set(test_entity, .{
-            .position = Vec3.init(10, 120, 10), // Start high up
-            .scale = Vec3.one,
-        });
-        try session.ecs_registry.physics.set(test_entity, .{
-            .velocity = Vec3.zero,
-            .aabb_size = Vec3.init(1.0, 1.0, 1.0),
-            .use_gravity = true,
-        });
-        try session.ecs_registry.meshes.set(test_entity, .{
-            .visible = true,
-            .color = Vec3.init(1.0, 0.0, 0.0), // Red
-        });
 
         return session;
     }
@@ -296,7 +284,7 @@ pub const GameSession = struct {
         const pc = worldToChunk(@intFromFloat(self.camera.position.x), @intFromFloat(self.camera.position.z));
         const hy: f32 = 50.0;
         const fault_count = self.rhi.getFaultCount();
-        const hud_h: f32 = if (fault_count > 0) 210 else 190;
+        const hud_h: f32 = if (fault_count > 0) 230 else 210;
         ui.drawRect(.{ .x = 10, .y = hy, .width = 220, .height = hud_h }, Color.rgba(0, 0, 0, 0.6));
         Font.drawText(ui, "POS:", 15, hy + 5, 1.5, Color.white);
         Font.drawNumber(ui, pc.chunk_x, 120, hy + 5, Color.white);
@@ -305,27 +293,33 @@ pub const GameSession = struct {
         Font.drawNumber(ui, @intCast(stats.chunks_loaded), 140, hy + 25, Color.white);
         Font.drawText(ui, "VISIBLE:", 15, hy + 45, 1.5, Color.white);
         Font.drawNumber(ui, @intCast(rs.chunks_rendered), 140, hy + 45, Color.white);
-        Font.drawText(ui, "QUEUED GEN:", 15, hy + 65, 1.5, Color.white);
-        Font.drawNumber(ui, @intCast(stats.gen_queue), 140, hy + 65, Color.white);
-        Font.drawText(ui, "QUEUED MESH:", 15, hy + 85, 1.5, Color.white);
-        Font.drawNumber(ui, @intCast(stats.mesh_queue), 140, hy + 85, Color.white);
-        Font.drawText(ui, "PENDING UP:", 15, hy + 105, 1.5, Color.white);
-        Font.drawNumber(ui, @intCast(stats.upload_queue), 140, hy + 105, Color.white);
+
+        if (self.world.getLODStats()) |ls| {
+            Font.drawText(ui, "LODS:", 15, hy + 65, 1.5, Color.rgba(0.5, 0.8, 1.0, 1.0));
+            Font.drawNumber(ui, @intCast(ls.totalLoaded()), 140, hy + 65, Color.rgba(0.5, 0.8, 1.0, 1.0));
+        }
+
+        Font.drawText(ui, "QUEUED GEN:", 15, hy + 85, 1.5, Color.white);
+        Font.drawNumber(ui, @intCast(stats.gen_queue), 140, hy + 85, Color.white);
+        Font.drawText(ui, "QUEUED MESH:", 15, hy + 105, 1.5, Color.white);
+        Font.drawNumber(ui, @intCast(stats.mesh_queue), 140, hy + 105, Color.white);
+        Font.drawText(ui, "PENDING UP:", 15, hy + 125, 1.5, Color.white);
+        Font.drawNumber(ui, @intCast(stats.upload_queue), 140, hy + 125, Color.white);
         const h = self.atmosphere.getHours();
         const hr = @as(i32, @intFromFloat(h));
         const mn = @as(i32, @intFromFloat((h - @as(f32, @floatFromInt(hr))) * 60.0));
-        Font.drawText(ui, "TIME:", 15, hy + 125, 1.5, Color.white);
-        Font.drawNumber(ui, hr, 100, hy + 125, Color.white);
-        Font.drawText(ui, ":", 125, hy + 125, 1.5, Color.white);
-        Font.drawNumber(ui, mn, 140, hy + 125, Color.white);
-        Font.drawText(ui, "SUN:", 15, hy + 145, 1.5, Color.white);
-        Font.drawNumber(ui, @intFromFloat(self.atmosphere.sun_intensity * 100.0), 100, hy + 145, Color.white);
+        Font.drawText(ui, "TIME:", 15, hy + 145, 1.5, Color.white);
+        Font.drawNumber(ui, hr, 100, hy + 145, Color.white);
+        Font.drawText(ui, ":", 125, hy + 145, 1.5, Color.white);
+        Font.drawNumber(ui, mn, 140, hy + 145, Color.white);
+        Font.drawText(ui, "SUN:", 15, hy + 165, 1.5, Color.white);
+        Font.drawNumber(ui, @intFromFloat(self.atmosphere.sun_intensity * 100.0), 100, hy + 165, Color.white);
 
         const px_i: i32 = @intFromFloat(self.camera.position.x);
         const pz_i: i32 = @intFromFloat(self.camera.position.z);
         const region = self.world.generator.getRegionInfo(px_i, pz_i);
         const c3 = region_pkg.getRoleColor(region.role);
-        Font.drawText(ui, "ROLE:", 15, hy + 165, 1.5, Color.rgba(c3[0], c3[1], c3[2], 1.0));
+        Font.drawText(ui, "ROLE:", 15, hy + 185, 1.5, Color.rgba(c3[0], c3[1], c3[2], 1.0));
         var buf: [32]u8 = undefined;
         const label = std.fmt.bufPrint(&buf, "{s}", .{@tagName(region.role)}) catch "???";
         Font.drawText(ui, label, 100, hy + 165, 1.5, Color.white);

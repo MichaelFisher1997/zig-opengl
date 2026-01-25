@@ -110,7 +110,7 @@ pub const WorldRenderer = struct {
         defer self.storage.chunks_mutex.unlockShared();
 
         if (lod_manager) |lod_mgr| {
-            lod_mgr.render(view_proj, camera_pos, ChunkStorage.isChunkRenderable, @ptrCast(self.storage));
+            lod_mgr.render(view_proj, camera_pos, ChunkStorage.isChunkRenderable, @ptrCast(self.storage), true);
         }
 
         self.visible_chunks.clearRetainingCapacity();
@@ -177,6 +177,10 @@ pub const WorldRenderer = struct {
 
         self.storage.chunks_mutex.lockShared();
         defer self.storage.chunks_mutex.unlockShared();
+
+        if (lod_manager) |lod_mgr| {
+            lod_mgr.render(light_space_matrix, camera_pos, ChunkStorage.isChunkRenderable, @ptrCast(self.storage), false);
+        }
 
         const frustum = shadow_frustum;
 

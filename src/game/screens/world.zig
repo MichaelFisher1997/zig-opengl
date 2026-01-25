@@ -164,14 +164,10 @@ pub const WorldScreen = struct {
                 .disable_clouds = ctx.disable_clouds,
                 .fxaa_enabled = ctx.settings.fxaa_enabled,
                 .bloom_enabled = ctx.settings.bloom_enabled,
+                .overlay_renderer = renderOverlay,
+                .overlay_ctx = self,
             };
             ctx.render_graph.execute(render_ctx);
-
-            if (!ctx.safe_render_mode) {
-                if (self.session.player.target_block) |target| self.session.block_outline.draw(target.x, target.y, target.z, camera.position);
-                self.session.renderEntities(camera.position);
-                self.session.hand_renderer.draw(camera.position, camera.yaw, camera.pitch);
-            }
         }
 
         ui.begin();
@@ -197,5 +193,12 @@ pub const WorldScreen = struct {
 
     pub fn screen(self: *@This()) IScreen {
         return Screen.makeScreen(@This(), self);
+    }
+
+    fn renderOverlay(scene_ctx: render_graph_pkg.SceneContext) void {
+        const self: *WorldScreen = @ptrCast(@alignCast(scene_ctx.overlay_ctx.?));
+        if (self.session.player.target_block) |target| self.session.block_outline.draw(target.x, target.y, target.z, scene_ctx.camera.position);
+        self.session.renderEntities(scene_ctx.camera.position);
+        self.session.hand_renderer.draw(scene_ctx.camera.position, scene_ctx.camera.yaw, scene_ctx.camera.pitch);
     }
 };

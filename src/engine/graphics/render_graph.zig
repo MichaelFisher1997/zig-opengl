@@ -33,6 +33,8 @@ pub const SceneContext = struct {
     // Phase 3: FXAA and Bloom flags
     fxaa_enabled: bool = true,
     bloom_enabled: bool = true,
+    overlay_renderer: ?*const fn (ctx: SceneContext) void = null,
+    overlay_ctx: ?*anyopaque = null,
 };
 
 pub const IRenderPass = struct {
@@ -290,6 +292,27 @@ pub const CloudPass = struct {
                 log.log.err("CloudPass: rendering failed: {}", .{err});
             }
         };
+    }
+};
+
+pub const EntityPass = struct {
+    const VTABLE = IRenderPass.VTable{
+        .name = "EntityPass",
+        .needs_main_pass = true,
+        .execute = execute,
+    };
+    pub fn pass(self: *EntityPass) IRenderPass {
+        return .{
+            .ptr = self,
+            .vtable = &VTABLE,
+        };
+    }
+
+    fn execute(ptr: *anyopaque, ctx: SceneContext) void {
+        _ = ptr;
+        if (ctx.overlay_renderer) |render| {
+            render(ctx);
+        }
     }
 };
 

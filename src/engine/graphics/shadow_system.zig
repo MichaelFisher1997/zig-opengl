@@ -108,9 +108,10 @@ pub const ShadowSystem = struct {
 
         c.vkCmdBeginRenderPass(command_buffer, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
 
-        // Set depth bias for shadow mapping to prevent shadow acne
-        // Constants from original implementation: constantFactor=1.25, clamp=0.0, slopeFactor=1.75
-        c.vkCmdSetDepthBias(command_buffer, 1.25, 0.0, 1.75);
+        // Set depth bias for shadow mapping to prevent shadow acne.
+        // For Reverse-Z (1 near, 0 far), we must use NEGATIVE bias values to push depth toward 0.0 (away).
+        // Using -1.25 constant and -1.75 slope factor.
+        c.vkCmdSetDepthBias(command_buffer, -1.25, 0.0, -1.75);
 
         var viewport: c.VkViewport = undefined;
         @memset(std.mem.asBytes(&viewport), 0);

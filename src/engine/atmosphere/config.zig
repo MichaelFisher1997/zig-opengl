@@ -11,10 +11,10 @@ pub const AtmosphereConfig = struct {
 
     // Intensity constants
     pub const MOON_INTENSITY_FACTOR: f32 = 0.15;
-    pub const AMBIENT_DAY: f32 = 0.45;
-    pub const AMBIENT_NIGHT: f32 = 0.15;
+    pub const AMBIENT_DAY: f32 = 1.0;
+    pub const AMBIENT_NIGHT: f32 = 0.2;
 
     // Fog constants
-    pub const FOG_DENSITY_MAX: f32 = 0.0015;
-    pub const FOG_DENSITY_MIN: f32 = 0.0008;
+    pub const FOG_DENSITY_MAX: f32 = 0.0008;
+    pub const FOG_DENSITY_MIN: f32 = 0.0004;
 };

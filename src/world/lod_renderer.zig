@@ -77,9 +77,16 @@ pub fn LODRenderer(comptime RHI: type) type {
             camera_pos: Vec3,
             chunk_checker: ?*const fn (i32, i32, *anyopaque) bool,
             checker_ctx: ?*anyopaque,
+            use_frustum: bool,
         ) void {
             // Update frame index
             self.frame_index = self.rhi.getFrameIndex();
+
+            self.instance_data.clearRetainingCapacity();
+            self.draw_list.clearRetainingCapacity();
+
+            // Set LOD mode on RHI
+            self.rhi.setLODInstanceBuffer(self.instance_buffers[self.frame_index]);
 
             const frustum = Frustum.fromViewProj(view_proj);
             const lod_y_offset: f32 = -3.0;
@@ -91,7 +98,7 @@ pub fn LODRenderer(comptime RHI: type) type {
             // Process from highest LOD down
             var i: usize = LODLevel.count - 1;
             while (i > 0) : (i -= 1) {
-                self.collectVisibleMeshes(manager, &manager.meshes[i], &manager.regions[i], view_proj, camera_pos, frustum, lod_y_offset, chunk_checker, checker_ctx) catch |err| {
+                self.collectVisibleMeshes(manager, &manager.meshes[i], &manager.regions[i], view_proj, camera_pos, frustum, lod_y_offset, chunk_checker, checker_ctx, use_frustum) catch |err| {
                     log.log.err("Failed to collect visible meshes for LOD{}: {}", .{ i, err });
                 };
             }
@@ -114,8 +121,9 @@ pub fn LODRenderer(comptime RHI: type) type {
             camera_pos: Vec3,
             frustum: Frustum,
             lod_y_offset: f32,
-            _: ?*const fn (i32, i32, *anyopaque) bool,
-            _: ?*anyopaque,
+            chunk_checker: ?*const fn (i32, i32, *anyopaque) bool,
+            checker_ctx: ?*anyopaque,
+            use_frustum: bool,
         ) !void {
             var iter = meshes.iterator();
             while (iter.next()) |entry| {
@@ -125,12 +133,32 @@ pub fn LODRenderer(comptime RHI: type) type {
                     if (chunk.state != .renderable) continue;
                     const bounds = chunk.worldBounds();
 
-                    // Issue #211: removed expensive areAllChunksLoaded check from render.
-                    // Throttled cleanup in update handles this, and shader masking handles partial overlaps.
+                    // Check if all underlying block chunks are loaded.
+                    // If they are, we skip rendering the LOD chunk to let blocks show through.
+                    if (chunk_checker) |checker| {
+                        const side: i32 = @intCast(chunk.lod_level.chunksPerSide());
+                        const start_cx = chunk.region_x * side;
+                        const start_cz = chunk.region_z * side;
+
+                        var all_loaded = true;
+                        var lcz: i32 = 0;
+                        while (lcz < side) : (lcz += 1) {
+                            var lcx: i32 = 0;
+                            while (lcx < side) : (lcx += 1) {
+                                if (!checker(start_cx + lcx, start_cz + lcz, checker_ctx.?)) {
+                                    all_loaded = false;
+                                    break;
+                                }
+                            }
+                            if (!all_loaded) break;
+                        }
+
+                        if (all_loaded) continue;
+                    }
 
                     const aabb_min = Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, 0.0 - camera_pos.y, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z);
                     const aabb_max = Vec3.init(@as(f32, @floatFromInt(bounds.max_x)) - camera_pos.x, 256.0 - camera_pos.y, @as(f32, @floatFromInt(bounds.max_z)) - camera_pos.z);
-                    if (!frustum.intersectsAABB(AABB.init(aabb_min, aabb_max))) continue;
+                    if (use_frustum and !frustum.intersectsAABB(AABB.init(aabb_min, aabb_max))) continue;
 
                     const model = Mat4.translate(Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, -camera_pos.y + lod_y_offset, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z));
 
@@ -282,7 +310,7 @@ test "LODRenderer render draw path" {
     const camera_pos = Vec3.zero;
 
     // Call render
-    renderer.render(mock_manager, view_proj, camera_pos, null, null);
+    renderer.render(mock_manager, view_proj, camera_pos, null, null, true);
 
     // Verify draw was called with correct parameters
     try std.testing.expectEqual(@as(u32, 1), mock_state.draw_calls);

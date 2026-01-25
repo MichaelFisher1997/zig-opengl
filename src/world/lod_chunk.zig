@@ -384,7 +384,8 @@ pub const LODConfig = struct {
     }
     fn calculateMaskRadiusWrapper(ptr: *anyopaque) f32 {
         const self: *LODConfig = @ptrCast(@alignCast(ptr));
-        return @floatFromInt(self.radii[0]);
+        // Return radii[0] - 2.0 to ensure a 2-chunk overlap between LODs and block chunks
+        return @as(f32, @floatFromInt(self.radii[0])) - 2.0;
     }
 };
 

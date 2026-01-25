@@ -297,18 +297,42 @@ fn addSmoothQuad(
     const y01 = h01;
     const y11 = h11;
 
-    // Calculate normals from height differences
-    const normal = [3]f32{ 0, 1, 0 };
+    // Calculate normals for each triangle
+    // Tri 1: (0,0) -> (1,1) -> (1,0)
+    const v1_0 = [3]f32{ size, y11 - y00, size };
+    const v1_1 = [3]f32{ size, y10 - y00, 0 };
+    var n1 = [3]f32{
+        v1_0[1] * v1_1[2] - v1_0[2] * v1_1[1],
+        v1_0[2] * v1_1[0] - v1_0[0] * v1_1[2],
+        v1_0[0] * v1_1[1] - v1_0[1] * v1_1[0],
+    };
+    const len1 = @sqrt(n1[0] * n1[0] + n1[1] * n1[1] + n1[2] * n1[2]);
+    if (len1 > 0.0001) {
+        n1[0] /= len1;
+        n1[1] /= len1;
+        n1[2] /= len1;
+    }
 
-    // Triangle 1: (0,0), (1,1), (0,1) - CCW for Up Normal (Original Points: 0(00), 1(10), 2(11), 3(01))
-    // 0->2->3 is (0,0)->(1,1)->(0,1). This generates Up normal.
-    // However, we want to maintain the split structure (0-1-2 and 0-2-3 splits diagonal).
-    // Original Tri 1: 0, 1, 2. (0,0)->(1,0)->(1,1). CW (Down).
-    // Reversed: 0, 2, 1. (0,0)->(1,1)->(1,0). CCW (Up).
+    // Tri 2: (0,0) -> (0,1) -> (1,1)
+    const v2_0 = [3]f32{ 0, y01 - y00, size };
+    const v2_1 = [3]f32{ size, y11 - y00, size };
+    var n2 = [3]f32{
+        v2_0[1] * v2_1[2] - v2_0[2] * v2_1[1],
+        v2_0[2] * v2_1[0] - v2_0[0] * v2_1[2],
+        v2_0[0] * v2_1[1] - v2_0[1] * v2_1[0],
+    };
+    const len2 = @sqrt(n2[0] * n2[0] + n2[1] * n2[1] + n2[2] * n2[2]);
+    if (len2 > 0.0001) {
+        n2[0] /= len2;
+        n2[1] /= len2;
+        n2[2] /= len2;
+    }
+
+    // Triangle 1: (0,0), (1,1), (1,0)
     try vertices.append(allocator, .{
         .pos = .{ x, y00, z },
         .color = .{ unpackR(c00), unpackG(c00), unpackB(c00) },
-        .normal = normal,
+        .normal = n1,
         .uv = .{ 0, 0 },
         .tile_id = -1.0,
         .skylight = 1.0,
@@ -318,7 +342,7 @@ fn addSmoothQuad(
     try vertices.append(allocator, .{
         .pos = .{ x + size, y11, z + size },
         .color = .{ unpackR(c11), unpackG(c11), unpackB(c11) },
-        .normal = normal,
+        .normal = n1,
         .uv = .{ 1, 1 },
         .tile_id = -1.0,
         .skylight = 1.0,
@@ -328,7 +352,7 @@ fn addSmoothQuad(
     try vertices.append(allocator, .{
         .pos = .{ x + size, y10, z },
         .color = .{ unpackR(c10), unpackG(c10), unpackB(c10) },
-        .normal = normal,
+        .normal = n1,
         .uv = .{ 1, 0 },
         .tile_id = -1.0,
         .skylight = 1.0,
@@ -336,16 +360,11 @@ fn addSmoothQuad(
         .ao = 1.0,
     });
 
-    // Triangle 2: (0,0), (0,1), (1,1) - CCW for Up Normal
-    // Original Tri 2: 0, 2, 3. (0,0)->(1,1)->(0,1). (Up). Wait, this was already Up?
-    // Let's check Tri 2 again: (0,0)->(1,1)->(0,1).
-    // V1=(1,1). V2=(-1,0). Cross=(0,-1,0). DOWN.
-    // So YES, Tri 2 is also CW (Down).
-    // Reversed: 0, 3, 2. (0,0)->(0,1)->(1,1).
+    // Triangle 2: (0,0), (0,1), (1,1)
     try vertices.append(allocator, .{
         .pos = .{ x, y00, z },
         .color = .{ unpackR(c00), unpackG(c00), unpackB(c00) },
-        .normal = normal,
+        .normal = n2,
         .uv = .{ 0, 0 },
         .tile_id = -1.0,
         .skylight = 1.0,
@@ -355,7 +374,7 @@ fn addSmoothQuad(
     try vertices.append(allocator, .{
         .pos = .{ x, y01, z + size },
         .color = .{ unpackR(c01), unpackG(c01), unpackB(c01) },
-        .normal = normal,
+        .normal = n2,
         .uv = .{ 0, 1 },
         .tile_id = -1.0,
         .skylight = 1.0,
@@ -365,7 +384,7 @@ fn addSmoothQuad(
     try vertices.append(allocator, .{
         .pos = .{ x + size, y11, z + size },
         .color = .{ unpackR(c11), unpackG(c11), unpackB(c11) },
-        .normal = normal,
+        .normal = n2,
         .uv = .{ 1, 1 },
         .tile_id = -1.0,
         .skylight = 1.0,

@@ -706,11 +706,11 @@ pub fn LODManager(comptime RHI: type) type {
         ///
         /// NOTE: Acquires a shared lock on LODManager. LODRenderer must NOT attempt to acquire
         /// a write lock on LODManager during rendering to avoid deadlocks.
-        pub fn render(self: *Self, view_proj: Mat4, camera_pos: Vec3, chunk_checker: ?ChunkChecker, checker_ctx: ?*anyopaque) void {
+        pub fn render(self: *Self, view_proj: Mat4, camera_pos: Vec3, chunk_checker: ?ChunkChecker, checker_ctx: ?*anyopaque, use_frustum: bool) void {
             self.mutex.lockShared();
             defer self.mutex.unlockShared();
 
-            self.renderer.render(self, view_proj, camera_pos, chunk_checker, checker_ctx);
+            self.renderer.render(self, view_proj, camera_pos, chunk_checker, checker_ctx, use_frustum);
         }
 
         /// Free LOD meshes where all underlying chunks are loaded
