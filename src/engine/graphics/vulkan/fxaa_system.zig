@@ -97,16 +97,6 @@ pub const FXAASystem = struct {
 
         try Utils.checkVk(c.vkCreateRenderPass(vk, &rp_info, null, &self.render_pass));
 
-        // 2.2 Create image view for FXAA input
-        var view_info = std.mem.zeroes(c.VkImageViewCreateInfo);
-        view_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        view_info.image = self.input_image;
-        view_info.viewType = c.VK_IMAGE_VIEW_TYPE_2D;
-        view_info.format = format;
-        view_info.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
-
-        try Utils.checkVk(c.vkCreateImageView(vk, &view_info, null, &self.input_view));
-
         // 2.5. Post-process to FXAA pass
         {
             var pp_to_fxaa_attachment = color_attachment;
@@ -118,17 +108,6 @@ pub const FXAASystem = struct {
             pp_rp_info.pAttachments = &pp_to_fxaa_attachment;
 
             try Utils.checkVk(c.vkCreateRenderPass(vk, &pp_rp_info, null, &self.post_process_to_fxaa_render_pass));
-
-            var fb_info = std.mem.zeroes(c.VkFramebufferCreateInfo);
-            fb_info.sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-            fb_info.renderPass = self.post_process_to_fxaa_render_pass;
-            fb_info.attachmentCount = 1;
-            fb_info.pAttachments = &self.input_view;
-            fb_info.width = extent.width;
-            fb_info.height = extent.height;
-            fb_info.layers = 1;
-
-            try Utils.checkVk(c.vkCreateFramebuffer(vk, &fb_info, null, &self.post_process_to_fxaa_framebuffer));
         }
 
         // 3. Descriptor Set Layout
@@ -161,9 +140,9 @@ pub const FXAASystem = struct {
         try Utils.checkVk(c.vkCreatePipelineLayout(vk, &pipe_layout_info, null, &self.pipeline_layout));
 
         // 5. Shaders & Pipeline
-        const vert_code = try std.fs.cwd().readFileAlloc(shader_registry.FXAA_VERT, allocator, @enumFromInt(1024 * 1024));
+        const vert_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/fxaa.vert.spv", allocator, @enumFromInt(1024 * 1024));
         defer allocator.free(vert_code);
-        const frag_code = try std.fs.cwd().readFileAlloc(shader_registry.FXAA_FRAG, allocator, @enumFromInt(1024 * 1024));
+        const frag_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/fxaa.frag.spv", allocator, @enumFromInt(1024 * 1024));
         defer allocator.free(frag_code);
         const vert_module = try Utils.createShaderModule(vk, vert_code);
         defer c.vkDestroyShaderModule(vk, vert_module, null);
@@ -229,7 +208,32 @@ pub const FXAASystem = struct {
 
         try Utils.checkVk(c.vkCreateGraphicsPipelines(vk, null, 1, &pipe_info, null, &self.pipeline));
 
-        // 6. Framebuffers (for swapchain images)
+        // 6. Final Resource Construction (Image View & Framebuffers)
+        // This is done after all potential failure points that don't depend on the view.
+        var final_view_info = std.mem.zeroes(c.VkImageViewCreateInfo);
+        final_view_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        final_view_info.image = self.input_image;
+        final_view_info.viewType = c.VK_IMAGE_VIEW_TYPE_2D;
+        final_view_info.format = format;
+        final_view_info.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
+
+        try Utils.checkVk(c.vkCreateImageView(vk, &final_view_info, null, &self.input_view));
+
+        // Post-process to FXAA framebuffer
+        {
+            var fb_info = std.mem.zeroes(c.VkFramebufferCreateInfo);
+            fb_info.sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fb_info.renderPass = self.post_process_to_fxaa_render_pass;
+            fb_info.attachmentCount = 1;
+            fb_info.pAttachments = &self.input_view;
+            fb_info.width = extent.width;
+            fb_info.height = extent.height;
+            fb_info.layers = 1;
+
+            try Utils.checkVk(c.vkCreateFramebuffer(vk, &fb_info, null, &self.post_process_to_fxaa_framebuffer));
+        }
+
+        // Framebuffers (for swapchain images)
         try self.framebuffers.resize(allocator, swapchain_views.len);
         for (0..swapchain_views.len) |i| {
             var fb_info_swap = std.mem.zeroes(c.VkFramebufferCreateInfo);

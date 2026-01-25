@@ -240,11 +240,26 @@ pub const ISSAOContext = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
+        /// Computes SSAO.
         compute: *const fn (ptr: *anyopaque, proj: Mat4, inv_proj: Mat4) void,
     };
 
     pub fn compute(self: ISSAOContext, proj: Mat4, inv_proj: Mat4) void {
         self.vtable.compute(self.ptr, proj, inv_proj);
+    }
+};
+
+pub const IDebugOverlayContext = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        /// Draws debug shadow map overlay (Deprecated - Tracked in #226).
+        drawDebugShadowMap: *const fn (ptr: *anyopaque, cascade_index: usize, depth_map_handle: TextureHandle) void,
+    };
+
+    pub fn drawDebugShadowMap(self: IDebugOverlayContext, cascade_index: usize, depth_map_handle: TextureHandle) void {
+        self.vtable.drawDebugShadowMap(self.ptr, cascade_index, depth_map_handle);
     }
 };
 
