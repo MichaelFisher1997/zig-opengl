@@ -37,6 +37,7 @@ const FrameManager = @import("vulkan/frame_manager.zig").FrameManager;
 const SwapchainPresenter = @import("vulkan/swapchain_presenter.zig").SwapchainPresenter;
 const DescriptorManager = @import("vulkan/descriptor_manager.zig").DescriptorManager;
 const Utils = @import("vulkan/utils.zig");
+const shader_registry = @import("vulkan/shader_registry.zig");
 const bloom_system_pkg = @import("vulkan/bloom_system.zig");
 const BloomSystem = bloom_system_pkg.BloomSystem;
 const BloomPushConstants = bloom_system_pkg.BloomPushConstants;
@@ -720,9 +721,9 @@ fn createPostProcessResources(ctx: *VulkanContext) !void {
     errdefer c.vkDestroySampler(vk, linear_sampler, null);
 
     // 5. Pipeline
-    const vert_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/post_process.vert.spv", ctx.allocator, @enumFromInt(1024 * 1024));
+    const vert_code = try std.fs.cwd().readFileAlloc(shader_registry.POST_PROCESS_VERT, ctx.allocator, @enumFromInt(1024 * 1024));
     defer ctx.allocator.free(vert_code);
-    const frag_code = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/post_process.frag.spv", ctx.allocator, @enumFromInt(1024 * 1024));
+    const frag_code = try std.fs.cwd().readFileAlloc(shader_registry.POST_PROCESS_FRAG, ctx.allocator, @enumFromInt(1024 * 1024));
     defer ctx.allocator.free(frag_code);
     const vert_module = try Utils.createShaderModule(vk, vert_code);
     defer c.vkDestroyShaderModule(vk, vert_module, null);

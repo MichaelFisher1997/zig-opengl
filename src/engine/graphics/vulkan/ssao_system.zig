@@ -8,14 +8,12 @@ const VulkanDevice = @import("../vulkan_device.zig").VulkanDevice;
 const resource_manager_pkg = @import("resource_manager.zig");
 const VulkanBuffer = resource_manager_pkg.VulkanBuffer;
 
+const shader_registry = @import("shader_registry.zig");
+
 pub const KERNEL_SIZE = 64;
 pub const NOISE_SIZE = 4;
 pub const DEFAULT_RADIUS = 0.5;
 pub const DEFAULT_BIAS = 0.025;
-
-const SHADER_PATH_VERT = "assets/shaders/vulkan/ssao.vert.spv";
-const SHADER_PATH_FRAG = "assets/shaders/vulkan/ssao.frag.spv";
-const SHADER_PATH_BLUR_FRAG = "assets/shaders/vulkan/ssao_blur.frag.spv";
 
 pub const SSAOParams = extern struct {
     projection: Mat4,
@@ -199,18 +197,24 @@ pub const SSAOSystem = struct {
         try Utils.checkVk(c.vkCreateFramebuffer(vk, &fb_info, null, &self.blur_framebuffer));
     }
 
-    fn initNoiseTexture(self: *SSAOSystem, device: *VulkanDevice, upload_cmd_pool: c.VkCommandPool) !void {
-        const vk = device.vk_device;
-        var rng = std.Random.DefaultPrng.init(12345);
+    pub fn generateNoiseData(rng: *std.Random.DefaultPrng) [NOISE_SIZE * NOISE_SIZE * 4]u8 {
         var noise_data: [NOISE_SIZE * NOISE_SIZE * 4]u8 = undefined;
+        const random = rng.random();
         for (0..NOISE_SIZE * NOISE_SIZE) |i| {
-            const x = rng.random().float(f32) * 2.0 - 1.0;
-            const y = rng.random().float(f32) * 2.0 - 1.0;
+            const x = random.float(f32) * 2.0 - 1.0;
+            const y = random.float(f32) * 2.0 - 1.0;
             noise_data[i * 4 + 0] = @intFromFloat((x * 0.5 + 0.5) * 255.0);
             noise_data[i * 4 + 1] = @intFromFloat((y * 0.5 + 0.5) * 255.0);
             noise_data[i * 4 + 2] = 0;
             noise_data[i * 4 + 3] = 255;
         }
+        return noise_data;
+    }
+
+    fn initNoiseTexture(self: *SSAOSystem, device: *VulkanDevice, upload_cmd_pool: c.VkCommandPool) !void {
+        const vk = device.vk_device;
+        var rng = std.Random.DefaultPrng.init(12345);
+        const noise_data = generateNoiseData(&rng);
 
         var img_info = std.mem.zeroes(c.VkImageCreateInfo);
         img_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -301,24 +305,24 @@ pub const SSAOSystem = struct {
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &cmd;
         try device.submitGuarded(submit_info, null);
-        _ = c.vkQueueWaitIdle(device.queue);
         c.vkFreeCommandBuffers(vk, upload_cmd_pool, 1, &cmd);
     }
 
-    fn initKernelUBO(self: *SSAOSystem, device: *VulkanDevice) !void {
-        self.kernel_ubo = try Utils.createVulkanBuffer(device, @sizeOf(SSAOParams), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-        var rng = std.Random.DefaultPrng.init(67890);
+    pub fn generateKernelSamples(rng: *std.Random.DefaultPrng) [KERNEL_SIZE][4]f32 {
+        var samples: [KERNEL_SIZE][4]f32 = undefined;
+        const random = rng.random();
         for (0..KERNEL_SIZE) |i| {
             var sample: [3]f32 = .{
-                rng.random().float(f32) * 2.0 - 1.0,
-                rng.random().float(f32) * 2.0 - 1.0,
-                rng.random().float(f32),
+                random.float(f32) * 2.0 - 1.0,
+                random.float(f32) * 2.0 - 1.0,
+                random.float(f32),
             };
             const len = @sqrt(sample[0] * sample[0] + sample[1] * sample[1] + sample[2] * sample[2]);
-            sample[0] /= len;
-            sample[1] /= len;
-            sample[2] /= len;
+            if (len > 0.0001) {
+                sample[0] /= len;
+                sample[1] /= len;
+                sample[2] /= len;
+            }
 
             var scale: f32 = @as(f32, @floatFromInt(i)) / KERNEL_SIZE;
             scale = 0.1 + scale * scale * 0.9;
@@ -326,8 +330,16 @@ pub const SSAOSystem = struct {
             sample[1] *= scale;
             sample[2] *= scale;
 
-            self.params.samples[i] = .{ sample[0], sample[1], sample[2], 0.0 };
+            samples[i] = .{ sample[0], sample[1], sample[2], 0.0 };
         }
+        return samples;
+    }
+
+    fn initKernelUBO(self: *SSAOSystem, device: *const VulkanDevice) !void {
+        self.kernel_ubo = try Utils.createVulkanBuffer(device, @sizeOf(SSAOParams), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        var rng = std.Random.DefaultPrng.init(67890);
+        self.params.samples = generateKernelSamples(&rng);
         self.params.radius = DEFAULT_RADIUS;
         self.params.bias = DEFAULT_BIAS;
     }
@@ -375,11 +387,11 @@ pub const SSAOSystem = struct {
         layout_info.pSetLayouts = &self.blur_descriptor_set_layout;
         try Utils.checkVk(c.vkCreatePipelineLayout(vk, &layout_info, null, &self.blur_pipeline_layout));
 
-        const vert_code = try std.fs.cwd().readFileAlloc(SHADER_PATH_VERT, allocator, @enumFromInt(1024 * 1024));
+        const vert_code = try std.fs.cwd().readFileAlloc(shader_registry.SSAO_VERT, allocator, @enumFromInt(1024 * 1024));
         defer allocator.free(vert_code);
-        const frag_code = try std.fs.cwd().readFileAlloc(SHADER_PATH_FRAG, allocator, @enumFromInt(1024 * 1024));
+        const frag_code = try std.fs.cwd().readFileAlloc(shader_registry.SSAO_FRAG, allocator, @enumFromInt(1024 * 1024));
         defer allocator.free(frag_code);
-        const blur_frag_code = try std.fs.cwd().readFileAlloc(SHADER_PATH_BLUR_FRAG, allocator, @enumFromInt(1024 * 1024));
+        const blur_frag_code = try std.fs.cwd().readFileAlloc(shader_registry.SSAO_BLUR_FRAG, allocator, @enumFromInt(1024 * 1024));
         defer allocator.free(blur_frag_code);
 
         const vert_module = try Utils.createShaderModule(vk, vert_code);
@@ -565,3 +577,41 @@ pub const SSAOSystem = struct {
         }
     }
 };
+
+test "SSAOSystem noise generation" {
+    var rng = std.Random.DefaultPrng.init(12345);
+    const data1 = SSAOSystem.generateNoiseData(&rng);
+    rng = std.Random.DefaultPrng.init(12345);
+    const data2 = SSAOSystem.generateNoiseData(&rng);
+
+    try std.testing.expectEqual(data1, data2);
+
+    // Verify some properties
+    for (0..NOISE_SIZE * NOISE_SIZE) |i| {
+        // Red and Green should be random but in 0-255 range (always true for u8)
+        // Blue should be 0
+        try std.testing.expectEqual(@as(u8, 0), data1[i * 4 + 2]);
+        // Alpha should be 255
+        try std.testing.expectEqual(@as(u8, 255), data1[i * 4 + 3]);
+    }
+}
+
+test "SSAOSystem kernel generation" {
+    var rng = std.Random.DefaultPrng.init(67890);
+    const samples1 = SSAOSystem.generateKernelSamples(&rng);
+    rng = std.Random.DefaultPrng.init(67890);
+    const samples2 = SSAOSystem.generateKernelSamples(&rng);
+
+    for (0..KERNEL_SIZE) |i| {
+        try std.testing.expectEqual(samples1[i][0], samples2[i][0]);
+        try std.testing.expectEqual(samples1[i][1], samples2[i][1]);
+        try std.testing.expectEqual(samples1[i][2], samples2[i][2]);
+        try std.testing.expectEqual(samples1[i][3], samples2[i][3]);
+
+        // Hemisphere check: z must be >= 0
+        try std.testing.expect(samples1[i][2] >= 0.0);
+        // Length check: should be <= 1.0 (scaled by falloff)
+        const len = @sqrt(samples1[i][0] * samples1[i][0] + samples1[i][1] * samples1[i][1] + samples1[i][2] * samples1[i][2]);
+        try std.testing.expect(len <= 1.0);
+    }
+}
