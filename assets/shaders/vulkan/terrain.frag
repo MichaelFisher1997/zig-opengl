@@ -306,12 +306,22 @@ void main() {
     // Output color - must be declared at function scope
     vec3 color;
     
+    // Dithered LOD transition - smooth crossfade between chunks and LOD terrain
+    // Only applies to LOD meshes (vTileID < 0)
+    if (vTileID < 0 && vMaskRadius > 0.0) {
+        float transitionWidth = 24.0;
+        float distFromMask = vDistance - vMaskRadius;
+        float fade = clamp(distFromMask / transitionWidth, 0.0, 1.0);
+        float ditherThreshold = bayerDither4x4(gl_FragCoord.xy);
+        if (fade < ditherThreshold) discard;
+    }
+    
     // Calculate UV coordinates in atlas
     vec2 atlasSize = vec2(16.0, 16.0);
     vec2 tileSize = 1.0 / atlasSize;
     vec2 tilePos = vec2(mod(float(vTileID), atlasSize.x), floor(float(vTileID) / atlasSize.x));
     vec2 tiledUV = fract(vTexCoord);
-    tiledUV = clamp(tiledUV, 0.001, 0.999);
+    tiledUV = clamp(tiledUV, 0.001, 0.999); 
     vec2 uv = (tilePos + tiledUV) * tileSize;
 
     // Get normal for lighting
@@ -366,8 +376,11 @@ void main() {
     vec2 screenUV = gl_FragCoord.xy / global.viewport_size.xy;
     float ssao = mix(1.0, texture(uSSAOMap, screenUV).r, global.pbr_params.w);
     
-    // Soften voxel AO effect (50% strength) to prevent overly dark faces
-    float ao = mix(1.0, vAO, 0.5);
+    // Distance-aware Voxel AO: Soften significantly at distance to hide chunk boundary artifacts
+    // This removes the dark rectangular patches on sand/grass
+    float aoDist = clamp(vDistance / 128.0, 0.0, 1.0);
+    float aoStrength = mix(0.4, 0.05, aoDist);
+    float ao = mix(1.0, vAO, aoStrength);
     
     if (global.lighting.y > 0.5 && vTileID >= 0) {
         vec4 texColor = texture(uTexture, uv);
