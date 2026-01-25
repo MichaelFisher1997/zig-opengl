@@ -234,7 +234,7 @@ vec4 calculateVolumetric(vec3 rayStart, vec3 rayEnd, float dither) {
     float phase = henyeyGreenstein(global.volumetric_params.w, cosTheta);
     
     // Use the actual sun color for scattering
-                vec3 sunColor = global.sun_color.rgb * global.params.w * 3.0; // Significant boost
+    vec3 sunColor = global.sun_color.rgb * global.params.w * 3.0; // Significant boost
     vec3 accumulatedScattering = vec3(0.0);
     float transmittance = 1.0;
     // Scale density to be more manageable (0.01 in preset = light fog)
@@ -318,7 +318,7 @@ vec2 SampleSphericalMap(vec3 v) {
 
 void main() {
     // Output color - must be declared at function scope
-    vec3 color;
+    vec3 color = vec3(0.0);
     
     // Constants for visual polish
     const float LOD_TRANSITION_WIDTH = 24.0;
@@ -338,7 +338,7 @@ void main() {
     vec2 tileSize = 1.0 / atlasSize;
     vec2 tilePos = vec2(mod(float(vTileID), atlasSize.x), floor(float(vTileID) / atlasSize.x));
     vec2 tiledUV = fract(vTexCoord);
-    tiledUV = clamp(tiledUV, 0.001, 0.999);
+    tiledUV = clamp(tiledUV, 0.001, 0.999); 
     vec2 uv = (tilePos + tiledUV) * tileSize;
 
     // Get normal for lighting
@@ -367,7 +367,7 @@ void main() {
     if (vViewDepth < shadows.cascade_splits[0]) layer = 0;
     else if (vViewDepth < shadows.cascade_splits[1]) layer = 1;
 
-    float shadow = calculateShadow(vFragPosWorld, nDotL, layer);
+    float shadowVal = calculateShadow(vFragPosWorld, nDotL, layer);
     
     // Cascade blending
     if (layer < 2) {
@@ -377,7 +377,7 @@ void main() {
         if (normDist > blendThreshold) {
             float blend = (normDist - blendThreshold) / (nextSplit - blendThreshold);
             float nextShadow = calculateShadow(vFragPosWorld, nDotL, layer + 1);
-            shadow = mix(shadow, nextShadow, clamp(blend, 0.0, 1.0));
+            shadowVal = mix(shadowVal, nextShadow, clamp(blend, 0.0, 1.0));
         }
     }
 
@@ -387,7 +387,7 @@ void main() {
         cloudShadow = getCloudShadow(vFragPosWorld, global.sun_dir.xyz);
     }
     
-    float totalShadow = min(shadow + cloudShadow, 1.0);
+    float totalShadow = min(shadowVal + cloudShadow, 1.0);
 
     // SSAO Sampling (reduced strength)
     vec2 screenUV = gl_FragCoord.xy / global.viewport_size.xy;
@@ -399,16 +399,13 @@ void main() {
     float aoStrength = mix(0.4, 0.05, aoDist);
     float ao = mix(1.0, vAO, aoStrength);
     
-    if (global.lighting.y > 0.5 && vTileID >= 0) {
+    if (global.lighting.y > 0.5 && vTileID >= 0) { // Textured blocks
         vec4 texColor = texture(uTexture, uv);
         if (texColor.a < 0.1) discard;
 
-        // Albedo is already in linear space (VK_FORMAT_R8G8B8A8_SRGB does hardware decode)
-        // vColor is also in linear space (vertex colors)
         vec3 albedo = texColor.rgb * vColor;
 
-        // PBR lighting - Only calculate if maps are present and it's enabled
-        if (global.lighting.z > 0.5 && global.pbr_params.x > 0.5) {
+        if (global.lighting.z > 0.5 && global.pbr_params.x > 0.5) { // PBR
             bool hasNormalMap = normalMapSample.a > 0.5;
             
             // Sample roughness (now packed: R=roughness, G=displacement)
@@ -418,21 +415,15 @@ void main() {
 
             if (hasPBR) {
                 roughness = clamp(roughness, 0.05, 1.0);
-                
-                // For blocks, we use a low metallic value (non-metals)
                 float metallic = 0.0;
                 
-                // Use the normal calculated earlier (already includes normal mapping if quality > 1.5)
-                // Calculate view direction
                 vec3 V = normalize(global.cam_pos.xyz - vFragPosWorld);
                 vec3 L = normalize(global.sun_dir.xyz);
                 vec3 H = normalize(V + L);
                 
-                // Calculate reflectance at normal incidence (F0)
                 vec3 F0 = vec3(0.04);
                 F0 = mix(F0, albedo, metallic);
                 
-                // Cook-Torrance BRDF
                 float NDF = DistributionGGX(N, H, roughness);
                 float G = GeometrySmith(N, V, L, roughness);
                 vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
@@ -444,49 +435,42 @@ void main() {
                 vec3 kS = F;
                 vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
                 
-                float NdotL = max(dot(N, L), 0.0);
-                vec3 sunColor = global.sun_color.rgb * global.params.w * 4.0; // Significant boost
-                vec3 Lo = (kD * albedo / PI + specular) * sunColor * NdotL * (1.0 - totalShadow);
+                float NdotL_final = max(dot(N, L), 0.0);
+                vec3 sunColor = global.sun_color.rgb * global.params.w * 4.0;
+                vec3 Lo = (kD * albedo / PI + specular) * sunColor * NdotL_final * (1.0 - totalShadow);
                 
-                // Ambient lighting (IBL)
                 vec2 envUV = SampleSphericalMap(normalize(N));
-                vec3 envColor = textureLod(uEnvMap, envUV, 8.0).rgb; // Sample high mip level for diffuse irradiance
+                vec3 envColor = textureLod(uEnvMap, envUV, 8.0).rgb;
                 
                 float skyLight = vSkyLight * global.lighting.x;
                 vec3 blockLight = vBlockLight;
-                // IBL intensity 0.8 - more visible effect from HDRI
-                // Apply AO to ambient lighting, with a robust minimum ambient fallback (0.8 * ambient)
                 vec3 ambientColor = albedo * (max(min(envColor, vec3(3.0)) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao;
                 
                 color = ambientColor + Lo;
             } else {
-                // Non-PBR blocks with PBR enabled: use simplified IBL-aware lighting
+                // Non-PBR blocks with PBR enabled
                 float skyLight = vSkyLight * global.lighting.x;
                 vec3 blockLight = vBlockLight;
                 
-                // Sample IBL for ambient (even for non-PBR blocks)
                 vec2 envUV = SampleSphericalMap(normalize(N));
                 vec3 envColor = textureLod(uEnvMap, envUV, 8.0).rgb;
                 
-                // Apply AO to ambient lighting, with a robust minimum ambient fallback (0.8 * ambient)
                 vec3 ambientColor = albedo * (max(min(envColor, vec3(3.0)) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao;
                 
-                // Direct lighting
-            vec3 sunColor = global.sun_color.rgb * global.params.w * 4.0; // Significant boost
-            vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
-            
-            color = ambientColor + directColor;
-        }
-    } else {
-        // Legacy lighting (PBR disabled)
-        float directLight = nDotL * global.params.w * (1.0 - totalShadow) * 2.5;
+                vec3 sunColor = global.sun_color.rgb * global.params.w * 4.0;
+                vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
+                
+                color = ambientColor + directColor;
+            }
+        } else {
+            // Legacy lighting (PBR disabled)
+            float directLight = nDotL * global.params.w * (1.0 - totalShadow) * 2.5;
             float skyLight = vSkyLight * (global.lighting.x + directLight * 1.0);
             vec3 blockLight = vBlockLight;
             float lightLevel = max(skyLight, max(blockLight.r, max(blockLight.g, blockLight.b)));
             lightLevel = max(lightLevel, global.lighting.x * 0.5);
             lightLevel = clamp(lightLevel, 0.0, 1.0);
             
-            // Apply AO to legacy lighting
             color = albedo * lightLevel * ao * ssao;
         }
     } else {
@@ -496,11 +480,11 @@ void main() {
         vec3 blockLight = vBlockLight;
         
         if (vTileID < 0) {
-            // Special LOD lighting (always uses IBL-like fallback if in range)
+            // Special LOD lighting
             vec3 albedo = vColor;
             float skyLightVal = vSkyLight * global.lighting.x;
             vec3 ambientColor = albedo * (max(vec3(skyLightVal * 0.8), vec3(global.lighting.x * 0.4)) + blockLight) * ao * ssao;
-            vec3 sunColor = global.sun_color.rgb * global.params.w * 3.0; // Significant boost
+            vec3 sunColor = global.sun_color.rgb * global.params.w * 3.0;
             vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
             color = ambientColor + directColor;
         } else {
