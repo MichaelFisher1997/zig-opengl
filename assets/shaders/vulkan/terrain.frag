@@ -14,6 +14,7 @@ layout(location = 10) in vec3 vBitangent;
 layout(location = 11) in float vAO;
 layout(location = 12) in vec4 vClipPosCurrent;
 layout(location = 13) in vec4 vClipPosPrev;
+layout(location = 14) in float vMaskRadius;
 
 layout(location = 0) out vec4 FragColor;
 
@@ -60,6 +61,19 @@ float cloudFbm(vec2 p) {
         a *= 0.5;
     }
     return v;
+}
+
+// 4x4 Bayer matrix for dithered LOD transitions
+float bayerDither4x4(vec2 position) {
+    const float bayerMatrix[16] = float[](
+        0.0/16.0,  8.0/16.0,  2.0/16.0, 10.0/16.0,
+        12.0/16.0, 4.0/16.0, 14.0/16.0,  6.0/16.0,
+        3.0/16.0, 11.0/16.0,  1.0/16.0,  9.0/16.0,
+        15.0/16.0, 7.0/16.0, 13.0/16.0,  5.0/16.0
+    );
+    int x = int(mod(position.x, 4.0));
+    int y = int(mod(position.y, 4.0));
+    return bayerMatrix[x + y * 4];
 }
 
 float getCloudShadow(vec3 worldPos, vec3 sunDir) {
@@ -306,12 +320,15 @@ void main() {
     // Output color - must be declared at function scope
     vec3 color;
     
+    // Constants for visual polish
+    const float LOD_TRANSITION_WIDTH = 24.0;
+    const float AO_FADE_DISTANCE = 128.0;
+
     // Dithered LOD transition - smooth crossfade between chunks and LOD terrain
     // Only applies to LOD meshes (vTileID < 0)
     if (vTileID < 0 && vMaskRadius > 0.0) {
-        float transitionWidth = 24.0;
         float distFromMask = vDistance - vMaskRadius;
-        float fade = clamp(distFromMask / transitionWidth, 0.0, 1.0);
+        float fade = clamp(distFromMask / LOD_TRANSITION_WIDTH, 0.0, 1.0);
         float ditherThreshold = bayerDither4x4(gl_FragCoord.xy);
         if (fade < ditherThreshold) discard;
     }
@@ -321,7 +338,7 @@ void main() {
     vec2 tileSize = 1.0 / atlasSize;
     vec2 tilePos = vec2(mod(float(vTileID), atlasSize.x), floor(float(vTileID) / atlasSize.x));
     vec2 tiledUV = fract(vTexCoord);
-    tiledUV = clamp(tiledUV, 0.001, 0.999); 
+    tiledUV = clamp(tiledUV, 0.001, 0.999);
     vec2 uv = (tilePos + tiledUV) * tileSize;
 
     // Get normal for lighting
@@ -378,7 +395,7 @@ void main() {
     
     // Distance-aware Voxel AO: Soften significantly at distance to hide chunk boundary artifacts
     // This removes the dark rectangular patches on sand/grass
-    float aoDist = clamp(vDistance / 128.0, 0.0, 1.0);
+    float aoDist = clamp(vDistance / AO_FADE_DISTANCE, 0.0, 1.0);
     float aoStrength = mix(0.4, 0.05, aoDist);
     float ao = mix(1.0, vAO, aoStrength);
     
