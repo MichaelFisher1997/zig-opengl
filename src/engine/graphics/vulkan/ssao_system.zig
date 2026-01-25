@@ -305,6 +305,7 @@ pub const SSAOSystem = struct {
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &cmd;
         try device.submitGuarded(submit_info, null);
+        _ = c.vkQueueWaitIdle(device.queue);
         c.vkFreeCommandBuffers(vk, upload_cmd_pool, 1, &cmd);
     }
 
