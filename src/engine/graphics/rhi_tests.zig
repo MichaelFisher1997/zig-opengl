@@ -8,6 +8,7 @@ const MockContext = struct {
     bind_shader_called: bool = false,
     bind_texture_called: bool = false,
     draw_called: bool = false,
+    draw_depth_texture_called: bool = false,
     sky_pipeline_requested: bool = false,
     cloud_pipeline_requested: bool = false,
 
@@ -193,9 +194,10 @@ const MockContext = struct {
     }
 
     fn drawDepthTexture(ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.Rect) void {
-        _ = ptr;
+        const self: *MockContext = @ptrCast(@alignCast(ptr));
         _ = texture;
         _ = rect;
+        self.draw_depth_texture_called = true;
     }
 
     const MOCK_RENDER_VTABLE = rhi.IRenderContext.VTable{

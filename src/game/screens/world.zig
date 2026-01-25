@@ -186,7 +186,7 @@ pub const WorldScreen = struct {
         try self.session.drawHUD(ui, ctx.atlas, ctx.resource_pack_manager.active_pack, ctx.time.fps, screen_w, screen_h, mouse_x, mouse_y, mouse_clicked);
 
         if (ctx.settings.debug_shadows_active) {
-            DebugShadowOverlay.draw(ctx.rhi, screen_w, screen_h);
+            DebugShadowOverlay.draw(ctx.rhi.ui(), ctx.rhi.shadow(), screen_w, screen_h, .{});
         }
     }
 

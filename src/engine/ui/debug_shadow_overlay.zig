@@ -1,27 +1,30 @@
 const std = @import("std");
 const rhi = @import("../graphics/rhi.zig");
-const RHI = rhi.RHI;
+const IUIContext = rhi.IUIContext;
+const IShadowContext = rhi.IShadowContext;
 
 pub const DebugShadowOverlay = struct {
-    pub fn draw(rhi_ctx: *const RHI, screen_width: f32, screen_height: f32) void {
-        const debug_size: f32 = 200.0;
-        const debug_spacing: f32 = 10.0;
+    pub const Config = struct {
+        size: f32 = 200.0,
+        spacing: f32 = 10.0,
+    };
 
-        rhi_ctx.begin2DPass(screen_width, screen_height);
-        defer rhi_ctx.end2DPass();
+    pub fn draw(ui: IUIContext, shadow: IShadowContext, screen_width: f32, screen_height: f32, config: Config) void {
+        ui.beginPass(screen_width, screen_height);
+        defer ui.endPass();
 
         for (0..rhi.SHADOW_CASCADE_COUNT) |i| {
-            const handle = rhi_ctx.getShadowMapHandle(@intCast(i));
+            const handle = shadow.getShadowMapHandle(@intCast(i));
             if (handle == 0) continue;
 
-            const x = debug_spacing + @as(f32, @floatFromInt(i)) * (debug_size + debug_spacing);
-            const y = debug_spacing;
+            const x = config.spacing + @as(f32, @floatFromInt(i)) * (config.size + config.spacing);
+            const y = config.spacing;
 
-            rhi_ctx.drawDepthTexture2D(handle, .{
+            ui.drawDepthTexture(handle, .{
                 .x = x,
                 .y = y,
-                .width = debug_size,
-                .height = debug_size,
+                .width = config.size,
+                .height = config.size,
             });
         }
     }
