@@ -2452,9 +2452,6 @@ fn deinit(ctx_ptr: *anyopaque) void {
         if (ctx.dummy_instance_buffer.buffer != null) c.vkDestroyBuffer(device, ctx.dummy_instance_buffer.buffer, null);
         if (ctx.dummy_instance_buffer.memory != null) c.vkFreeMemory(device, ctx.dummy_instance_buffer.memory, null);
 
-        if (ctx.ssao_kernel_ubo.buffer != null) c.vkDestroyBuffer(device, ctx.ssao_kernel_ubo.buffer, null);
-        if (ctx.ssao_kernel_ubo.memory != null) c.vkFreeMemory(device, ctx.ssao_kernel_ubo.memory, null);
-
         for (ctx.ui_vbos) |buf| {
             if (buf.buffer != null) c.vkDestroyBuffer(device, buf.buffer, null);
             if (buf.memory != null) c.vkFreeMemory(device, buf.memory, null);

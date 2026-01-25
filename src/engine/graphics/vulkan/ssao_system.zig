@@ -63,7 +63,7 @@ pub const SSAOSystem = struct {
     params: SSAOParams = undefined,
     sampler: c.VkSampler = null,
 
-    pub fn init(self: *SSAOSystem, device: *const VulkanDevice, allocator: Allocator, descriptor_pool: c.VkDescriptorPool, upload_cmd_pool: c.VkCommandPool, width: u32, height: u32, g_normal_view: c.VkImageView, g_depth_view: c.VkImageView) !void {
+    pub fn init(self: *SSAOSystem, device: *VulkanDevice, allocator: Allocator, descriptor_pool: c.VkDescriptorPool, upload_cmd_pool: c.VkCommandPool, width: u32, height: u32, g_normal_view: c.VkImageView, g_depth_view: c.VkImageView) !void {
         const vk = device.vk_device;
         const ao_format = c.VK_FORMAT_R8_UNORM;
 
@@ -137,7 +137,7 @@ pub const SSAOSystem = struct {
         try Utils.checkVk(c.vkCreateRenderPass(vk, &rp_info, null, &self.blur_render_pass));
     }
 
-    fn initImages(self: *SSAOSystem, device: *const VulkanDevice, width: u32, height: u32, ao_format: c.VkFormat) !void {
+    fn initImages(self: *SSAOSystem, device: *VulkanDevice, width: u32, height: u32, ao_format: c.VkFormat) !void {
         const vk = device.vk_device;
         var img_info = std.mem.zeroes(c.VkImageCreateInfo);
         img_info.sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -159,7 +159,7 @@ pub const SSAOSystem = struct {
         var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc_info.allocationSize = mem_reqs.size;
-        alloc_info.memoryTypeIndex = try Utils.findMemoryType(device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        alloc_info.memoryTypeIndex = try device.findMemoryType(mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         try Utils.checkVk(c.vkAllocateMemory(vk, &alloc_info, null, &self.memory));
         try Utils.checkVk(c.vkBindImageMemory(vk, self.image, self.memory, 0));
 
@@ -175,7 +175,7 @@ pub const SSAOSystem = struct {
         try Utils.checkVk(c.vkCreateImage(vk, &img_info, null, &self.blur_image));
         c.vkGetImageMemoryRequirements(vk, self.blur_image, &mem_reqs);
         alloc_info.allocationSize = mem_reqs.size;
-        alloc_info.memoryTypeIndex = try Utils.findMemoryType(device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        alloc_info.memoryTypeIndex = try device.findMemoryType(mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         try Utils.checkVk(c.vkAllocateMemory(vk, &alloc_info, null, &self.blur_memory));
         try Utils.checkVk(c.vkBindImageMemory(vk, self.blur_image, self.blur_memory, 0));
 
@@ -199,7 +199,7 @@ pub const SSAOSystem = struct {
         try Utils.checkVk(c.vkCreateFramebuffer(vk, &fb_info, null, &self.blur_framebuffer));
     }
 
-    fn initNoiseTexture(self: *SSAOSystem, device: *const VulkanDevice, upload_cmd_pool: c.VkCommandPool) !void {
+    fn initNoiseTexture(self: *SSAOSystem, device: *VulkanDevice, upload_cmd_pool: c.VkCommandPool) !void {
         const vk = device.vk_device;
         var rng = std.Random.DefaultPrng.init(12345);
         var noise_data: [NOISE_SIZE * NOISE_SIZE * 4]u8 = undefined;
@@ -231,7 +231,7 @@ pub const SSAOSystem = struct {
         var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
         alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc_info.allocationSize = mem_reqs.size;
-        alloc_info.memoryTypeIndex = try Utils.findMemoryType(device.physical_device, mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        alloc_info.memoryTypeIndex = try device.findMemoryType(mem_reqs.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         try Utils.checkVk(c.vkAllocateMemory(vk, &alloc_info, null, &self.noise_memory));
         try Utils.checkVk(c.vkBindImageMemory(vk, self.noise_image, self.noise_memory, 0));
 
@@ -305,7 +305,7 @@ pub const SSAOSystem = struct {
         c.vkFreeCommandBuffers(vk, upload_cmd_pool, 1, &cmd);
     }
 
-    fn initKernelUBO(self: *SSAOSystem, device: *const VulkanDevice) !void {
+    fn initKernelUBO(self: *SSAOSystem, device: *VulkanDevice) !void {
         self.kernel_ubo = try Utils.createVulkanBuffer(device, @sizeOf(SSAOParams), c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
         var rng = std.Random.DefaultPrng.init(67890);
