@@ -1574,8 +1574,35 @@ fn createSSAOResources(ctx: *VulkanContext) !void {
         ctx.ssao_system.sampler,
         extent.width,
         extent.height,
-        .r8_unorm,
+        .red,
     );
+
+    // Update main descriptor sets with SSAO map (Binding 10)
+    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+        var main_ssao_info = c.VkDescriptorImageInfo{
+            .sampler = ctx.ssao_system.sampler,
+            .imageView = ctx.ssao_system.blur_view,
+            .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        };
+        var main_ssao_write = std.mem.zeroes(c.VkWriteDescriptorSet);
+        main_ssao_write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        main_ssao_write.dstSet = ctx.descriptors.descriptor_sets[i];
+        main_ssao_write.dstBinding = 10;
+        main_ssao_write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        main_ssao_write.descriptorCount = 1;
+        main_ssao_write.pImageInfo = &main_ssao_info;
+        c.vkUpdateDescriptorSets(ctx.vulkan_device.vk_device, 1, &main_ssao_write, 0, null);
+
+        // Also update LOD descriptor sets
+        main_ssao_write.dstSet = ctx.descriptors.lod_descriptor_sets[i];
+        c.vkUpdateDescriptorSets(ctx.vulkan_device.vk_device, 1, &main_ssao_write, 0, null);
+    }
+
+    // 11. Transition SSAO images to SHADER_READ_ONLY_OPTIMAL
+    // This is needed because if SSAO is disabled, the pass is skipped,
+    // but the terrain shader still samples the (undefined) texture.
+    const ssao_images = [_]c.VkImage{ ctx.ssao_system.image, ctx.ssao_system.blur_image };
+    try transitionImagesToShaderRead(ctx, &ssao_images, false);
 }
 
 fn createMainFramebuffers(ctx: *VulkanContext) !void {
@@ -2384,7 +2411,7 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
         var list: [32]c.VkImage = undefined;
         var count: usize = 0;
         // Note: ctx.hdr_msaa_image is transient and not sampled, so it should not be transitioned to SHADER_READ_ONLY_OPTIMAL
-        const candidates = [_]c.VkImage{ ctx.hdr_image, ctx.g_normal_image, ctx.ssao_image, ctx.ssao_blur_image, ctx.ssao_noise_image, ctx.velocity_image };
+        const candidates = [_]c.VkImage{ ctx.hdr_image, ctx.g_normal_image, ctx.ssao_system.image, ctx.ssao_system.blur_image, ctx.ssao_system.noise_image, ctx.velocity_image };
         for (candidates) |img| {
             if (img != null) {
                 list[count] = img;
@@ -2565,7 +2592,7 @@ fn recreateSwapchainInternal(ctx: *VulkanContext) void {
         var list: [32]c.VkImage = undefined;
         var count: usize = 0;
         // Note: ctx.hdr_msaa_image is transient and not sampled, so it should not be transitioned to SHADER_READ_ONLY_OPTIMAL
-        const candidates = [_]c.VkImage{ ctx.hdr_image, ctx.g_normal_image, ctx.ssao_image, ctx.ssao_blur_image, ctx.ssao_noise_image, ctx.velocity_image };
+        const candidates = [_]c.VkImage{ ctx.hdr_image, ctx.g_normal_image, ctx.ssao_system.image, ctx.ssao_system.blur_image, ctx.ssao_system.noise_image, ctx.velocity_image };
         for (candidates) |img| {
             if (img != null) {
                 list[count] = img;

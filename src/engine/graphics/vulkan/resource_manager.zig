@@ -189,10 +189,12 @@ pub const ResourceManager = struct {
 
         var tex_it = self.textures.valueIterator();
         while (tex_it.next()) |tex| {
-            c.vkDestroyImageView(device, tex.view, null);
-            c.vkDestroyImage(device, tex.image, null);
-            c.vkFreeMemory(device, tex.memory, null);
-            c.vkDestroySampler(device, tex.sampler, null);
+            if (tex.memory != null) {
+                c.vkDestroyImageView(device, tex.view, null);
+                c.vkDestroyImage(device, tex.image, null);
+                c.vkFreeMemory(device, tex.memory, null);
+                c.vkDestroySampler(device, tex.sampler, null);
+            }
         }
         self.textures.deinit();
 
@@ -604,14 +606,36 @@ pub const ResourceManager = struct {
             return;
         };
         _ = self.textures.remove(handle);
-        self.image_deletion_queue[self.current_frame_index].append(self.allocator, .{
-            .image = tex.image,
-            .memory = tex.memory,
-            .view = tex.view,
-            .sampler = tex.sampler,
-        }) catch |err| {
-            std.log.err("Failed to queue texture deletion: {}", .{err});
-        };
+
+        // Only queue for deletion if we own the memory (not a registered native texture)
+        if (tex.memory != null) {
+            self.image_deletion_queue[self.current_frame_index].append(self.allocator, .{
+                .image = tex.image,
+                .memory = tex.memory,
+                .view = tex.view,
+                .sampler = tex.sampler,
+            }) catch |err| {
+                std.log.err("Failed to queue texture deletion: {}", .{err});
+            };
+        }
+    }
+
+    pub fn registerNativeTexture(self: *ResourceManager, image: c.VkImage, view: c.VkImageView, sampler: c.VkSampler, width: u32, height: u32, format: rhi.TextureFormat) rhi.RhiError!rhi.TextureHandle {
+        const handle = self.next_texture_handle;
+        self.next_texture_handle += 1;
+
+        try self.textures.put(handle, .{
+            .image = image,
+            .memory = null, // External ownership
+            .view = view,
+            .sampler = sampler,
+            .width = width,
+            .height = height,
+            .format = format,
+            .config = .{}, // Default config
+        });
+
+        return handle;
     }
 
     pub fn updateTexture(self: *ResourceManager, handle: rhi.TextureHandle, data: []const u8) rhi.RhiError!void {
