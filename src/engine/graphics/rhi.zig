@@ -103,6 +103,7 @@ pub const IShadowContext = struct {
         beginPass: *const fn (ptr: *anyopaque, cascade_index: u32, light_space_matrix: Mat4) void,
         endPass: *const fn (ptr: *anyopaque) void,
         updateUniforms: *const fn (ptr: *anyopaque, params: ShadowParams) void,
+        getShadowMapHandle: *const fn (ptr: *anyopaque, cascade_index: u32) TextureHandle,
     };
 
     pub fn beginPass(self: IShadowContext, cascade_index: u32, light_space_matrix: Mat4) void {
@@ -113,6 +114,9 @@ pub const IShadowContext = struct {
     }
     pub fn updateUniforms(self: IShadowContext, params: ShadowParams) void {
         self.vtable.updateUniforms(self.ptr, params);
+    }
+    pub fn getShadowMapHandle(self: IShadowContext, cascade_index: u32) TextureHandle {
+        return self.vtable.getShadowMapHandle(self.ptr, cascade_index);
     }
 };
 
@@ -125,6 +129,7 @@ pub const IUIContext = struct {
         endPass: *const fn (ptr: *anyopaque) void,
         drawRect: *const fn (ptr: *anyopaque, rect: Rect, color: Color) void,
         drawTexture: *const fn (ptr: *anyopaque, texture: TextureHandle, rect: Rect) void,
+        drawDepthTexture: *const fn (ptr: *anyopaque, texture: TextureHandle, rect: Rect) void,
         bindPipeline: *const fn (ptr: *anyopaque, textured: bool) void,
     };
 
@@ -139,6 +144,9 @@ pub const IUIContext = struct {
     }
     pub fn drawTexture(self: IUIContext, texture: TextureHandle, rect: Rect) void {
         self.vtable.drawTexture(self.ptr, texture, rect);
+    }
+    pub fn drawDepthTexture(self: IUIContext, texture: TextureHandle, rect: Rect) void {
+        self.vtable.drawDepthTexture(self.ptr, texture, rect);
     }
     pub fn bindPipeline(self: IUIContext, textured: bool) void {
         self.vtable.bindPipeline(self.ptr, textured);
@@ -285,10 +293,6 @@ pub const IRenderContext = struct {
         getNativeSwapchainExtent: *const fn (ptr: *anyopaque) [2]u32,
         /// Returns the native device handle (VkDevice).
         getNativeDevice: *const fn (ptr: *anyopaque) u64,
-
-        // Specific rendering passes/techniques
-        /// @deprecated TODO (#189): Relocate drawDebugShadowMap to a debug overlay system.
-        drawDebugShadowMap: *const fn (ptr: *anyopaque, cascade_index: usize, depth_map_handle: TextureHandle) void,
     };
 
     pub fn beginFrame(self: IRenderContext) void {
@@ -579,6 +583,13 @@ pub const RHI = struct {
     }
     pub fn getValidationErrorCount(self: RHI) u32 {
         return self.vtable.query.getValidationErrorCount(self.ptr);
+    }
+
+    pub fn getShadowMapHandle(self: RHI, cascade: u32) TextureHandle {
+        return self.vtable.shadow.getShadowMapHandle(self.ptr, cascade);
+    }
+    pub fn drawDepthTexture2D(self: RHI, handle: TextureHandle, rect: Rect) void {
+        self.vtable.ui.drawDepthTexture(self.ptr, handle, rect);
     }
 
     // Lifecycle

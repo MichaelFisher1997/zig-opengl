@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const rhi = @import("rhi.zig");
+const c = @import("../../c.zig").c;
 const Mat4 = @import("../math/mat4.zig").Mat4;
 const Vec3 = @import("../math/vec3.zig").Vec3;
 
@@ -8,6 +9,7 @@ const MockContext = struct {
     bind_shader_called: bool = false,
     bind_texture_called: bool = false,
     draw_called: bool = false,
+    draw_depth_texture_called: bool = false,
     sky_pipeline_requested: bool = false,
     cloud_pipeline_requested: bool = false,
 
@@ -144,6 +146,19 @@ const MockContext = struct {
         return std.mem.zeroes(rhi.GpuTimingResults);
     }
 
+    fn getShadowMapHandle(ptr: *anyopaque, cascade_index: u32) rhi.TextureHandle {
+        _ = ptr;
+        _ = cascade_index;
+        return 0;
+    }
+
+    fn drawDepthTexture(ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.Rect) void {
+        const self: *MockContext = @ptrCast(@alignCast(ptr));
+        _ = texture;
+        _ = rect;
+        self.draw_depth_texture_called = true;
+    }
+
     const MOCK_RENDER_VTABLE = rhi.IRenderContext.VTable{
         .beginFrame = undefined,
         .endFrame = undefined,
@@ -168,7 +183,6 @@ const MockContext = struct {
         .getNativeCommandBuffer = getNativeCommandBuffer,
         .getNativeSwapchainExtent = getNativeSwapchainExtent,
         .getNativeDevice = getNativeDevice,
-        .drawDebugShadowMap = undefined,
     };
 
     const MOCK_SSAO_VTABLE = rhi.ISSAOContext.VTable{
@@ -258,14 +272,30 @@ const MockContext = struct {
         .waitIdle = undefined,
     };
 
+    const MOCK_SHADOW_VTABLE = rhi.IShadowContext.VTable{
+        .beginPass = undefined,
+        .endPass = undefined,
+        .updateUniforms = undefined,
+        .getShadowMapHandle = getShadowMapHandle,
+    };
+
+    const MOCK_UI_VTABLE = rhi.IUIContext.VTable{
+        .beginPass = undefined,
+        .endPass = undefined,
+        .drawRect = undefined,
+        .drawTexture = undefined,
+        .drawDepthTexture = drawDepthTexture,
+        .bindPipeline = undefined,
+    };
+
     const MOCK_VULKAN_RHI_VTABLE = rhi.RHI.VTable{
         .init = undefined,
         .deinit = undefined,
         .resources = MOCK_RESOURCES_VTABLE,
         .render = MOCK_RENDER_VTABLE,
         .ssao = MOCK_SSAO_VTABLE,
-        .shadow = undefined,
-        .ui = undefined,
+        .shadow = MOCK_SHADOW_VTABLE,
+        .ui = MOCK_UI_VTABLE,
         .query = MOCK_QUERY_VTABLE,
         .timing = .{
             .beginPassTiming = beginPassTiming,
@@ -403,4 +433,47 @@ test "SSAOSystem params defaults" {
     try testing.expectEqual(@as(usize, 64), KERNEL_SIZE);
     try testing.expectEqual(@as(f32, 0.5), DEFAULT_RADIUS);
     try testing.expectEqual(@as(f32, 0.025), DEFAULT_BIAS);
+}
+
+test "ResourceManager.registerExternalTexture validation" {
+    const ResourceManager = @import("vulkan/resource_manager.zig").ResourceManager;
+    const VulkanDevice = @import("vulkan_device.zig").VulkanDevice;
+
+    // We don't need a real Vulkan device for this specific test as it only tests map insertion and validation logic
+    var dummy_device = VulkanDevice{
+        .allocator = testing.allocator,
+        .vk_device = null,
+        .queue = null,
+    };
+
+    var manager = ResourceManager{
+        .allocator = testing.allocator,
+        .vulkan_device = &dummy_device,
+        .buffers = std.AutoHashMap(rhi.BufferHandle, @import("vulkan/resource_manager.zig").VulkanBuffer).init(testing.allocator),
+        .next_buffer_handle = 1,
+        .textures = std.AutoHashMap(rhi.TextureHandle, @import("vulkan/resource_manager.zig").TextureResource).init(testing.allocator),
+        .next_texture_handle = 1,
+        .buffer_deletion_queue = undefined,
+        .image_deletion_queue = undefined,
+        .staging_buffers = undefined,
+        .transfer_command_pool = null,
+        .transfer_command_buffers = undefined,
+        .transfer_fence = null,
+    };
+    defer manager.textures.deinit();
+    defer manager.buffers.deinit();
+
+    const dummy_view: c.VkImageView = @ptrFromInt(0x1234);
+    const dummy_sampler: c.VkSampler = @ptrFromInt(0x5678);
+
+    // Test successful registration
+    const handle = try manager.registerExternalTexture(128, 128, .rgba, dummy_view, dummy_sampler);
+    try testing.expect(handle != 0);
+    try testing.expectEqual(@as(usize, 1), manager.textures.count());
+
+    // Test null view validation
+    try testing.expectError(error.InvalidImageView, manager.registerExternalTexture(128, 128, .rgba, null, dummy_sampler));
+
+    // Test null sampler validation
+    try testing.expectError(error.InvalidImageView, manager.registerExternalTexture(128, 128, .rgba, dummy_view, null));
 }
