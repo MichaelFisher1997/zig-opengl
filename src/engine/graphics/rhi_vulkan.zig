@@ -4832,12 +4832,20 @@ fn getNativeDevice(ctx_ptr: *anyopaque) u64 {
 
 fn computeSSAO(ctx_ptr: *anyopaque, proj: Mat4, inv_proj: Mat4) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
-    if (!ctx.frames.frame_in_progress) return;
-    ensureNoRenderPassActiveInternal(ctx);
-    const cmd = ctx.frames.command_buffers[ctx.frames.current_frame];
-    ctx.ssao_system.compute(ctx.vulkan_device.vk_device, cmd, ctx.frames.current_frame, ctx.swapchain.getExtent(), proj, inv_proj);
+    ctx.ssao_system.compute(
+        ctx.vulkan_device.vk_device,
+        ctx.frames.command_buffers[ctx.frames.current_frame],
+        ctx.frames.current_frame,
+        ctx.swapchain.getExtent(),
+        proj,
+        inv_proj,
+    );
+}
+
+fn drawDebugShadowMap(ctx_ptr: *anyopaque, cascade_index: usize, depth_map_handle: rhi.TextureHandle) void {
+    _ = ctx_ptr;
+    _ = cascade_index;
+    _ = depth_map_handle;
 }
 
 const VULKAN_SSAO_VTABLE = rhi.ISSAOContext.VTable{
@@ -4923,6 +4931,8 @@ const VULKAN_RHI_VTABLE = rhi.RHI.VTable{
         .getNativeSwapchainExtent = getNativeSwapchainExtent,
         .getNativeDevice = getNativeDevice,
         .setClearColor = setClearColor,
+        .computeSSAO = computeSSAO,
+        .drawDebugShadowMap = drawDebugShadowMap,
     },
     .ssao = VULKAN_SSAO_VTABLE,
     .shadow = VULKAN_SHADOW_CONTEXT_VTABLE,

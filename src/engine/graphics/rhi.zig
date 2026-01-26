@@ -288,6 +288,12 @@ pub const IRenderContext = struct {
         // High-level context state
         setClearColor: *const fn (ptr: *anyopaque, color: Vec3) void,
 
+        // Specific rendering passes/techniques (Tracked for refactoring)
+        // TODO (#225): Relocate computeSSAO to dedicated SSAOSystem
+        computeSSAO: *const fn (ptr: *anyopaque, proj: Mat4, inv_proj: Mat4) void,
+        /// @deprecated TODO (#226): Relocate drawDebugShadowMap to a debug overlay system.
+        drawDebugShadowMap: *const fn (ptr: *anyopaque, cascade_index: usize, depth_map_handle: TextureHandle) void,
+
         // Resource Accessors for Systems
         // Note: All accessors return backend-specific handles (e.g., Vulkan handles as u64).
         // If a resource is not initialized or unavailable, the accessor returns 0.
