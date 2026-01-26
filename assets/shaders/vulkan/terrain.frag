@@ -156,6 +156,7 @@ float PCF_Filtered(vec2 uv, float zReceiver, float filterRadius, int layer) {
 const float PI = 3.14159265359;
 const float MAX_ENV_MIP_LEVEL = 8.0; // log2(256), corresponding to the mip chain depth of a 256x256 environment map.
 const float SUN_RADIANCE_TO_IRRADIANCE = 4.0; // Conversion factor to treat sun radiance as irradiance. This approx PI factor compensates for the 1/PI normalization in the Lambertian diffuse term (albedo/PI).
+const float SUN_VOLUMETRIC_INTENSITY = 3.0;   // Radiance boost for LOD/Volumetric fallback modes (replacing SUN_LOD_MULTIPLIER)
 const float LEGACY_LIGHTING_INTENSITY = 2.5;  // Empirical radiance boost factor for legacy (PBR disabled) blocks.
 const float LOD_LIGHTING_INTENSITY = 1.5;     // Empirical radiance boost factor for distant LOD terrain.
 const float NON_PBR_ROUGHNESS = 0.5;          // Default perceptual roughness for standard (non-PBR) block textures.
@@ -164,21 +165,24 @@ const float VOLUMETRIC_DENSITY_FACTOR = 0.1;  // Normalization factor for raymar
 const float DIELECTRIC_F0 = 0.04;             // Standard Fresnel reflectance for non-metallic surfaces.
 const float COOK_TORRANCE_DENOM_FACTOR = 4.0; // Denominator factor for Cook-Torrance specular BRDF.
 
-float computeShadowCascades(vec3 fragPosWorld, float nDotL, float viewDepth, int layer) {
-    float shadow = computeShadowFactor(fragPosWorld, nDotL, layer);
+float computeShadowFactor(vec3 fragPosWorld, float nDotL, int layer) {
+    vec4 fragPosLightSpace = shadows.light_space_matrices[layer] * vec4(fragPosWorld, 1.0);
+    vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+
+    projCoords.xy = projCoords.xy * 0.5 + 0.5;
     
-    // Cascade blending transition
-    if (layer < 2) {
-        float nextSplit = shadows.cascade_splits[layer];
-        float blendThreshold = nextSplit * 0.8;
-        if (viewDepth > blendThreshold) {
-            float blend = (viewDepth - blendThreshold) / (nextSplit - blendThreshold);
-            float nextShadow = computeShadowFactor(fragPosWorld, nDotL, layer + 1);
-            shadow = mix(shadow, nextShadow, clamp(blend, 0.0, 1.0));
+    if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0 ||
+        projCoords.z > 1.0 || projCoords.z < 0.0) return 0.0;
+
+    float currentDepth = projCoords.z;
+    float bias = max(0.001 * (1.0 - nDotL), 0.0005);
+    if (vTileID < 0) bias = 0.005;
+
+    if (global.cloud_params.y < 5.0) {
+        if (global.cloud_params.y < 2.0) {
+            return 1.0 - texture(uShadowMaps, vec4(projCoords.xy, float(layer), currentDepth + bias));
         }
-    }
-    return shadow;
-}
         float shadow = 0.0;
         float radius = 0.001;
         shadow += texture(uShadowMaps, vec4(projCoords.xy + vec2(-radius, -radius), float(layer), currentDepth + bias));
@@ -198,9 +202,10 @@ float computeShadowCascades(vec3 fragPosWorld, float nDotL, float viewDepth, int
     return 1.0 - PCF_Filtered(projCoords.xy, currentDepth, filterRadius, layer);
 }
 
-float computeCascadeBlending(vec3 fragPosWorld, float nDotL, float viewDepth, int layer) {
+float computeShadowCascades(vec3 fragPosWorld, float nDotL, float viewDepth, int layer) {
     float shadow = computeShadowFactor(fragPosWorld, nDotL, layer);
     
+    // Cascade blending transition
     if (layer < 2) {
         float nextSplit = shadows.cascade_splits[layer];
         float blendThreshold = nextSplit * 0.8;
@@ -322,7 +327,7 @@ vec3 computeNonPBR(vec3 albedo, vec3 N, float nDotL, float totalShadow, float sk
 vec3 computeLOD(vec3 albedo, float nDotL, float totalShadow, float skyLightVal, vec3 blockLight, float ao, float ssao) {
     float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
     vec3 ambientColor = albedo * (max(vec3(skyLightVal * 0.8), vec3(global.lighting.x * 0.4)) + blockLight) * ao * ssao * shadowAmbientFactor;
-    vec3 sunColor = global.sun_color.rgb * global.params.w * SUN_LOD_MULTIPLIER / PI;
+    vec3 sunColor = global.sun_color.rgb * global.params.w * SUN_VOLUMETRIC_INTENSITY / PI;
     vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
     return ambientColor + directColor;
 }
@@ -347,7 +352,7 @@ vec4 computeVolumetric(vec3 rayStart, vec3 rayEnd, float dither) {
     float cosTheta = dot(rayDir, normalize(global.sun_dir.xyz));
     float phase = henyeyGreensteinVol(global.volumetric_params.w, cosTheta);
     
-    vec3 sunColor = global.sun_color.rgb * global.params.w * SUN_LOD_MULTIPLIER / PI;
+    vec3 sunColor = global.sun_color.rgb * global.params.w * SUN_VOLUMETRIC_INTENSITY / PI;
     vec3 accumulatedScattering = vec3(0.0);
     float transmittance = 1.0;
     float density = global.volumetric_params.y * VOLUMETRIC_DENSITY_FACTOR;
