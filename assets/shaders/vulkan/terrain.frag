@@ -199,9 +199,9 @@ float calculateShadow(vec3 fragPosWorld, float nDotL, int layer) {
 
 // PBR functions
 const float PI = 3.14159265359;
-const float MAX_ENV_MIP_LEVEL = 8.0; // Max mip level for environment map
-const float SUN_PBR_MULTIPLIER = 4.0; // Multiplier for sun radiance in PBR mode
-const float SUN_LOD_MULTIPLIER = 3.0; // Multiplier for sun radiance in LOD/Volumetric mode
+const float MAX_ENV_MIP_LEVEL = 8.0; // Max mip level for environment map, tuned for 256x256 maps
+const float SUN_PBR_MULTIPLIER = 4.0; // Multiplier to treat sun radiance as irradiance for energy conservation
+const float SUN_LOD_MULTIPLIER = 3.0; // Radiance boost for LOD/Volumetric modes
 const float NON_PBR_ROUGHNESS = 0.5;  // Default roughness for non-PBR materials
 
 // Henyey-Greenstein Phase Function for Mie Scattering (Phase 4)
@@ -283,7 +283,7 @@ float DistributionGGX(vec3 N, vec3 H, float roughness) {
     float denom = (NdotH2 * (a2 - 1.0) + 1.0);
     denom = PI * denom * denom;
     
-    return nom / max(denom, 0.0001);
+    return nom / max(denom, 0.001);
 }
 
 // Geometry function (Schlick-GGX)
@@ -294,7 +294,7 @@ float GeometrySchlickGGX(float NdotV, float roughness) {
     float nom = NdotV;
     float denom = NdotV * (1.0 - k) + k;
     
-    return nom / max(denom, 0.0001);
+    return nom / max(denom, 0.001);
 }
 
 float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
@@ -324,6 +324,12 @@ vec2 SampleSphericalMap(vec3 v) {
     return uv;
 }
 
+vec3 sampleIBLAmbient(vec3 N, float roughness) {
+    float envMipLevel = roughness * MAX_ENV_MIP_LEVEL;
+    vec2 envUV = SampleSphericalMap(normalize(N));
+    return textureLod(uEnvMap, envUV, envMipLevel).rgb;
+}
+
 vec3 calculatePBR(vec3 albedo, vec3 N, vec3 V, vec3 L, float roughness, float totalShadow, float skyLight, vec3 blockLight, float ao, float ssao) {
     vec3 H = normalize(V + L);
     vec3 F0 = vec3(0.04);
@@ -335,7 +341,7 @@ vec3 calculatePBR(vec3 albedo, vec3 N, vec3 V, vec3 L, float roughness, float to
     vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
     
     vec3 numerator = NDF * G * F;
-    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.001;
     vec3 specular = numerator / denominator;
     
     vec3 kS = F;
@@ -346,9 +352,7 @@ vec3 calculatePBR(vec3 albedo, vec3 N, vec3 V, vec3 L, float roughness, float to
     vec3 Lo = (kD * albedo / PI + specular) * sunColor * NdotL_final * (1.0 - totalShadow);
     
     // Ambient lighting (IBL)
-    float envMipLevel = roughness * MAX_ENV_MIP_LEVEL;
-    vec2 envUV = SampleSphericalMap(normalize(N));
-    vec3 envColor = textureLod(uEnvMap, envUV, envMipLevel).rgb;
+    vec3 envColor = sampleIBLAmbient(N, roughness);
     
     float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
     vec3 ambientColor = albedo * (max(min(envColor, vec3(3.0)) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao * shadowAmbientFactor;
@@ -358,9 +362,7 @@ vec3 calculatePBR(vec3 albedo, vec3 N, vec3 V, vec3 L, float roughness, float to
 
 vec3 calculateNonPBR(vec3 albedo, vec3 N, float nDotL, float totalShadow, float skyLight, vec3 blockLight, float ao, float ssao) {
     // Sample IBL for ambient (even for non-PBR blocks)
-    float envMipLevel = NON_PBR_ROUGHNESS * MAX_ENV_MIP_LEVEL;
-    vec2 envUV = SampleSphericalMap(normalize(N));
-    vec3 envColor = textureLod(uEnvMap, envUV, envMipLevel).rgb;
+    vec3 envColor = sampleIBLAmbient(N, NON_PBR_ROUGHNESS);
     
     // Shadows reduce ambient for more visible effect
     float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
@@ -479,6 +481,7 @@ void main() {
             if (hasPBR) {
                 vec3 V = normalize(global.cam_pos.xyz - vFragPosWorld);
                 vec3 L = normalize(global.sun_dir.xyz);
+                // Note: vMaskRadius is used for LOD dithering in main() and is not needed for lighting
                 color = calculatePBR(albedo, N, V, L, clamp(roughness, 0.05, 1.0), totalShadow, vSkyLight * global.lighting.x, vBlockLight, ao, ssao);
             } else {
                 color = calculateNonPBR(albedo, N, nDotL, totalShadow, vSkyLight * global.lighting.x, vBlockLight, ao, ssao);
@@ -497,7 +500,8 @@ void main() {
     } else {
         if (vTileID < 0) {
             // Special LOD lighting
-            color = calculateLOD(vColor, nDotL, totalShadow, vSkyLight * global.lighting.x, vBlockLight, ao, ssao);
+            vec3 albedo = vColor;
+            color = calculateLOD(albedo, nDotL, totalShadow, vSkyLight * global.lighting.x, vBlockLight, ao, ssao);
         } else {
             float directLight = nDotL * global.params.w * (1.0 - totalShadow) * 1.5;
             float skyLight = vSkyLight * (global.lighting.x + directLight * 1.0);
