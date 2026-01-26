@@ -1059,7 +1059,7 @@ fn createShadowResources(ctx: *VulkanContext) !void {
     shadow_rasterizer.sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     shadow_rasterizer.lineWidth = 1.0;
     shadow_rasterizer.cullMode = c.VK_CULL_MODE_NONE;
-    shadow_rasterizer.frontFace = c.VK_FRONT_FACE_CLOCKWISE;
+    shadow_rasterizer.frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE;
     shadow_rasterizer.depthBiasEnable = c.VK_TRUE;
 
     var shadow_multisampling = std.mem.zeroes(c.VkPipelineMultisampleStateCreateInfo);
