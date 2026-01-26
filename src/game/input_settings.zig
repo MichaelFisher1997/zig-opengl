@@ -20,7 +20,8 @@ pub const InputSettings = struct {
     pub const MAX_SETTINGS_SIZE = 1024 * 1024;
     /// Current version of the settings schema.
     /// Version 2 introduced GameAction enum-based mapping.
-    pub const CURRENT_VERSION = 2;
+    /// Version 3 introduced human-readable object-based mapping with action names.
+    pub const CURRENT_VERSION = 3;
 
     /// Initialize a new InputSettings instance with default bindings.
     pub fn init(allocator: std.mem.Allocator) InputSettings {
@@ -140,37 +141,65 @@ pub const InputSettings = struct {
         var aw = std.Io.Writer.Allocating.fromArrayList(self.allocator, &buffer);
         defer aw.deinit();
 
-        try std.json.Stringify.value(.{
-            .version = CURRENT_VERSION,
-            .bindings = self.input_mapper.bindings,
-        }, .{ .whitespace = .indent_2 }, &aw.writer);
+        var s: std.json.Stringify = .{
+            .writer = &aw.writer,
+            .options = .{ .whitespace = .indent_2 },
+        };
 
-        return aw.toOwnedSlice();
+        try s.beginObject();
+        try s.objectField("version");
+        try s.write(CURRENT_VERSION);
+
+        try s.objectField("bindings");
+        try s.beginObject();
+
+        inline for (std.meta.fields(GameAction)) |field| {
+            try s.objectField(field.name);
+            const action: GameAction = @enumFromInt(field.value);
+            try s.write(self.input_mapper.bindings[@intFromEnum(action)]);
+        }
+
+        try s.endObject(); // end bindings
+        try s.endObject(); // end root
+
+        return try aw.toOwnedSlice();
     }
 
     fn parseJson(self: *InputSettings, data: []const u8) !void {
-        const Schema = struct {
-            version: u32,
-            bindings: []ActionBinding,
-        };
+        var parsed_value = try std.json.parseFromSlice(std.json.Value, self.allocator, data, .{});
+        defer parsed_value.deinit();
 
-        var parsed = try std.json.parseFromSlice(Schema, self.allocator, data, .{
-            .ignore_unknown_fields = true,
-        });
-        defer parsed.deinit();
+        const root = parsed_value.value;
+        if (root != .object) return error.InvalidFormat;
 
-        // Basic version migration/check
-        if (parsed.value.version < 2) {
-            log.log.info("Migrating input settings from version {} to {}", .{ parsed.value.version, CURRENT_VERSION });
-            // Version 1 might have fewer bindings. We'll only copy what we have.
+        const version: i64 = if (root.object.get("version")) |v| (if (v == .integer) v.integer else 1) else 1;
+        const bindings_val = root.object.get("bindings") orelse return error.MissingBindings;
+
+        if (version < 3) {
+            // Legacy array format
+            if (bindings_val != .array) return error.InvalidBindingsFormat;
+            const array = bindings_val.array;
+            log.log.info("Migrating input settings from version {} (array) to {} (object)", .{ version, CURRENT_VERSION });
+
+            const count = @min(array.items.len, GameAction.count);
+            for (array.items[0..count], 0..) |item, i| {
+                const parsed_binding = try std.json.parseFromValue(ActionBinding, self.allocator, item, .{ .ignore_unknown_fields = true });
+                defer parsed_binding.deinit();
+                self.input_mapper.bindings[i] = parsed_binding.value;
+            }
+        } else {
+            // New object format
+            if (bindings_val != .object) return error.InvalidBindingsFormat;
+
+            inline for (std.meta.fields(GameAction)) |field| {
+                if (bindings_val.object.get(field.name)) |val| {
+                    const action: GameAction = @enumFromInt(field.value);
+                    const parsed_binding = try std.json.parseFromValue(ActionBinding, self.allocator, val, .{ .ignore_unknown_fields = true });
+                    defer parsed_binding.deinit();
+                    self.input_mapper.bindings[@intFromEnum(action)] = parsed_binding.value;
+                }
+            }
         }
-
-        if (parsed.value.bindings.len != GameAction.count) {
-            log.log.warn("Settings file has {} bindings, but engine expected {}. Only matching bindings will be applied.", .{ parsed.value.bindings.len, GameAction.count });
-        }
-
-        const count = @min(parsed.value.bindings.len, GameAction.count);
-        @memcpy(self.input_mapper.bindings[0..count], parsed.value.bindings[0..count]);
     }
 };
 
@@ -210,5 +239,32 @@ test "InputSettings version migration" {
     // Verify move_forward (index 0) was updated to W (119)
     try std.testing.expect(settings.input_mapper.getBinding(.move_forward).primary.key == .w);
     // Other bindings should still be default
+    try std.testing.expect(settings.input_mapper.getBinding(.jump).primary.key == .space);
+}
+
+test "InputSettings V3 object format" {
+    const allocator = std.testing.allocator;
+
+    const v3_json =
+        \\{
+        \\  "version": 3,
+        \\  "bindings": {
+        \\    "move_forward": { "primary": { "key": 119 }, "alternate": { "none": {} } },
+        \\    "jump": { "primary": { "key": 32 }, "alternate": { "none": {} } }
+        \\  }
+        \\}
+    ;
+
+    var settings = InputSettings.init(allocator);
+    defer settings.deinit();
+
+    // Reset to defaults first
+    settings.input_mapper.resetToDefaults();
+
+    // Parse V3
+    try settings.parseJson(v3_json);
+
+    // Verify bindings
+    try std.testing.expect(settings.input_mapper.getBinding(.move_forward).primary.key == .w);
     try std.testing.expect(settings.input_mapper.getBinding(.jump).primary.key == .space);
 }
