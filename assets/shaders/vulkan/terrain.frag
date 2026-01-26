@@ -154,12 +154,13 @@ float PCF_Filtered(vec2 uv, float zReceiver, float filterRadius, int layer) {
 
 // PBR functions
 const float PI = 3.14159265359;
-const float MAX_ENV_MIP_LEVEL = 8.0; // Max mip level for environment map, specifically tuned for 256x256 resolution
-const float SUN_RADIANCE_TO_IRRADIANCE = 4.0; // Normalizes sun radiance to irradiance (radiance * PI). Accounting for PI normalization in BRDF.
-const float SUN_LOD_MULTIPLIER = 3.0; // Empirical boost for fallback modes
-const float NON_PBR_ROUGHNESS = 0.5;  // Default roughness for standard materials
-const float IBL_CLAMP_VALUE = 3.0;    // Threshold to prevent HDR over-exposure
-const float VOLUMETRIC_DENSITY_SCALE = 0.1; // Scaling factor for volumetric fog
+const float MAX_ENV_MIP_LEVEL = 8.0; // log2(256), the maximum mip level for the 256x256 environment maps used for IBL
+const float SUN_RADIANCE_TO_IRRADIANCE = 4.0; // Normalizes radiance to irradiance (approx PI). Accounts for the 1/PI factor in the BRDF diffuse term (albedo/PI), plus an empirical boost for atmospheric scattering.
+const float LEGACY_LIGHTING_INTENSITY = 2.5;  // Empirical radiance boost for legacy lighting path
+const float LOD_LIGHTING_INTENSITY = 1.5;     // Empirical radiance boost for LOD fallback path
+const float NON_PBR_ROUGHNESS = 0.5;          // Default roughness for non-PBR materials to ensure consistent IBL look
+const vec3 IBL_CLAMP = vec3(3.0);             // High-dynamic range clamping threshold for IBL ambient to prevent over-exposure
+const float VOLUMETRIC_DENSITY_FACTOR = 0.1;  // Scaling factor to bring volumetric fog density into world-space units
 
 float computeShadowFactor(vec3 fragPosWorld, float nDotL, int layer) {
     vec4 fragPosLightSpace = shadows.light_space_matrices[layer] * vec4(fragPosWorld, 1.0);
@@ -303,7 +304,7 @@ vec3 computePBR(vec3 albedo, vec3 N, vec3 V, vec3 L, float roughness, float tota
     
     vec3 envColor = computeIBLAmbient(N, roughness);
     float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
-    vec3 ambientColor = albedo * (max(min(envColor, vec3(IBL_CLAMP_VALUE)) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao * shadowAmbientFactor;
+    vec3 ambientColor = albedo * (max(min(envColor, IBL_CLAMP) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao * shadowAmbientFactor;
     
     return ambientColor + Lo;
 }
@@ -311,7 +312,7 @@ vec3 computePBR(vec3 albedo, vec3 N, vec3 V, vec3 L, float roughness, float tota
 vec3 computeNonPBR(vec3 albedo, vec3 N, float nDotL, float totalShadow, float skyLight, vec3 blockLight, float ao, float ssao) {
     vec3 envColor = computeIBLAmbient(N, NON_PBR_ROUGHNESS);
     float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
-    vec3 ambientColor = albedo * (max(min(envColor, vec3(IBL_CLAMP_VALUE)) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao * shadowAmbientFactor;
+    vec3 ambientColor = albedo * (max(min(envColor, IBL_CLAMP) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao * shadowAmbientFactor;
     
     vec3 sunColor = global.sun_color.rgb * global.params.w * SUN_RADIANCE_TO_IRRADIANCE / PI;
     vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
@@ -350,7 +351,7 @@ vec4 computeVolumetric(vec3 rayStart, vec3 rayEnd, float dither) {
     vec3 sunColor = global.sun_color.rgb * global.params.w * SUN_LOD_MULTIPLIER / PI;
     vec3 accumulatedScattering = vec3(0.0);
     float transmittance = 1.0;
-    float density = global.volumetric_params.y * VOLUMETRIC_DENSITY_SCALE;
+    float density = global.volumetric_params.y * VOLUMETRIC_DENSITY_FACTOR;
     
     for (int i = 0; i < steps; i++) {
         float d = (float(i) + dither) * stepSize;
@@ -418,13 +419,13 @@ void main() {
                 color = computeNonPBR(albedo, N, nDotL, totalShadow, vSkyLight * global.lighting.x, vBlockLight, ao, ssao);
             }
         } else {
-            color = computeLegacyDirect(albedo, nDotL, totalShadow, vSkyLight, vBlockLight, 2.5) * ao * ssao;
+            color = computeLegacyDirect(albedo, nDotL, totalShadow, vSkyLight, vBlockLight, LEGACY_LIGHTING_INTENSITY) * ao * ssao;
         }
     } else {
         if (vTileID < 0) {
             color = computeLOD(vColor, nDotL, totalShadow, vSkyLight * global.lighting.x, vBlockLight, ao, ssao);
         } else {
-            color = computeLegacyDirect(vColor, nDotL, totalShadow, vSkyLight, vBlockLight, 1.5) * ao * ssao;
+            color = computeLegacyDirect(vColor, nDotL, totalShadow, vSkyLight, vBlockLight, LOD_LIGHTING_INTENSITY) * ao * ssao;
         }
     }
 
