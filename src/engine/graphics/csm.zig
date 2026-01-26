@@ -68,10 +68,10 @@ pub fn computeCascades(resolution: u32, camera_fov: f32, aspect: f32, near: f32,
         const inv_cam_view = cam_view.inverse();
         const center_world = inv_cam_view.transformPoint(center_view);
 
-        // 3. Build Light Rotation Matrix (Looking in -sun direction)
+        // 3. Build Light Rotation Matrix (Looking in sun direction - AT THE SCENE)
         var up = Vec3.init(0, 1, 0);
         if (@abs(sun_dir.y) > 0.99) up = Vec3.init(0, 0, 1);
-        const light_rot = Mat4.lookAt(Vec3.zero, sun_dir.scale(-1.0), up);
+        const light_rot = Mat4.lookAt(Vec3.zero, sun_dir, up);
 
         // 4. Transform center to Light Space
         const center_ls = light_rot.transformPoint(center_world);
@@ -104,8 +104,9 @@ pub fn computeCascades(resolution: u32, camera_fov: f32, aspect: f32, near: f32,
         light_ortho.data[3][1] = -(maxY + minY) / (maxY - minY);
 
         if (z_range_01) {
-            const A = 1.0 / (maxZ - minZ);
-            const B = -A * minZ;
+            // Proper Reverse-Z: map minZ (near) to 1.0 and maxZ (far) to 0.0
+            const A = -1.0 / (maxZ - minZ);
+            const B = 1.0 - A * minZ;
             light_ortho.data[2][2] = A;
             light_ortho.data[3][2] = B;
         } else {
