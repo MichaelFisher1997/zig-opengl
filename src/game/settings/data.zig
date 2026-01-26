@@ -7,9 +7,9 @@ pub const ShadowQuality = struct {
 
 pub const SHADOW_QUALITIES = [_]ShadowQuality{
     .{ .resolution = 1024, .label = "LOW" },
-    .{ .resolution = 2048, .label = "MEDIUM" },
-    .{ .resolution = 4096, .label = "HIGH" },
-    .{ .resolution = 8192, .label = "ULTRA" },
+    .{ .resolution = 1536, .label = "MEDIUM" },
+    .{ .resolution = 2048, .label = "HIGH" },
+    .{ .resolution = 4096, .label = "ULTRA" },
 };
 
 pub const Resolution = struct {
@@ -35,6 +35,7 @@ pub const Settings = struct {
     fov: f32 = 45.0,
     textures_enabled: bool = true,
     wireframe_enabled: bool = false,
+    debug_shadows_active: bool = false, // Reverted to false for normal gameplay
     shadow_quality: u32 = 2, // 0=Low, 1=Medium, 2=High, 3=Ultra
     shadow_distance: f32 = 250.0,
     anisotropic_filtering: u8 = 16,
@@ -65,6 +66,13 @@ pub const Settings = struct {
     volumetric_steps: u32 = 16, // Raymarching steps
     volumetric_scattering: f32 = 0.8, // Mie scattering anisotropy (G)
     ssao_enabled: bool = true,
+
+    // FXAA Settings (Phase 3)
+    fxaa_enabled: bool = true,
+
+    // Bloom Settings (Phase 3)
+    bloom_enabled: bool = true,
+    bloom_intensity: f32 = 0.5,
 
     // Texture Settings
     max_texture_resolution: u32 = 512, // 16, 32, 64, 128, 256, 512
@@ -163,6 +171,20 @@ pub const Settings = struct {
         pub const ssao_enabled = SettingMetadata{
             .label = "SSAO",
             .kind = .toggle,
+        };
+        pub const fxaa_enabled = SettingMetadata{
+            .label = "FXAA",
+            .description = "Fast Approximate Anti-Aliasing",
+            .kind = .toggle,
+        };
+        pub const bloom_enabled = SettingMetadata{
+            .label = "BLOOM",
+            .description = "HDR glow effect",
+            .kind = .toggle,
+        };
+        pub const bloom_intensity = SettingMetadata{
+            .label = "BLOOM INTENSITY",
+            .kind = .{ .slider = .{ .min = 0.0, .max = 2.0, .step = 0.1 } },
         };
         pub const volumetric_density = SettingMetadata{
             .label = "FOG DENSITY",

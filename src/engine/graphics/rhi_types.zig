@@ -15,6 +15,7 @@ pub const RhiError = error{
     FeatureNotPresent,
     TooManyObjects,
     FormatNotSupported,
+    InvalidImageView,
     FragmentedPool,
     NoMatchingMemoryType,
     ResourceNotReady,
@@ -224,5 +225,33 @@ pub const Rect = struct {
     height: f32,
     pub fn contains(self: Rect, px: f32, py: f32) bool {
         return px >= self.x and px <= self.x + self.width and py >= self.y and py <= self.y + self.height;
+    }
+};
+
+pub const GpuTimingResults = struct {
+    shadow_pass_ms: [SHADOW_CASCADE_COUNT]f32,
+    g_pass_ms: f32,
+    ssao_pass_ms: f32,
+    sky_pass_ms: f32,
+    opaque_pass_ms: f32,
+    cloud_pass_ms: f32,
+    main_pass_ms: f32, // Overall main pass time (sum of sky, opaque, clouds)
+    bloom_pass_ms: f32,
+    fxaa_pass_ms: f32,
+    post_process_pass_ms: f32,
+    total_gpu_ms: f32,
+
+    pub fn validate(self: GpuTimingResults) void {
+        const expected_main = self.sky_pass_ms + self.opaque_pass_ms + self.cloud_pass_ms;
+        const epsilon = 0.01;
+        if (@abs(self.main_pass_ms - expected_main) > epsilon) {
+            std.debug.print("Timing Drift Warning: Main Pass {d:.3}ms != Sum {d:.3}ms (Sky {d:.3} + Opaque {d:.3} + Cloud {d:.3})\n", .{
+                self.main_pass_ms,
+                expected_main,
+                self.sky_pass_ms,
+                self.opaque_pass_ms,
+                self.cloud_pass_ms,
+            });
+        }
     }
 };

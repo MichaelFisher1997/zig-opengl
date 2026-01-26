@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("../c.zig").c;
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 
 const log = @import("../engine/core/log.zig");
 const WindowManager = @import("../engine/core/window.zig").WindowManager;
@@ -8,6 +9,7 @@ const Input = @import("../engine/input/input.zig").Input;
 const Time = @import("../engine/core/time.zig").Time;
 const UISystem = @import("../engine/ui/ui_system.zig").UISystem;
 const Vec3 = @import("../engine/math/vec3.zig").Vec3;
+const Mat4 = @import("../engine/math/mat4.zig").Mat4;
 const InputMapper = @import("input_mapper.zig").InputMapper;
 const rhi_pkg = @import("../engine/graphics/rhi.zig");
 const RHI = rhi_pkg.RHI;
@@ -20,6 +22,7 @@ const AtmosphereSystem = @import("../engine/graphics/atmosphere_system.zig").Atm
 const MaterialSystem = @import("../engine/graphics/material_system.zig").MaterialSystem;
 const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").ResourcePackManager;
 const AudioSystem = @import("../engine/audio/system.zig").AudioSystem;
+const TimingOverlay = @import("../engine/ui/timing_overlay.zig").TimingOverlay;
 
 const settings_pkg = @import("settings.zig");
 const Settings = settings_pkg.Settings;
@@ -50,7 +53,10 @@ pub const App = struct {
     sky_pass: render_graph_pkg.SkyPass,
     opaque_pass: render_graph_pkg.OpaquePass,
     cloud_pass: render_graph_pkg.CloudPass,
+    entity_pass: render_graph_pkg.EntityPass,
+    bloom_pass: render_graph_pkg.BloomPass,
     post_process_pass: render_graph_pkg.PostProcessPass,
+    fxaa_pass: render_graph_pkg.FXAAPass,
 
     settings: Settings,
     input: Input,
@@ -58,6 +64,7 @@ pub const App = struct {
     time: Time,
 
     ui: ?UISystem,
+    timing_overlay: TimingOverlay,
 
     screen_manager: ScreenManager,
     safe_render_mode: bool,
@@ -236,12 +243,16 @@ pub const App = struct {
             .sky_pass = .{},
             .opaque_pass = .{},
             .cloud_pass = .{},
+            .entity_pass = .{},
+            .bloom_pass = .{ .enabled = true },
             .post_process_pass = .{},
+            .fxaa_pass = .{ .enabled = true },
             .settings = settings,
             .input = input,
             .input_mapper = input_mapper,
             .time = time,
             .ui = ui,
+            .timing_overlay = .{ .enabled = build_options.smoke_test },
             .screen_manager = ScreenManager.init(allocator),
             .safe_render_mode = safe_render_mode,
             .skip_world_update = skip_world_update,
@@ -260,6 +271,18 @@ pub const App = struct {
         app.material_system = try MaterialSystem.init(allocator, rhi, &app.atlas);
         errdefer app.material_system.deinit();
 
+        // Sync FXAA and Bloom settings to RHI after initialization
+        app.rhi.setFXAA(settings.fxaa_enabled);
+        app.rhi.setBloom(settings.bloom_enabled);
+        app.rhi.setBloomIntensity(settings.bloom_intensity);
+
+        // Apply all RHI settings (VSync, Wireframe, Textures, Debug Shadows, etc.)
+        settings_pkg.apply_logic.applyToRHI(&settings, &app.rhi);
+
+        if (build_options.smoke_test) {
+            app.rhi.timing().setTimingEnabled(true);
+        }
+
         // Build RenderGraph (OCP: We can easily modify this list based on quality)
         if (!safe_render_mode) {
             try app.render_graph.addPass(app.shadow_passes[0].pass());
@@ -270,13 +293,15 @@ pub const App = struct {
             try app.render_graph.addPass(app.sky_pass.pass());
             try app.render_graph.addPass(app.opaque_pass.pass());
             try app.render_graph.addPass(app.cloud_pass.pass());
+            try app.render_graph.addPass(app.entity_pass.pass());
+            try app.render_graph.addPass(app.bloom_pass.pass());
             try app.render_graph.addPass(app.post_process_pass.pass());
+            try app.render_graph.addPass(app.fxaa_pass.pass());
         } else {
             log.log.warn("ZIGCRAFT_SAFE_RENDER: render graph disabled (UI only)", .{});
         }
 
         const engine_ctx = app.engineContext();
-        const build_options = @import("build_options");
         if (build_options.smoke_test) {
             log.log.info("SMOKE TEST MODE: Bypassing menu and loading world", .{});
             const world_screen = try WorldScreen.init(allocator, engine_ctx, 12345, 0);
@@ -356,18 +381,46 @@ pub const App = struct {
         self.input.beginFrame();
         self.input.pollEvents();
 
+        if (self.input.isKeyPressed(.f3)) {
+            self.timing_overlay.toggle();
+            self.rhi.timing().setTimingEnabled(self.timing_overlay.enabled);
+        }
+
         if (self.ui) |*u| u.resize(self.input.window_width, self.input.window_height);
 
         self.rhi.setViewport(self.input.window_width, self.input.window_height);
 
-        // Check for GPU faults and attempt recovery
-        self.rhi.recover() catch |err| {
-            log.log.err("GPU recovery failed: {}. Shutting down.", .{err});
-            self.input.should_quit = true;
-        };
-
         self.rhi.beginFrame();
         errdefer self.rhi.endFrame();
+
+        // Ensure global uniforms are always updated with sane defaults even if no world is loaded.
+        // This prevents black screen in menu due to zero exposure.
+        // Call this AFTER beginFrame so it writes to the correct frame's buffer.
+        self.rhi.updateGlobalUniforms(Mat4.identity, Vec3.zero, Vec3.init(0, -1, 0), Vec3.one, 0, Vec3.zero, 0, false, 1.0, 0.1, false, .{
+            .cam_pos = Vec3.zero,
+            .view_proj = Mat4.identity,
+            .sun_dir = Vec3.init(0, -1, 0),
+            .sun_intensity = 1.0,
+            .fog_color = Vec3.zero,
+            .fog_density = 0,
+            .wind_offset_x = 0,
+            .wind_offset_z = 0,
+            .cloud_scale = 1.0,
+            .cloud_coverage = 0.5,
+            .cloud_height = 100,
+            .base_color = Vec3.one,
+            .pbr_enabled = false,
+            .shadow = .{ .distance = 100, .resolution = 1024, .pcf_samples = 1, .cascade_blend = false },
+            .cloud_shadows = false,
+            .pbr_quality = 0,
+            .exposure = 1.0,
+            .saturation = 1.0,
+            .volumetric_enabled = false,
+            .volumetric_density = 0,
+            .volumetric_steps = 0,
+            .volumetric_scattering = 0,
+            .ssao_enabled = false,
+        });
 
         // Update current screen. Transitions happen here.
         try self.screen_manager.update(self.time.delta_time);
@@ -380,11 +433,18 @@ pub const App = struct {
 
         if (self.ui) |*u| {
             try self.screen_manager.draw(u);
+
+            if (self.timing_overlay.enabled) {
+                u.begin();
+                const timing = self.rhi.timing();
+                const results = timing.getTimingResults();
+                self.timing_overlay.draw(u, results);
+                u.end();
+            }
         }
 
         self.rhi.endFrame();
 
-        const build_options = @import("build_options");
         if (build_options.smoke_test) {
             self.smoke_test_frames += 1;
             var target_frames: u32 = 120;

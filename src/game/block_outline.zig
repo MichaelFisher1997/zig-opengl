@@ -8,11 +8,11 @@ const Mat4 = @import("../engine/math/mat4.zig").Mat4;
 const Vec3 = @import("../engine/math/vec3.zig").Vec3;
 const Vertex = rhi_pkg.Vertex;
 
-/// Line thickness for the outline
-const LINE_THICKNESS: f32 = 0.025;
+/// Line thickness for the outline (0.035 = 3.5cm, subtle but visible)
+const LINE_THICKNESS: f32 = 0.035;
 
 /// Expansion to avoid z-fighting (sit slightly outside block)
-const EXPAND: f32 = 0.002;
+const EXPAND: f32 = 0.004;
 
 /// Create a vertex with the given position
 fn makeVertex(x: f32, y: f32, z: f32) Vertex {
@@ -165,7 +165,9 @@ pub const BlockOutline = struct {
         const rel_z = @as(f32, @floatFromInt(block_z)) - camera_pos.z;
 
         const model = Mat4.translate(Vec3.init(rel_x, rel_y, rel_z));
+        self.rhi.setSelectionMode(true);
         self.rhi.setModelMatrix(model, Vec3.one, 0);
         self.rhi.draw(self.buffer_handle, 288, .triangles);
+        self.rhi.setSelectionMode(false);
     }
 };

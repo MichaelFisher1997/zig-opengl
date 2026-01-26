@@ -384,7 +384,8 @@ pub const LODConfig = struct {
     }
     fn calculateMaskRadiusWrapper(ptr: *anyopaque) f32 {
         const self: *LODConfig = @ptrCast(@alignCast(ptr));
-        return @floatFromInt(self.radii[0]);
+        // Return radii[0] - 2.0 to ensure a 2-chunk overlap between LODs and block chunks
+        return @as(f32, @floatFromInt(self.radii[0])) - 2.0;
     }
 };
 
@@ -424,8 +425,9 @@ test "ILODConfig.calculateMaskRadius" {
         .radii = .{ 16, 40, 80, 160 },
     };
     const interface = config.interface();
-    try std.testing.expectEqual(@as(f32, 16.0), interface.calculateMaskRadius());
+    // Implementation returns radii[0] - 2.0
+    try std.testing.expectEqual(@as(f32, 14.0), interface.calculateMaskRadius());
 
     config.radii[0] = 32;
-    try std.testing.expectEqual(@as(f32, 32.0), interface.calculateMaskRadius());
+    try std.testing.expectEqual(@as(f32, 30.0), interface.calculateMaskRadius());
 }

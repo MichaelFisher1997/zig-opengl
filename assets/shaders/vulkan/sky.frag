@@ -16,6 +16,7 @@ layout(push_constant) uniform SkyPC {
 
 layout(set = 0, binding = 0) uniform GlobalUniforms {
     mat4 view_proj;
+    mat4 view_proj_prev; // Previous frame's view-projection for velocity buffer
     vec4 cam_pos;
     vec4 sun_dir;
     vec4 sun_color;
@@ -77,25 +78,25 @@ vec4 calculateVolumetric(vec3 rayStart, vec3 rayDir, float dither) {
     // Optimization: Skip volumetric if looking away from sun (conservative threshold)
     if (cosSun < -0.3) return vec4(0.0, 0.0, 0.0, 1.0);
     
-    float maxDist = 180.0; 
+    float maxDist = 400.0; 
     int steps = 16; 
     float stepSize = maxDist / float(steps);
     
     float phase = henyeyGreenstein(global.volumetric_params.w, cosSun);
     
     // Use the actual sun color for scattering
-    vec3 sunColor = global.sun_color.rgb * global.params.w;
+    vec3 sunColor = global.sun_color.rgb * global.params.w * 3.0; // Boost scattering
     vec3 accumulatedScattering = vec3(0.0);
     float transmittance = 1.0;
-    float baseDensity = global.volumetric_params.y;
+    float baseDensity = global.volumetric_params.y * 0.08; // Slightly lower for sky
     
     for (int i = 0; i < steps; i++) {
         float d = (float(i) + dither) * stepSize;
         vec3 p = rayStart + rayDir * d;
-        // Fix: Clamp height to avoid density explosion below sea level
-        float height = max(0.0, p.y);
-        float heightFalloff = exp(-height * 0.02);
-        float density = baseDensity * heightFalloff;
+        // Fix: Use absolute world height for density falloff
+        float worldY = p.y + global.cam_pos.y;
+        float heightFactor = exp(-max(worldY, 0.0) * 0.02); // Slower falloff for sky rays
+        float density = baseDensity * heightFactor;
         
         if (density > 1e-4) {
             float shadow = getVolShadow(p, d);
@@ -108,6 +109,8 @@ vec4 calculateVolumetric(vec3 rayStart, vec3 rayDir, float dither) {
             if (transmittance < 0.01) break;
         }
     }
+    
+    // No hard mix at the end, the density falloff should handle the transition naturally
     
     return vec4(accumulatedScattering, transmittance);
 }
@@ -161,7 +164,7 @@ void main() {
 
     float horizon = 1.0 - abs(dir.y);
     horizon = pow(horizon, 1.5);
-    vec3 sky = mix(pc.sky_color.xyz, pc.horizon_color.xyz, horizon);
+    vec3 sky = mix(pc.sky_color.xyz, pc.horizon_color.xyz, horizon) * 4.0; // Boost sky radiance to match terrain boost
 
     float sunDot = dot(dir, normalize(pc.sun_dir.xyz));
     float sunDisc = smoothstep(0.9995, 0.9999, sunDot);
@@ -194,7 +197,9 @@ void main() {
     // Volumetric Scattering (Phase 4)
     if (global.volumetric_params.x > 0.5) {
         float dither = cloudHash(gl_FragCoord.xy + vec2(global.params.x));
-        vec4 volumetric = calculateVolumetric(global.cam_pos.xyz, dir, dither);
+        // Use camera-relative origin (0,0,0) for raymarching start
+        vec4 volumetric = calculateVolumetric(vec3(0.0), dir, dither);
+        // Apply transmittance to sky color and add scattered light
         finalColor = finalColor * volumetric.a + volumetric.rgb;
     }
 

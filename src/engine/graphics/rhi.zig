@@ -17,6 +17,7 @@ pub const InvalidTextureHandle = rhi_types.InvalidTextureHandle;
 
 pub const MAX_FRAMES_IN_FLIGHT = rhi_types.MAX_FRAMES_IN_FLIGHT;
 pub const SHADOW_CASCADE_COUNT = rhi_types.SHADOW_CASCADE_COUNT;
+pub const BLOOM_MIP_COUNT = 5;
 
 pub const BufferUsage = rhi_types.BufferUsage;
 pub const TextureFormat = rhi_types.TextureFormat;
@@ -37,6 +38,7 @@ pub const ShadowConfig = rhi_types.ShadowConfig;
 pub const ShadowParams = rhi_types.ShadowParams;
 pub const Color = rhi_types.Color;
 pub const Rect = rhi_types.Rect;
+pub const GpuTimingResults = rhi_types.GpuTimingResults;
 
 // --- Segregated Interfaces ---
 
@@ -101,6 +103,7 @@ pub const IShadowContext = struct {
         beginPass: *const fn (ptr: *anyopaque, cascade_index: u32, light_space_matrix: Mat4) void,
         endPass: *const fn (ptr: *anyopaque) void,
         updateUniforms: *const fn (ptr: *anyopaque, params: ShadowParams) void,
+        getShadowMapHandle: *const fn (ptr: *anyopaque, cascade_index: u32) TextureHandle,
     };
 
     pub fn beginPass(self: IShadowContext, cascade_index: u32, light_space_matrix: Mat4) void {
@@ -111,6 +114,9 @@ pub const IShadowContext = struct {
     }
     pub fn updateUniforms(self: IShadowContext, params: ShadowParams) void {
         self.vtable.updateUniforms(self.ptr, params);
+    }
+    pub fn getShadowMapHandle(self: IShadowContext, cascade_index: u32) TextureHandle {
+        return self.vtable.getShadowMapHandle(self.ptr, cascade_index);
     }
 };
 
@@ -123,6 +129,7 @@ pub const IUIContext = struct {
         endPass: *const fn (ptr: *anyopaque) void,
         drawRect: *const fn (ptr: *anyopaque, rect: Rect, color: Color) void,
         drawTexture: *const fn (ptr: *anyopaque, texture: TextureHandle, rect: Rect) void,
+        drawDepthTexture: *const fn (ptr: *anyopaque, texture: TextureHandle, rect: Rect) void,
         bindPipeline: *const fn (ptr: *anyopaque, textured: bool) void,
     };
 
@@ -137,6 +144,9 @@ pub const IUIContext = struct {
     }
     pub fn drawTexture(self: IUIContext, texture: TextureHandle, rect: Rect) void {
         self.vtable.drawTexture(self.ptr, texture, rect);
+    }
+    pub fn drawDepthTexture(self: IUIContext, texture: TextureHandle, rect: Rect) void {
+        self.vtable.drawDepthTexture(self.ptr, texture, rect);
     }
     pub fn bindPipeline(self: IUIContext, textured: bool) void {
         self.vtable.bindPipeline(self.ptr, textured);
@@ -200,6 +210,7 @@ pub const IRenderStateContext = struct {
         setModelMatrix: *const fn (ptr: *anyopaque, model: Mat4, color: Vec3, mask_radius: f32) void,
         setInstanceBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle) void,
         setLODInstanceBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle) void,
+        setSelectionMode: *const fn (ptr: *anyopaque, enabled: bool) void,
         updateGlobalUniforms: *const fn (ptr: *anyopaque, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, sun_color: Vec3, time: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32, use_texture: bool, cloud_params: CloudParams) void,
         setTextureUniforms: *const fn (ptr: *anyopaque, texture_enabled: bool, shadow_map_handles: [SHADOW_CASCADE_COUNT]TextureHandle) void,
     };
@@ -210,11 +221,45 @@ pub const IRenderStateContext = struct {
     pub fn setInstanceBuffer(self: IRenderStateContext, handle: BufferHandle) void {
         self.vtable.setInstanceBuffer(self.ptr, handle);
     }
+    pub fn setLODInstanceBuffer(self: IRenderStateContext, handle: BufferHandle) void {
+        self.vtable.setLODInstanceBuffer(self.ptr, handle);
+    }
+    pub fn setSelectionMode(self: IRenderStateContext, enabled: bool) void {
+        self.vtable.setSelectionMode(self.ptr, enabled);
+    }
     pub fn updateGlobalUniforms(self: IRenderStateContext, view_proj: Mat4, cam_pos: Vec3, sun_dir: Vec3, sun_color: Vec3, time: f32, fog_color: Vec3, fog_density: f32, fog_enabled: bool, sun_intensity: f32, ambient: f32, use_texture: bool, cloud_params: CloudParams) void {
         self.vtable.updateGlobalUniforms(self.ptr, view_proj, cam_pos, sun_dir, sun_color, time, fog_color, fog_density, fog_enabled, sun_intensity, ambient, use_texture, cloud_params);
     }
     pub fn setTextureUniforms(self: IRenderStateContext, texture_enabled: bool, shadow_map_handles: [SHADOW_CASCADE_COUNT]TextureHandle) void {
         self.vtable.setTextureUniforms(self.ptr, texture_enabled, shadow_map_handles);
+    }
+};
+
+pub const ISSAOContext = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        /// Computes SSAO.
+        compute: *const fn (ptr: *anyopaque, proj: Mat4, inv_proj: Mat4) void,
+    };
+
+    pub fn compute(self: ISSAOContext, proj: Mat4, inv_proj: Mat4) void {
+        self.vtable.compute(self.ptr, proj, inv_proj);
+    }
+};
+
+pub const IDebugOverlayContext = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        /// Draws debug shadow map overlay (Deprecated - Tracked in #226).
+        drawDebugShadowMap: *const fn (ptr: *anyopaque, cascade_index: usize, depth_map_handle: TextureHandle) void,
+    };
+
+    pub fn drawDebugShadowMap(self: IDebugOverlayContext, cascade_index: usize, depth_map_handle: TextureHandle) void {
+        self.vtable.drawDebugShadowMap(self.ptr, cascade_index, depth_map_handle);
     }
 };
 
@@ -232,11 +277,22 @@ pub const IRenderContext = struct {
         endPostProcessPass: *const fn (ptr: *anyopaque) void,
         beginGPass: *const fn (ptr: *anyopaque) void,
         endGPass: *const fn (ptr: *anyopaque) void,
+        // FXAA Pass (Phase 3)
+        beginFXAAPass: *const fn (ptr: *anyopaque) void,
+        endFXAAPass: *const fn (ptr: *anyopaque) void,
+        // Bloom Pass (Phase 3)
+        computeBloom: *const fn (ptr: *anyopaque) void,
         getEncoder: *const fn (ptr: *anyopaque) IGraphicsCommandEncoder,
         getStateContext: *const fn (ptr: *anyopaque) IRenderStateContext,
 
         // High-level context state
         setClearColor: *const fn (ptr: *anyopaque, color: Vec3) void,
+
+        // Specific rendering passes/techniques (Tracked for refactoring)
+        // TODO (#225): Relocate computeSSAO to dedicated SSAOSystem
+        computeSSAO: *const fn (ptr: *anyopaque, proj: Mat4, inv_proj: Mat4) void,
+        /// @deprecated TODO (#226): Relocate drawDebugShadowMap to a debug overlay system.
+        drawDebugShadowMap: *const fn (ptr: *anyopaque, cascade_index: usize, depth_map_handle: TextureHandle) void,
 
         // Resource Accessors for Systems
         // Note: All accessors return backend-specific handles (e.g., Vulkan handles as u64).
@@ -252,42 +308,12 @@ pub const IRenderContext = struct {
         getNativeCloudPipelineLayout: *const fn (ptr: *anyopaque) u64,
         /// Returns the main native descriptor set handle (VkDescriptorSet).
         getNativeMainDescriptorSet: *const fn (ptr: *anyopaque) u64,
-        /// Returns the native SSAO pipeline handle (VkPipeline).
-        getNativeSSAOPipeline: *const fn (ptr: *anyopaque) u64,
-        /// Returns the native SSAO pipeline layout handle (VkPipelineLayout).
-        getNativeSSAOPipelineLayout: *const fn (ptr: *anyopaque) u64,
-        /// Returns the native SSAO blur pipeline handle (VkPipeline).
-        getNativeSSAOBlurPipeline: *const fn (ptr: *anyopaque) u64,
-        /// Returns the native SSAO blur pipeline layout handle (VkPipelineLayout).
-        getNativeSSAOBlurPipelineLayout: *const fn (ptr: *anyopaque) u64,
-        /// Returns the native SSAO descriptor set handle (VkDescriptorSet).
-        getNativeSSAODescriptorSet: *const fn (ptr: *anyopaque) u64,
-        /// Returns the native SSAO blur descriptor set handle (VkDescriptorSet).
-        getNativeSSAOBlurDescriptorSet: *const fn (ptr: *anyopaque) u64,
         /// Returns the native command buffer handle for the current frame (VkCommandBuffer).
         getNativeCommandBuffer: *const fn (ptr: *anyopaque) u64,
         /// Returns the current swapchain extent [width, height].
         getNativeSwapchainExtent: *const fn (ptr: *anyopaque) [2]u32,
-        /// Returns the native SSAO framebuffer handle (VkFramebuffer).
-        getNativeSSAOFramebuffer: *const fn (ptr: *anyopaque) u64,
-        /// Returns the native SSAO blur framebuffer handle (VkFramebuffer).
-        getNativeSSAOBlurFramebuffer: *const fn (ptr: *anyopaque) u64,
-        /// Returns the native SSAO render pass handle (VkRenderPass).
-        getNativeSSAORenderPass: *const fn (ptr: *anyopaque) u64,
-        /// Returns the native SSAO blur render pass handle (VkRenderPass).
-        getNativeSSAOBlurRenderPass: *const fn (ptr: *anyopaque) u64,
-        /// Returns the native buffer handle for SSAO parameters (VkBuffer).
-        getNativeSSAOParamsBuffer: *const fn (ptr: *anyopaque) u64,
-        /// Returns the native memory handle for SSAO parameters (VkDeviceMemory).
-        getNativeSSAOParamsMemory: *const fn (ptr: *anyopaque) u64,
         /// Returns the native device handle (VkDevice).
         getNativeDevice: *const fn (ptr: *anyopaque) u64,
-
-        // Specific rendering passes/techniques
-        // TODO (#189): Relocate computeSSAO to a dedicated SSAOSystem and remove from RHI.
-        computeSSAO: *const fn (ptr: *anyopaque) void,
-        /// @deprecated TODO (#189): Relocate drawDebugShadowMap to a debug overlay system.
-        drawDebugShadowMap: *const fn (ptr: *anyopaque, cascade_index: usize, depth_map_handle: TextureHandle) void,
     };
 
     pub fn beginFrame(self: IRenderContext) void {
@@ -307,6 +333,15 @@ pub const IRenderContext = struct {
     }
     pub fn endPostProcessPass(self: IRenderContext) void {
         self.vtable.endPostProcessPass(self.ptr);
+    }
+    pub fn beginFXAAPass(self: IRenderContext) void {
+        self.vtable.beginFXAAPass(self.ptr);
+    }
+    pub fn endFXAAPass(self: IRenderContext) void {
+        self.vtable.endFXAAPass(self.ptr);
+    }
+    pub fn computeBloom(self: IRenderContext) void {
+        self.vtable.computeBloom(self.ptr);
     }
     pub fn getEncoder(self: IRenderContext) IGraphicsCommandEncoder {
         return self.vtable.getEncoder(self.ptr);
@@ -346,11 +381,6 @@ pub const IRenderContext = struct {
     pub fn setModelMatrix(self: IRenderContext, model: Mat4, color: Vec3, mask_radius: f32) void {
         self.getState().setModelMatrix(model, color, mask_radius);
     }
-
-    // Legacy/Techniques (to be removed once systems are updated)
-    pub fn computeSSAO(self: IRenderContext) void {
-        self.vtable.computeSSAO(self.ptr);
-    }
 };
 
 pub const IDeviceQuery = struct {
@@ -381,6 +411,35 @@ pub const IDeviceQuery = struct {
     }
 };
 
+pub const IDeviceTiming = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        beginPassTiming: *const fn (ptr: *anyopaque, pass_name: []const u8) void,
+        endPassTiming: *const fn (ptr: *anyopaque, pass_name: []const u8) void,
+        getTimingResults: *const fn (ptr: *anyopaque) GpuTimingResults,
+        isTimingEnabled: *const fn (ptr: *anyopaque) bool,
+        setTimingEnabled: *const fn (ptr: *anyopaque, enabled: bool) void,
+    };
+
+    pub fn beginPassTiming(self: IDeviceTiming, pass_name: []const u8) void {
+        self.vtable.beginPassTiming(self.ptr, pass_name);
+    }
+    pub fn endPassTiming(self: IDeviceTiming, pass_name: []const u8) void {
+        self.vtable.endPassTiming(self.ptr, pass_name);
+    }
+    pub fn getTimingResults(self: IDeviceTiming) GpuTimingResults {
+        return self.vtable.getTimingResults(self.ptr);
+    }
+    pub fn isTimingEnabled(self: IDeviceTiming) bool {
+        return self.vtable.isTimingEnabled(self.ptr);
+    }
+    pub fn setTimingEnabled(self: IDeviceTiming, enabled: bool) void {
+        self.vtable.setTimingEnabled(self.ptr, enabled);
+    }
+};
+
 /// Composite RHI structure for backward compatibility during refactoring
 pub const RHI = struct {
     ptr: *anyopaque,
@@ -394,18 +453,25 @@ pub const RHI = struct {
         // Composition of all vtables (temp)
         resources: IResourceFactory.VTable,
         render: IRenderContext.VTable,
+        ssao: ISSAOContext.VTable,
         shadow: IShadowContext.VTable,
         ui: IUIContext.VTable,
         query: IDeviceQuery.VTable,
+        timing: IDeviceTiming.VTable,
 
         // Options
         setWireframe: *const fn (ctx: *anyopaque, enabled: bool) void,
         setTexturesEnabled: *const fn (ctx: *anyopaque, enabled: bool) void,
+        setDebugShadowView: *const fn (ctx: *anyopaque, enabled: bool) void,
         setVSync: *const fn (ctx: *anyopaque, enabled: bool) void,
         setAnisotropicFiltering: *const fn (ctx: *anyopaque, level: u8) void,
         setVolumetricDensity: *const fn (ctx: *anyopaque, density: f32) void,
         setMSAA: *const fn (ctx: *anyopaque, samples: u8) void,
         recover: *const fn (ctx: *anyopaque) anyerror!void,
+        // Phase 3: FXAA and Bloom options
+        setFXAA: *const fn (ctx: *anyopaque, enabled: bool) void,
+        setBloom: *const fn (ctx: *anyopaque, enabled: bool) void,
+        setBloomIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
     };
 
     pub fn factory(self: RHI) IResourceFactory {
@@ -420,6 +486,9 @@ pub const RHI = struct {
     pub fn state(self: RHI) IRenderStateContext {
         return self.context().getState();
     }
+    pub fn ssao(self: RHI) ISSAOContext {
+        return .{ .ptr = self.ptr, .vtable = &self.vtable.ssao };
+    }
     pub fn shadow(self: RHI) IShadowContext {
         return .{ .ptr = self.ptr, .vtable = &self.vtable.shadow };
     }
@@ -428,6 +497,9 @@ pub const RHI = struct {
     }
     pub fn query(self: RHI) IDeviceQuery {
         return .{ .ptr = self.ptr, .vtable = &self.vtable.query };
+    }
+    pub fn timing(self: RHI) IDeviceTiming {
+        return .{ .ptr = self.ptr, .vtable = &self.vtable.timing };
     }
 
     // Legacy wrappers (redirecting to sub-interfaces)
@@ -501,6 +573,15 @@ pub const RHI = struct {
     pub fn setModelMatrix(self: RHI, model: Mat4, color: Vec3, mask_radius: f32) void {
         self.state().setModelMatrix(model, color, mask_radius);
     }
+    pub fn setInstanceBuffer(self: RHI, handle: BufferHandle) void {
+        self.state().setInstanceBuffer(handle);
+    }
+    pub fn setLODInstanceBuffer(self: RHI, handle: BufferHandle) void {
+        self.state().setLODInstanceBuffer(handle);
+    }
+    pub fn setSelectionMode(self: RHI, enabled: bool) void {
+        self.state().setSelectionMode(enabled);
+    }
     pub fn pushConstants(self: RHI, stages: ShaderStageFlags, offset: u32, size: u32, data: *const anyopaque) void {
         self.encoder().pushConstants(stages, offset, size, data);
     }
@@ -523,6 +604,13 @@ pub const RHI = struct {
     }
     pub fn getValidationErrorCount(self: RHI) u32 {
         return self.vtable.query.getValidationErrorCount(self.ptr);
+    }
+
+    pub fn getShadowMapHandle(self: RHI, cascade: u32) TextureHandle {
+        return self.vtable.shadow.getShadowMapHandle(self.ptr, cascade);
+    }
+    pub fn drawDepthTexture2D(self: RHI, handle: TextureHandle, rect: Rect) void {
+        self.vtable.ui.drawDepthTexture(self.ptr, handle, rect);
     }
 
     // Lifecycle
@@ -561,8 +649,14 @@ pub const RHI = struct {
     pub fn endGPass(self: RHI) void {
         self.vtable.render.endGPass(self.ptr);
     }
-    pub fn computeSSAO(self: RHI) void {
-        self.vtable.render.computeSSAO(self.ptr);
+    pub fn beginFXAAPass(self: RHI) void {
+        self.vtable.render.beginFXAAPass(self.ptr);
+    }
+    pub fn endFXAAPass(self: RHI) void {
+        self.vtable.render.endFXAAPass(self.ptr);
+    }
+    pub fn computeBloom(self: RHI) void {
+        self.vtable.render.computeBloom(self.ptr);
     }
     pub fn updateShadowUniforms(self: RHI, params: ShadowParams) void {
         self.vtable.shadow.updateUniforms(self.ptr, params);
@@ -579,6 +673,9 @@ pub const RHI = struct {
     }
     pub fn setTexturesEnabled(self: RHI, enabled: bool) void {
         self.vtable.setTexturesEnabled(self.ptr, enabled);
+    }
+    pub fn setDebugShadowView(self: RHI, enabled: bool) void {
+        self.vtable.setDebugShadowView(self.ptr, enabled);
     }
     pub fn setVSync(self: RHI, enabled: bool) void {
         self.vtable.setVSync(self.ptr, enabled);
@@ -597,5 +694,15 @@ pub const RHI = struct {
     }
     pub fn bindUIPipeline(self: RHI, textured: bool) void {
         self.vtable.ui.bindPipeline(self.ptr, textured);
+    }
+    // Phase 3: FXAA and Bloom controls
+    pub fn setFXAA(self: RHI, enabled: bool) void {
+        self.vtable.setFXAA(self.ptr, enabled);
+    }
+    pub fn setBloom(self: RHI, enabled: bool) void {
+        self.vtable.setBloom(self.ptr, enabled);
+    }
+    pub fn setBloomIntensity(self: RHI, intensity: f32) void {
+        self.vtable.setBloomIntensity(self.ptr, intensity);
     }
 };

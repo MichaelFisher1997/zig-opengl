@@ -8,8 +8,8 @@ const Mat4 = @import("../../engine/math/mat4.zig").Mat4;
 const Vec3 = @import("../../engine/math/vec3.zig").Vec3;
 const rhi_pkg = @import("../../engine/graphics/rhi.zig");
 const render_graph_pkg = @import("../../engine/graphics/render_graph.zig");
-const log = @import("../../engine/core/log.zig");
 const PausedScreen = @import("paused.zig").PausedScreen;
+const DebugShadowOverlay = @import("../../engine/ui/debug_shadow_overlay.zig").DebugShadowOverlay;
 
 pub const WorldScreen = struct {
     context: EngineContext,
@@ -66,6 +66,10 @@ pub const WorldScreen = struct {
         if (ctx.input_mapper.isActionPressed(ctx.input, .toggle_vsync)) {
             ctx.settings.vsync = !ctx.settings.vsync;
             ctx.rhi.*.setVSync(ctx.settings.vsync);
+        }
+        if (ctx.input.isKeyPressed(.g)) {
+            ctx.settings.debug_shadows_active = !ctx.settings.debug_shadows_active;
+            ctx.rhi.*.setDebugShadowView(ctx.settings.debug_shadows_active);
         }
 
         // Update Audio Listener
@@ -163,14 +167,12 @@ pub const WorldScreen = struct {
                 .disable_gpass_draw = ctx.disable_gpass_draw,
                 .disable_ssao = ctx.disable_ssao,
                 .disable_clouds = ctx.disable_clouds,
+                .fxaa_enabled = ctx.settings.fxaa_enabled,
+                .bloom_enabled = ctx.settings.bloom_enabled,
+                .overlay_renderer = renderOverlay,
+                .overlay_ctx = self,
             };
             ctx.render_graph.execute(render_ctx);
-
-            if (!ctx.safe_render_mode) {
-                if (self.session.player.target_block) |target| self.session.block_outline.draw(target.x, target.y, target.z, camera.position);
-                self.session.renderEntities(camera.position);
-                self.session.hand_renderer.draw(camera.position, camera.yaw, camera.pitch);
-            }
         }
 
         ui.begin();
@@ -182,6 +184,10 @@ pub const WorldScreen = struct {
         const mouse_clicked = ctx.input.isMouseButtonPressed(.left);
 
         try self.session.drawHUD(ui, ctx.atlas, ctx.resource_pack_manager.active_pack, ctx.time.fps, screen_w, screen_h, mouse_x, mouse_y, mouse_clicked);
+
+        if (ctx.settings.debug_shadows_active) {
+            DebugShadowOverlay.draw(ctx.rhi.ui(), ctx.rhi.shadow(), screen_w, screen_h, .{});
+        }
     }
 
     pub fn onEnter(ptr: *anyopaque) void {
@@ -196,5 +202,12 @@ pub const WorldScreen = struct {
 
     pub fn screen(self: *@This()) IScreen {
         return Screen.makeScreen(@This(), self);
+    }
+
+    fn renderOverlay(scene_ctx: render_graph_pkg.SceneContext) void {
+        const self: *WorldScreen = @ptrCast(@alignCast(scene_ctx.overlay_ctx.?));
+        if (self.session.player.target_block) |target| self.session.block_outline.draw(target.x, target.y, target.z, scene_ctx.camera.position);
+        self.session.renderEntities(scene_ctx.camera.position);
+        self.session.hand_renderer.draw(scene_ctx.camera.position, scene_ctx.camera.yaw, scene_ctx.camera.pitch);
     }
 };

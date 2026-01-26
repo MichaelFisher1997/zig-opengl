@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const rhi = @import("rhi.zig");
+const c = @import("../../c.zig").c;
 const Mat4 = @import("../math/mat4.zig").Mat4;
 const Vec3 = @import("../math/vec3.zig").Vec3;
 
@@ -8,6 +9,7 @@ const MockContext = struct {
     bind_shader_called: bool = false,
     bind_texture_called: bool = false,
     draw_called: bool = false,
+    draw_depth_texture_called: bool = false,
     sky_pipeline_requested: bool = false,
     cloud_pipeline_requested: bool = false,
 
@@ -96,30 +98,6 @@ const MockContext = struct {
         _ = ptr;
         return 0;
     }
-    fn getNativeSSAOPipeline(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
-    fn getNativeSSAOPipelineLayout(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
-    fn getNativeSSAOBlurPipeline(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
-    fn getNativeSSAOBlurPipelineLayout(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
-    fn getNativeSSAODescriptorSet(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
-    fn getNativeSSAOBlurDescriptorSet(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
     fn getNativeCommandBuffer(ptr: *anyopaque) u64 {
         _ = ptr;
         return 0;
@@ -128,33 +106,21 @@ const MockContext = struct {
         _ = ptr;
         return .{ 800, 600 };
     }
-    fn getNativeSSAOFramebuffer(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
-    fn getNativeSSAOBlurFramebuffer(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
-    fn getNativeSSAORenderPass(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
-    fn getNativeSSAOBlurRenderPass(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
-    fn getNativeSSAOParamsBuffer(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
-    fn getNativeSSAOParamsMemory(ptr: *anyopaque) u64 {
-        _ = ptr;
-        return 0;
-    }
     fn getNativeDevice(ptr: *anyopaque) u64 {
         _ = ptr;
         return 0;
+    }
+
+    fn computeSSAO(ptr: *anyopaque, proj: Mat4, inv_proj: Mat4) void {
+        _ = ptr;
+        _ = proj;
+        _ = inv_proj;
+    }
+
+    fn drawDebugShadowMap(ptr: *anyopaque, cascade_index: usize, depth_map_handle: rhi.TextureHandle) void {
+        _ = ptr;
+        _ = cascade_index;
+        _ = depth_map_handle;
     }
 
     fn getEncoder(ptr: *anyopaque) rhi.IGraphicsCommandEncoder {
@@ -163,6 +129,40 @@ const MockContext = struct {
 
     fn getStateContext(ptr: *anyopaque) rhi.IRenderStateContext {
         return .{ .ptr = ptr, .vtable = &MOCK_STATE_VTABLE };
+    }
+
+    fn isTimingEnabled(ptr: *anyopaque) bool {
+        _ = ptr;
+        return false;
+    }
+    fn setTimingEnabled(ptr: *anyopaque, enabled: bool) void {
+        _ = ptr;
+        _ = enabled;
+    }
+    fn beginPassTiming(ptr: *anyopaque, name: []const u8) void {
+        _ = ptr;
+        _ = name;
+    }
+    fn endPassTiming(ptr: *anyopaque, name: []const u8) void {
+        _ = ptr;
+        _ = name;
+    }
+    fn getTimingResults(ptr: *anyopaque) rhi.GpuTimingResults {
+        _ = ptr;
+        return std.mem.zeroes(rhi.GpuTimingResults);
+    }
+
+    fn getShadowMapHandle(ptr: *anyopaque, cascade_index: u32) rhi.TextureHandle {
+        _ = ptr;
+        _ = cascade_index;
+        return 0;
+    }
+
+    fn drawDepthTexture(ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.Rect) void {
+        const self: *MockContext = @ptrCast(@alignCast(ptr));
+        _ = texture;
+        _ = rect;
+        self.draw_depth_texture_called = true;
     }
 
     const MOCK_RENDER_VTABLE = rhi.IRenderContext.VTable{
@@ -175,6 +175,9 @@ const MockContext = struct {
         .endPostProcessPass = undefined,
         .beginGPass = undefined,
         .endGPass = undefined,
+        .beginFXAAPass = undefined,
+        .endFXAAPass = undefined,
+        .computeBloom = undefined,
         .getEncoder = MockContext.getEncoder,
         .getStateContext = MockContext.getStateContext,
         .setClearColor = undefined,
@@ -183,23 +186,15 @@ const MockContext = struct {
         .getNativeCloudPipeline = getNativeCloudPipeline,
         .getNativeCloudPipelineLayout = getNativeCloudPipelineLayout,
         .getNativeMainDescriptorSet = getNativeMainDescriptorSet,
-        .getNativeSSAOPipeline = getNativeSSAOPipeline,
-        .getNativeSSAOPipelineLayout = getNativeSSAOPipelineLayout,
-        .getNativeSSAOBlurPipeline = getNativeSSAOBlurPipeline,
-        .getNativeSSAOBlurPipelineLayout = getNativeSSAOBlurPipelineLayout,
-        .getNativeSSAODescriptorSet = getNativeSSAODescriptorSet,
-        .getNativeSSAOBlurDescriptorSet = getNativeSSAOBlurDescriptorSet,
         .getNativeCommandBuffer = getNativeCommandBuffer,
         .getNativeSwapchainExtent = getNativeSwapchainExtent,
-        .getNativeSSAOFramebuffer = getNativeSSAOFramebuffer,
-        .getNativeSSAOBlurFramebuffer = getNativeSSAOBlurFramebuffer,
-        .getNativeSSAORenderPass = getNativeSSAORenderPass,
-        .getNativeSSAOBlurRenderPass = getNativeSSAOBlurRenderPass,
-        .getNativeSSAOParamsBuffer = getNativeSSAOParamsBuffer,
-        .getNativeSSAOParamsMemory = getNativeSSAOParamsMemory,
         .getNativeDevice = getNativeDevice,
-        .computeSSAO = undefined,
-        .drawDebugShadowMap = undefined,
+        .computeSSAO = computeSSAO,
+        .drawDebugShadowMap = drawDebugShadowMap,
+    };
+
+    const MOCK_SSAO_VTABLE = rhi.ISSAOContext.VTable{
+        .compute = computeSSAO,
     };
 
     const MOCK_RESOURCES_VTABLE = rhi.IResourceFactory.VTable{
@@ -285,21 +280,49 @@ const MockContext = struct {
         .waitIdle = undefined,
     };
 
+    const MOCK_SHADOW_VTABLE = rhi.IShadowContext.VTable{
+        .beginPass = undefined,
+        .endPass = undefined,
+        .updateUniforms = undefined,
+        .getShadowMapHandle = getShadowMapHandle,
+    };
+
+    const MOCK_UI_VTABLE = rhi.IUIContext.VTable{
+        .beginPass = undefined,
+        .endPass = undefined,
+        .drawRect = undefined,
+        .drawTexture = undefined,
+        .drawDepthTexture = drawDepthTexture,
+        .bindPipeline = undefined,
+    };
+
     const MOCK_VULKAN_RHI_VTABLE = rhi.RHI.VTable{
         .init = undefined,
         .deinit = undefined,
         .resources = MOCK_RESOURCES_VTABLE,
         .render = MOCK_RENDER_VTABLE,
-        .shadow = undefined,
-        .ui = undefined,
+        .ssao = MOCK_SSAO_VTABLE,
+        .shadow = MOCK_SHADOW_VTABLE,
+        .ui = MOCK_UI_VTABLE,
         .query = MOCK_QUERY_VTABLE,
+        .timing = .{
+            .beginPassTiming = beginPassTiming,
+            .endPassTiming = endPassTiming,
+            .getTimingResults = getTimingResults,
+            .isTimingEnabled = isTimingEnabled,
+            .setTimingEnabled = setTimingEnabled,
+        },
         .setWireframe = undefined,
         .setTexturesEnabled = undefined,
+        .setDebugShadowView = undefined,
         .setVSync = undefined,
         .setAnisotropicFiltering = undefined,
         .setVolumetricDensity = undefined,
         .setMSAA = undefined,
         .recover = undefined,
+        .setFXAA = undefined,
+        .setBloom = undefined,
+        .setBloomIntensity = undefined,
     };
 
     const MOCK_ENCODER_VTABLE = rhi.IGraphicsCommandEncoder.VTable{
@@ -319,6 +342,7 @@ const MockContext = struct {
         .setModelMatrix = undefined,
         .setInstanceBuffer = undefined,
         .setLODInstanceBuffer = undefined,
+        .setSelectionMode = undefined,
         .updateGlobalUniforms = undefined,
         .setTextureUniforms = undefined,
     };
@@ -401,4 +425,63 @@ test "AtmosphereSystem.renderClouds with null handles" {
     }, Mat4.identity));
 
     try testing.expect(mock.cloud_pipeline_requested);
+}
+
+test "SSAOSystem params defaults" {
+    const SSAOParams = @import("vulkan/ssao_system.zig").SSAOParams;
+    const KERNEL_SIZE = @import("vulkan/ssao_system.zig").KERNEL_SIZE;
+    const DEFAULT_RADIUS = @import("vulkan/ssao_system.zig").DEFAULT_RADIUS;
+    const DEFAULT_BIAS = @import("vulkan/ssao_system.zig").DEFAULT_BIAS;
+
+    const params = std.mem.zeroes(SSAOParams);
+    _ = params;
+    // Note: std.mem.zeroes might not use struct defaults if defined with = DEFAULT_RADIUS
+    // but in SSAOSystem.init we manually set them.
+    // Let's test that the struct layout and constants are accessible.
+    try testing.expectEqual(@as(usize, 64), KERNEL_SIZE);
+    try testing.expectEqual(@as(f32, 0.5), DEFAULT_RADIUS);
+    try testing.expectEqual(@as(f32, 0.025), DEFAULT_BIAS);
+}
+
+test "ResourceManager.registerExternalTexture validation" {
+    const ResourceManager = @import("vulkan/resource_manager.zig").ResourceManager;
+    const VulkanDevice = @import("vulkan_device.zig").VulkanDevice;
+
+    // We don't need a real Vulkan device for this specific test as it only tests map insertion and validation logic
+    var dummy_device = VulkanDevice{
+        .allocator = testing.allocator,
+        .vk_device = null,
+        .queue = null,
+    };
+
+    var manager = ResourceManager{
+        .allocator = testing.allocator,
+        .vulkan_device = &dummy_device,
+        .buffers = std.AutoHashMap(rhi.BufferHandle, @import("vulkan/resource_manager.zig").VulkanBuffer).init(testing.allocator),
+        .next_buffer_handle = 1,
+        .textures = std.AutoHashMap(rhi.TextureHandle, @import("vulkan/resource_manager.zig").TextureResource).init(testing.allocator),
+        .next_texture_handle = 1,
+        .buffer_deletion_queue = undefined,
+        .image_deletion_queue = undefined,
+        .staging_buffers = undefined,
+        .transfer_command_pool = null,
+        .transfer_command_buffers = undefined,
+        .transfer_fence = null,
+    };
+    defer manager.textures.deinit();
+    defer manager.buffers.deinit();
+
+    const dummy_view: c.VkImageView = @ptrFromInt(0x1234);
+    const dummy_sampler: c.VkSampler = @ptrFromInt(0x5678);
+
+    // Test successful registration
+    const handle = try manager.registerExternalTexture(128, 128, .rgba, dummy_view, dummy_sampler);
+    try testing.expect(handle != 0);
+    try testing.expectEqual(@as(usize, 1), manager.textures.count());
+
+    // Test null view validation
+    try testing.expectError(error.InvalidImageView, manager.registerExternalTexture(128, 128, .rgba, null, dummy_sampler));
+
+    // Test null sampler validation
+    try testing.expectError(error.InvalidImageView, manager.registerExternalTexture(128, 128, .rgba, dummy_view, null));
 }

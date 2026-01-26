@@ -30,6 +30,11 @@ pub const SceneContext = struct {
     disable_gpass_draw: bool,
     disable_ssao: bool,
     disable_clouds: bool,
+    // Phase 3: FXAA and Bloom flags
+    fxaa_enabled: bool = true,
+    bloom_enabled: bool = true,
+    overlay_renderer: ?*const fn (ctx: SceneContext) void = null,
+    overlay_ctx: ?*anyopaque = null,
 };
 
 pub const IRenderPass = struct {
@@ -76,20 +81,40 @@ pub const RenderGraph = struct {
     }
 
     pub fn execute(self: *const RenderGraph, ctx: SceneContext) void {
+        const timing = ctx.rhi.timing();
         var main_pass_started = false;
         for (self.passes.items) |pass| {
-            // Handle main pass transition
-            if (pass.needsMainPass() and !main_pass_started) {
-                ctx.rhi.beginMainPass();
-                main_pass_started = true;
-            }
+            updateMainPassState(ctx, pass, &main_pass_started);
 
+            const pass_name = pass.name();
+            timing.beginPassTiming(pass_name);
             pass.execute(ctx);
+            timing.endPassTiming(pass_name);
+        }
+
+        if (main_pass_started) {
+            ctx.rhi.endMainPass();
+        }
+    }
+
+    fn updateMainPassState(ctx: SceneContext, pass: IRenderPass, main_pass_started: *bool) void {
+        if (pass.needsMainPass()) {
+            if (!main_pass_started.*) {
+                ctx.rhi.beginMainPass();
+                main_pass_started.* = true;
+            }
+        } else {
+            if (main_pass_started.*) {
+                ctx.rhi.endMainPass();
+                main_pass_started.* = false;
+            }
         }
     }
 };
 
 // --- Standard Pass Implementations ---
+
+const SHADOW_PASS_NAMES = [_][]const u8{ "ShadowPass0", "ShadowPass1", "ShadowPass2" };
 
 pub const ShadowPass = struct {
     cascade_index: u32,
@@ -98,14 +123,16 @@ pub const ShadowPass = struct {
         return .{ .cascade_index = cascade_index };
     }
 
+    const VTABLES = [_]IRenderPass.VTable{
+        .{ .name = "ShadowPass0", .needs_main_pass = false, .execute = execute },
+        .{ .name = "ShadowPass1", .needs_main_pass = false, .execute = execute },
+        .{ .name = "ShadowPass2", .needs_main_pass = false, .execute = execute },
+    };
+
     pub fn pass(self: *ShadowPass) IRenderPass {
         return .{
             .ptr = self,
-            .vtable = &.{
-                .name = "ShadowPass",
-                .needs_main_pass = false,
-                .execute = execute,
-            },
+            .vtable = &VTABLES[self.cascade_index],
         };
     }
 
@@ -144,14 +171,15 @@ pub const ShadowPass = struct {
 };
 
 pub const GPass = struct {
+    const VTABLE = IRenderPass.VTable{
+        .name = "GPass",
+        .needs_main_pass = false,
+        .execute = execute,
+    };
     pub fn pass(self: *GPass) IRenderPass {
         return .{
             .ptr = self,
-            .vtable = &.{
-                .name = "GPass",
-                .needs_main_pass = false,
-                .execute = execute,
-            },
+            .vtable = &VTABLE,
         };
     }
 
@@ -169,33 +197,37 @@ pub const GPass = struct {
 };
 
 pub const SSAOPass = struct {
+    const VTABLE = IRenderPass.VTable{
+        .name = "SSAOPass",
+        .needs_main_pass = false,
+        .execute = execute,
+    };
     pub fn pass(self: *SSAOPass) IRenderPass {
         return .{
             .ptr = self,
-            .vtable = &.{
-                .name = "SSAOPass",
-                .needs_main_pass = false,
-                .execute = execute,
-            },
+            .vtable = &VTABLE,
         };
     }
 
     fn execute(ptr: *anyopaque, ctx: SceneContext) void {
         _ = ptr;
         if (!ctx.ssao_enabled or ctx.disable_ssao) return;
-        ctx.rhi.context().computeSSAO();
+        const proj = Mat4.perspectiveReverseZ(ctx.camera.fov, ctx.aspect, ctx.camera.near, ctx.camera.far);
+        const inv_proj = proj.inverse();
+        ctx.rhi.ssao().compute(proj, inv_proj);
     }
 };
 
 pub const SkyPass = struct {
+    const VTABLE = IRenderPass.VTable{
+        .name = "SkyPass",
+        .needs_main_pass = true,
+        .execute = execute,
+    };
     pub fn pass(self: *SkyPass) IRenderPass {
         return .{
             .ptr = self,
-            .vtable = &.{
-                .name = "SkyPass",
-                .needs_main_pass = true,
-                .execute = execute,
-            },
+            .vtable = &VTABLE,
         };
     }
 
@@ -214,14 +246,15 @@ pub const SkyPass = struct {
 };
 
 pub const OpaquePass = struct {
+    const VTABLE = IRenderPass.VTable{
+        .name = "OpaquePass",
+        .needs_main_pass = true,
+        .execute = execute,
+    };
     pub fn pass(self: *OpaquePass) IRenderPass {
         return .{
             .ptr = self,
-            .vtable = &.{
-                .name = "OpaquePass",
-                .needs_main_pass = true,
-                .execute = execute,
-            },
+            .vtable = &VTABLE,
         };
     }
 
@@ -236,14 +269,15 @@ pub const OpaquePass = struct {
 };
 
 pub const CloudPass = struct {
+    const VTABLE = IRenderPass.VTable{
+        .name = "CloudPass",
+        .needs_main_pass = true,
+        .execute = execute,
+    };
     pub fn pass(self: *CloudPass) IRenderPass {
         return .{
             .ptr = self,
-            .vtable = &.{
-                .name = "CloudPass",
-                .needs_main_pass = true,
-                .execute = execute,
-            },
+            .vtable = &VTABLE,
         };
     }
 
@@ -263,15 +297,37 @@ pub const CloudPass = struct {
     }
 };
 
+pub const EntityPass = struct {
+    const VTABLE = IRenderPass.VTable{
+        .name = "EntityPass",
+        .needs_main_pass = true,
+        .execute = execute,
+    };
+    pub fn pass(self: *EntityPass) IRenderPass {
+        return .{
+            .ptr = self,
+            .vtable = &VTABLE,
+        };
+    }
+
+    fn execute(ptr: *anyopaque, ctx: SceneContext) void {
+        _ = ptr;
+        if (ctx.overlay_renderer) |render| {
+            render(ctx);
+        }
+    }
+};
+
 pub const PostProcessPass = struct {
+    const VTABLE = IRenderPass.VTable{
+        .name = "PostProcessPass",
+        .needs_main_pass = false,
+        .execute = execute,
+    };
     pub fn pass(self: *PostProcessPass) IRenderPass {
         return .{
             .ptr = self,
-            .vtable = &.{
-                .name = "PostProcessPass",
-                .needs_main_pass = false,
-                .execute = execute,
-            },
+            .vtable = &VTABLE,
         };
     }
 
@@ -280,5 +336,50 @@ pub const PostProcessPass = struct {
         ctx.rhi.beginPostProcessPass();
         ctx.rhi.draw(rhi_pkg.InvalidBufferHandle, 3, .triangles);
         ctx.rhi.endPostProcessPass();
+    }
+};
+
+// Phase 3: Bloom Pass - Computes bloom mip chain from HDR buffer
+pub const BloomPass = struct {
+    enabled: bool = true,
+    const VTABLE = IRenderPass.VTable{
+        .name = "BloomPass",
+        .needs_main_pass = false,
+        .execute = execute,
+    };
+    pub fn pass(self: *BloomPass) IRenderPass {
+        return .{
+            .ptr = self,
+            .vtable = &VTABLE,
+        };
+    }
+
+    fn execute(ptr: *anyopaque, ctx: SceneContext) void {
+        const self: *BloomPass = @ptrCast(@alignCast(ptr));
+        if (!self.enabled or !ctx.bloom_enabled) return;
+        ctx.rhi.computeBloom();
+    }
+};
+
+// Phase 3: FXAA Pass - Applies FXAA to LDR output
+pub const FXAAPass = struct {
+    enabled: bool = true,
+    const VTABLE = IRenderPass.VTable{
+        .name = "FXAAPass",
+        .needs_main_pass = false,
+        .execute = execute,
+    };
+    pub fn pass(self: *FXAAPass) IRenderPass {
+        return .{
+            .ptr = self,
+            .vtable = &VTABLE,
+        };
+    }
+
+    fn execute(ptr: *anyopaque, ctx: SceneContext) void {
+        const self: *FXAAPass = @ptrCast(@alignCast(ptr));
+        if (!self.enabled or !ctx.fxaa_enabled) return;
+        ctx.rhi.beginFXAAPass();
+        ctx.rhi.endFXAAPass();
     }
 };
