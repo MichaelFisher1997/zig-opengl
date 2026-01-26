@@ -117,6 +117,12 @@ const MockContext = struct {
         _ = inv_proj;
     }
 
+    fn drawDebugShadowMap(ptr: *anyopaque, cascade_index: usize, depth_map_handle: rhi.TextureHandle) void {
+        _ = ptr;
+        _ = cascade_index;
+        _ = depth_map_handle;
+    }
+
     fn getEncoder(ptr: *anyopaque) rhi.IGraphicsCommandEncoder {
         return .{ .ptr = ptr, .vtable = &MOCK_ENCODER_VTABLE };
     }
@@ -183,6 +189,8 @@ const MockContext = struct {
         .getNativeCommandBuffer = getNativeCommandBuffer,
         .getNativeSwapchainExtent = getNativeSwapchainExtent,
         .getNativeDevice = getNativeDevice,
+        .computeSSAO = computeSSAO,
+        .drawDebugShadowMap = drawDebugShadowMap,
     };
 
     const MOCK_SSAO_VTABLE = rhi.ISSAOContext.VTable{
