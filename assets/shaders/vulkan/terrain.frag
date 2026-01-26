@@ -238,9 +238,8 @@ vec4 calculateVolumetric(vec3 rayStart, vec3 rayEnd, float dither) {
     float cosTheta = dot(rayDir, normalize(global.sun_dir.xyz));
     float phase = henyeyGreenstein(global.volumetric_params.w, cosTheta);
     
-    // Use the actual sun color for scattering (divide by PI for energy conservation if enabled)
-                float piDivVolumetric = global.pbr_params.w > 0.5 ? PI : 1.0;
-                vec3 sunColor = global.sun_color.rgb * global.params.w * 3.0 / piDivVolumetric; // Significant boost
+    // Use the actual sun color for scattering (divide by PI for energy conservation)
+                vec3 sunColor = global.sun_color.rgb * global.params.w * 3.0 / PI; // Significant boost
     vec3 accumulatedScattering = vec3(0.0);
     float transmittance = 1.0;
     // Scale density to be more manageable (0.01 in preset = light fog)
@@ -451,8 +450,7 @@ void main() {
                 vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
                 
                 float NdotL_final = max(dot(N, L), 0.0);
-                float piDivPBR = global.pbr_params.w > 0.5 ? PI : 1.0;
-                vec3 sunColor = global.sun_color.rgb * global.params.w * 4.0 / piDivPBR;
+                vec3 sunColor = global.sun_color.rgb * global.params.w * 4.0 / PI;
                 vec3 Lo = (kD * albedo / PI + specular) * sunColor * NdotL_final * (1.0 - totalShadow);
                 
                 // Ambient lighting (IBL) - shadows reduce ambient slightly for more visible effect
@@ -483,8 +481,8 @@ void main() {
                 vec3 ambientColor = albedo * (max(min(envColor, vec3(3.0)) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao * shadowAmbientFactor;
                 
                 // Direct lighting
-                float piDivNonPBR = global.pbr_params.w > 0.5 ? PI : 1.0;
-                vec3 sunColor = global.sun_color.rgb * global.params.w * 4.0 / piDivNonPBR;
+                // Direct lighting
+                vec3 sunColor = global.sun_color.rgb * global.params.w * 4.0 / PI;
                 vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
                 
                 color = ambientColor + directColor;
@@ -516,8 +514,7 @@ void main() {
             float skyLightVal = vSkyLight * global.lighting.x;
             float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
             vec3 ambientColor = albedo * (max(vec3(skyLightVal * 0.8), vec3(global.lighting.x * 0.4)) + blockLight) * ao * ssao * shadowAmbientFactor;
-            float piDivLOD = global.pbr_params.w > 0.5 ? PI : 1.0;
-            vec3 sunColor = global.sun_color.rgb * global.params.w * 3.0 / piDivLOD;
+            vec3 sunColor = global.sun_color.rgb * global.params.w * 3.0 / PI;
             vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
             color = ambientColor + directColor;
         } else {

@@ -72,6 +72,10 @@ pub const WorldScreen = struct {
             ctx.settings.debug_shadows_active = !ctx.settings.debug_shadows_active;
             ctx.rhi.*.setDebugShadowView(ctx.settings.debug_shadows_active);
         }
+        if (ctx.input.isKeyPressed(.g)) {
+            ctx.settings.debug_shadows_active = !ctx.settings.debug_shadows_active;
+            ctx.rhi.*.setDebugShadowView(ctx.settings.debug_shadows_active);
+        }
 
         // Update Audio Listener
         const cam = &self.session.player.camera;
@@ -189,7 +193,6 @@ pub const WorldScreen = struct {
         if (ctx.settings.debug_shadows_active) {
             DebugShadowOverlay.draw(ctx.rhi.ui(), ctx.rhi.shadow(), screen_w, screen_h, .{});
         }
-
         // Energy conservation toggle notification
         const ec_y = if (screen_h > 100) screen_h - 35 else screen_h - 10;
         Font.drawText(ui, "ENERGY CONSERVATION: FIXED", 10, ec_y, 1.5, Color.rgba(100, 200, 255, 200));
