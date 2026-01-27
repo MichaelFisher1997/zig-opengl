@@ -66,11 +66,42 @@ pub const InputSettings = struct {
 
         var settings = init(allocator);
         // Parse and apply settings
-        settings.parseJson(data) catch |err| {
+        const migrated = settings.parseJson(data) catch |err| blk: {
             log.log.warn("Failed to parse settings file at {s}: {s} ({}). Custom bindings may be lost. Using defaults where necessary.", .{ path, @errorName(err), err });
             // Reset to defaults if parsing fails to ensure clean state
             settings.input_mapper.resetToDefaults();
+            break :blk false;
         };
+
+        if (migrated) {
+            log.log.info("Persisting migrated settings to {s}", .{path});
+            settings.save() catch |err| {
+                log.log.err("Failed to save migrated settings: {}", .{err});
+            };
+        }
+
+        // --- SANITY CHECK FOR BROKEN MIGRATIONS ---
+        // If critical debug actions are mapped to Escape (common symptom of shifted indices), reset them.
+        const g_bind = settings.input_mapper.getBinding(.toggle_shadow_debug_vis);
+        const f4_bind = settings.input_mapper.getBinding(.toggle_timing_overlay);
+        var healed = false;
+
+        if (g_bind.primary == .key and g_bind.primary.key == .escape) {
+            log.log.warn("InputSettings: Detected broken G-key mapping (mapped to Escape). Resetting to Default (G).", .{});
+            settings.input_mapper.resetActionToDefault(.toggle_shadow_debug_vis);
+            healed = true;
+        }
+        if (f4_bind.primary == .key and f4_bind.primary.key == .escape) {
+            log.log.warn("InputSettings: Detected broken F4-key mapping (mapped to Escape). Resetting to Default (F4).", .{});
+            settings.input_mapper.resetActionToDefault(.toggle_timing_overlay);
+            healed = true;
+        }
+
+        if (healed) {
+            settings.save() catch {};
+        }
+
+        log.log.info("InputSettings: toggle_shadow_debug_vis is bound to {s}", .{settings.input_mapper.getBinding(.toggle_shadow_debug_vis).primary.getName()});
 
         return settings;
     }
@@ -106,10 +137,17 @@ pub const InputSettings = struct {
         try file.writeAll(json);
     }
 
-    /// Helper to save bindings directly from a mapper.
-    pub fn saveFromMapper(allocator: std.mem.Allocator, mapper: InputMapper) !void {
-        var settings = InputSettings.initFromMapper(allocator, mapper);
+    /// Helper to save bindings directly from a mapper interface.
+    pub fn saveFromMapper(allocator: std.mem.Allocator, mapper: input_mapper_pkg.IInputMapper) !void {
+        var settings = InputSettings.init(allocator);
         defer settings.deinit();
+
+        // Populate settings from interface
+        inline for (std.meta.fields(GameAction)) |field| {
+            const action: GameAction = @enumFromInt(field.value);
+            settings.input_mapper.bindings[@intFromEnum(action)] = mapper.getBinding(action);
+        }
+
         try settings.save();
     }
 
@@ -165,15 +203,23 @@ pub const InputSettings = struct {
         return try aw.toOwnedSlice();
     }
 
-    fn parseJson(self: *InputSettings, data: []const u8) !void {
+    fn parseJson(self: *InputSettings, data: []const u8) !bool {
         var parsed_value = try std.json.parseFromSlice(std.json.Value, self.allocator, data, .{});
         defer parsed_value.deinit();
 
         const root = parsed_value.value;
         if (root != .object) return error.InvalidFormat;
 
-        const version: i64 = if (root.object.get("version")) |v| (if (v == .integer) v.integer else 1) else 1;
+        const version_val = root.object.get("version");
+        const version: i64 = if (version_val) |v| (if (v == .integer) v.integer else 1) else 1;
         const bindings_val = root.object.get("bindings") orelse return error.MissingBindings;
+
+        log.log.info("InputSettings: Loading settings file (version {})", .{version});
+
+        var migrated = false;
+        if (version < CURRENT_VERSION) {
+            migrated = true;
+        }
 
         if (version < 3) {
             // Legacy array format
@@ -206,6 +252,7 @@ pub const InputSettings = struct {
                 }
             }
         }
+        return migrated;
     }
 };
 
@@ -240,7 +287,7 @@ test "InputSettings version migration" {
     settings.input_mapper.resetToDefaults();
 
     // Parse V1
-    try settings.parseJson(v1_json);
+    _ = try settings.parseJson(v1_json);
 
     // Verify move_forward (index 0) was updated to W (119)
     try std.testing.expect(settings.input_mapper.getBinding(.move_forward).primary.key == .w);
@@ -268,7 +315,7 @@ test "InputSettings V3 object format" {
     settings.input_mapper.resetToDefaults();
 
     // Parse V3
-    try settings.parseJson(v3_json);
+    _ = try settings.parseJson(v3_json);
 
     // Verify bindings
     try std.testing.expect(settings.input_mapper.getBinding(.move_forward).primary.key == .w);

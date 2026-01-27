@@ -354,8 +354,8 @@ pub const App = struct {
             .env_map_ptr = &self.env_map,
             .shader = self.shader,
             .settings = &self.settings,
-            .input = &self.input,
-            .input_mapper = &self.input_mapper,
+            .input = self.input.interface(),
+            .input_mapper = self.input_mapper.interface(),
             .time = &self.time,
             .screen_manager = &self.screen_manager,
             .safe_render_mode = self.safe_render_mode,
@@ -370,7 +370,7 @@ pub const App = struct {
 
     pub fn saveAllSettings(self: *const App) void {
         settings_pkg.persistence.save(&self.settings, self.allocator);
-        InputSettings.saveFromMapper(self.allocator, self.input_mapper) catch |err| {
+        InputSettings.saveFromMapper(self.allocator, self.input_mapper.interface()) catch |err| {
             log.log.err("Failed to save input settings: {}", .{err});
         };
     }
@@ -382,7 +382,7 @@ pub const App = struct {
         self.input.beginFrame();
         self.input.pollEvents();
 
-        if (self.input_mapper.isActionPressed(&self.input, .toggle_timing_overlay)) {
+        if (self.input_mapper.isActionPressed(self.input.interface(), .toggle_timing_overlay)) {
             const now = self.time.elapsed;
             if (now - self.last_debug_toggle_time > 0.2) {
                 self.timing_overlay.toggle();
@@ -391,9 +391,9 @@ pub const App = struct {
             }
         }
 
-        if (self.ui) |*u| u.resize(self.input.window_width, self.input.window_height);
+        if (self.ui) |*u| u.resize(self.input.interface().getWindowWidth(), self.input.interface().getWindowHeight());
 
-        self.rhi.setViewport(self.input.window_width, self.input.window_height);
+        self.rhi.setViewport(self.input.interface().getWindowWidth(), self.input.interface().getWindowHeight());
 
         self.rhi.beginFrame();
         errdefer self.rhi.endFrame();
@@ -467,9 +467,9 @@ pub const App = struct {
     }
 
     pub fn run(self: *App) !void {
-        self.rhi.setViewport(self.input.window_width, self.input.window_height);
+        self.rhi.setViewport(self.input.interface().getWindowWidth(), self.input.interface().getWindowHeight());
         log.log.info("=== ZigCraft ===", .{});
-        while (!self.input.should_quit) {
+        while (!self.input.interface().shouldQuit()) {
             try self.runSingleFrame();
         }
     }
