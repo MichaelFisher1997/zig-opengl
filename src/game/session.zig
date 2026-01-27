@@ -227,9 +227,9 @@ pub const GameSession = struct {
                 if (mapper.isActionPressed(input, .slot_7)) self.inventory.selectSlot(6);
                 if (mapper.isActionPressed(input, .slot_8)) self.inventory.selectSlot(7);
                 if (mapper.isActionPressed(input, .slot_9)) self.inventory.selectSlot(8);
-                const scroll = input.getScrollDelta();
-                if (scroll.y != 0) {
-                    self.inventory.scrollSelection(@intFromFloat(scroll.y));
+                const scroll_y = input.getScrollDelta().y;
+                if (scroll_y != 0) {
+                    self.inventory.scrollSelection(@intFromFloat(scroll_y));
                 }
             }
 

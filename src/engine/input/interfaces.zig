@@ -1,3 +1,9 @@
+//! Input system interfaces for hardware abstraction and decoupling.
+//!
+//! Following SOLID principles (specifically DIP and ISP), these interfaces
+//! allow gameplay systems to query input state without depending on
+//! specific backends like SDL.
+
 const std = @import("std");
 const core_interfaces = @import("../core/interfaces.zig");
 const Key = core_interfaces.Key;

@@ -35,9 +35,11 @@ pub const MapController = struct {
                 self.map_pos_z = camera.position.z;
                 self.map_target_zoom = self.map_zoom;
                 self.map_needs_update = true;
-                input.setMouseCapture(@ptrCast(@alignCast(window)), false);
+                const any_window: ?*anyopaque = @ptrCast(@alignCast(window));
+                input.setMouseCapture(any_window, false);
             } else {
-                input.setMouseCapture(@ptrCast(@alignCast(window)), true);
+                const any_window: ?*anyopaque = @ptrCast(@alignCast(window));
+                input.setMouseCapture(any_window, true);
             }
         }
 
