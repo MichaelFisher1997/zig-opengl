@@ -419,7 +419,7 @@ pub const InputMapper = struct {
         _ = self;
         return switch (binding) {
             .key, .key_alt => |k| input.isKeyReleased(k),
-            .mouse_button => false, // Mouse button release not currently tracked per-frame in Input
+            .mouse_button => |mb| input.isMouseButtonReleased(mb),
             .none => false,
         };
     }

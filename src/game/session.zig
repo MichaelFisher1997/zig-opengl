@@ -195,8 +195,8 @@ pub const GameSession = struct {
         // Update Camera from Player
         self.camera = self.player.camera;
 
-        const screen_w: f32 = @floatFromInt(input.window_width);
-        const screen_h: f32 = @floatFromInt(input.window_height);
+        const screen_w: f32 = @floatFromInt(input_iface.getWindowWidth());
+        const screen_h: f32 = @floatFromInt(input_iface.getWindowHeight());
 
         if (!paused) {
             if (mapper.isActionPressed(input_iface, .toggle_fps)) self.debug_show_fps = !self.debug_show_fps;
@@ -213,7 +213,7 @@ pub const GameSession = struct {
 
             if (mapper.isActionPressed(input_iface, .inventory)) {
                 self.inventory_ui_state.toggle();
-                input.setMouseCapture(window, !self.inventory_ui_state.visible);
+                input_iface.setMouseCapture(@ptrCast(window), !self.inventory_ui_state.visible);
             }
 
             if (!self.inventory_ui_state.visible) {
@@ -226,8 +226,9 @@ pub const GameSession = struct {
                 if (mapper.isActionPressed(input_iface, .slot_7)) self.inventory.selectSlot(6);
                 if (mapper.isActionPressed(input_iface, .slot_8)) self.inventory.selectSlot(7);
                 if (mapper.isActionPressed(input_iface, .slot_9)) self.inventory.selectSlot(8);
-                if (input.scroll_y != 0) {
-                    self.inventory.scrollSelection(@intFromFloat(input.scroll_y));
+                const scroll = input_iface.getScrollDelta();
+                if (scroll.y != 0) {
+                    self.inventory.scrollSelection(@intFromFloat(scroll.y));
                 }
             }
 

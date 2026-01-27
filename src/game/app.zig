@@ -391,9 +391,9 @@ pub const App = struct {
             }
         }
 
-        if (self.ui) |*u| u.resize(self.input.window_width, self.input.window_height);
+        if (self.ui) |*u| u.resize(self.input.interface().getWindowWidth(), self.input.interface().getWindowHeight());
 
-        self.rhi.setViewport(self.input.window_width, self.input.window_height);
+        self.rhi.setViewport(self.input.interface().getWindowWidth(), self.input.interface().getWindowHeight());
 
         self.rhi.beginFrame();
         errdefer self.rhi.endFrame();
@@ -467,9 +467,9 @@ pub const App = struct {
     }
 
     pub fn run(self: *App) !void {
-        self.rhi.setViewport(self.input.window_width, self.input.window_height);
+        self.rhi.setViewport(self.input.interface().getWindowWidth(), self.input.interface().getWindowHeight());
         log.log.info("=== ZigCraft ===", .{});
-        while (!self.input.should_quit) {
+        while (!self.input.interface().shouldQuit()) {
             try self.runSingleFrame();
         }
     }

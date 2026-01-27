@@ -16,9 +16,14 @@ pub const IRawInputProvider = struct {
         isKeyReleased: *const fn (ptr: *anyopaque, key: Key) bool,
         isMouseButtonDown: *const fn (ptr: *anyopaque, button: MouseButton) bool,
         isMouseButtonPressed: *const fn (ptr: *anyopaque, button: MouseButton) bool,
+        isMouseButtonReleased: *const fn (ptr: *anyopaque, button: MouseButton) bool,
         getMouseDelta: *const fn (ptr: *anyopaque) MousePosition,
         getMousePosition: *const fn (ptr: *anyopaque) MousePosition,
         getScrollDelta: *const fn (ptr: *anyopaque) ScrollDelta,
+        getWindowWidth: *const fn (ptr: *anyopaque) u32,
+        getWindowHeight: *const fn (ptr: *anyopaque) u32,
+        shouldQuit: *const fn (ptr: *anyopaque) bool,
+        setShouldQuit: *const fn (ptr: *anyopaque, quit: bool) void,
         isMouseCaptured: *const fn (ptr: *anyopaque) bool,
         setMouseCapture: *const fn (ptr: *anyopaque, window: ?*anyopaque, captured: bool) void,
     };
@@ -43,6 +48,10 @@ pub const IRawInputProvider = struct {
         return self.vtable.isMouseButtonPressed(self.ptr, button);
     }
 
+    pub fn isMouseButtonReleased(self: IRawInputProvider, button: MouseButton) bool {
+        return self.vtable.isMouseButtonReleased(self.ptr, button);
+    }
+
     pub fn getMouseDelta(self: IRawInputProvider) MousePosition {
         return self.vtable.getMouseDelta(self.ptr);
     }
@@ -53,6 +62,22 @@ pub const IRawInputProvider = struct {
 
     pub fn getScrollDelta(self: IRawInputProvider) ScrollDelta {
         return self.vtable.getScrollDelta(self.ptr);
+    }
+
+    pub fn getWindowWidth(self: IRawInputProvider) u32 {
+        return self.vtable.getWindowWidth(self.ptr);
+    }
+
+    pub fn getWindowHeight(self: IRawInputProvider) u32 {
+        return self.vtable.getWindowHeight(self.ptr);
+    }
+
+    pub fn shouldQuit(self: IRawInputProvider) bool {
+        return self.vtable.shouldQuit(self.ptr);
+    }
+
+    pub fn setShouldQuit(self: IRawInputProvider, quit: bool) void {
+        self.vtable.setShouldQuit(self.ptr, quit);
     }
 
     pub fn isMouseCaptured(self: IRawInputProvider) bool {

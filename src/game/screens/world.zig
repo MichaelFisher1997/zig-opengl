@@ -58,7 +58,7 @@ pub const WorldScreen = struct {
         }
 
         if (ctx.input_mapper.isActionPressed(ctx.input.interface(), .tab_menu)) {
-            ctx.input.setMouseCapture(ctx.window_manager.window, !ctx.input.mouse_captured);
+            ctx.input.interface().setMouseCapture(@ptrCast(ctx.window_manager.window), !ctx.input.interface().isMouseCaptured());
         }
         if (can_toggle_debug and ctx.input_mapper.isActionPressed(ctx.input.interface(), .toggle_wireframe)) {
             ctx.settings.wireframe_enabled = !ctx.settings.wireframe_enabled;
@@ -98,8 +98,8 @@ pub const WorldScreen = struct {
         const ctx = self.context;
         const camera = &self.session.player.camera;
 
-        const screen_w: f32 = @floatFromInt(ctx.input.window_width);
-        const screen_h: f32 = @floatFromInt(ctx.input.window_height);
+        const screen_w: f32 = @floatFromInt(ctx.input.interface().getWindowWidth());
+        const screen_h: f32 = @floatFromInt(ctx.input.interface().getWindowHeight());
         const aspect = screen_w / screen_h;
 
         const view_proj_render = Mat4.perspectiveReverseZ(camera.fov, aspect, camera.near, camera.far).multiply(camera.getViewMatrixOriginCentered());
