@@ -111,8 +111,8 @@ const ModelUniforms = extern struct {
 
 /// Per-draw shadow matrix and model, passed via push constants.
 const ShadowModelUniforms = extern struct {
-    light_space_matrix: Mat4,
-    model: Mat4,
+    mvp: Mat4,
+    bias_params: [4]f32, // x=normalBias, y=slopeBias, z=cascadeIndex, w=texelSize
 };
 
 /// Push constants for procedural sky rendering.
@@ -231,6 +231,7 @@ const VulkanContext = struct {
     shadow_system: ShadowSystem,
     ssao_system: SSAOSystem = .{},
     shadow_map_handles: [rhi.SHADOW_CASCADE_COUNT]rhi.TextureHandle = .{0} ** rhi.SHADOW_CASCADE_COUNT,
+    shadow_texel_sizes: [rhi.SHADOW_CASCADE_COUNT]f32 = .{0.0} ** rhi.SHADOW_CASCADE_COUNT,
     shadow_resolution: u32,
     memory_type_index: u32,
     framebuffer_resized: bool,
@@ -544,37 +545,6 @@ fn getMSAASampleCountFlag(samples: u8) c.VkSampleCountFlagBits {
         4 => c.VK_SAMPLE_COUNT_4_BIT,
         8 => c.VK_SAMPLE_COUNT_8_BIT,
         else => c.VK_SAMPLE_COUNT_1_BIT,
-    };
-}
-
-/// Creates a buffer with specified usage and memory properties.
-fn createVulkanBuffer(ctx: *VulkanContext, size: usize, usage: c.VkBufferUsageFlags, properties: c.VkMemoryPropertyFlags) !VulkanBuffer {
-    var buffer_info = std.mem.zeroes(c.VkBufferCreateInfo);
-    buffer_info.sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buffer_info.size = @intCast(size);
-    buffer_info.usage = usage;
-    buffer_info.sharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
-
-    var buffer: c.VkBuffer = null;
-    try Utils.checkVk(c.vkCreateBuffer(ctx.vulkan_device.vk_device, &buffer_info, null, &buffer));
-
-    var mem_reqs: c.VkMemoryRequirements = undefined;
-    c.vkGetBufferMemoryRequirements(ctx.vulkan_device.vk_device, buffer, &mem_reqs);
-
-    var alloc_info = std.mem.zeroes(c.VkMemoryAllocateInfo);
-    alloc_info.sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    alloc_info.allocationSize = mem_reqs.size;
-    alloc_info.memoryTypeIndex = try Utils.findMemoryType(ctx.vulkan_device.physical_device, mem_reqs.memoryTypeBits, properties);
-
-    var memory: c.VkDeviceMemory = null;
-    try Utils.checkVk(c.vkAllocateMemory(ctx.vulkan_device.vk_device, &alloc_info, null, &memory));
-    try Utils.checkVk(c.vkBindBufferMemory(ctx.vulkan_device.vk_device, buffer, memory, 0));
-
-    return .{
-        .buffer = buffer,
-        .memory = memory,
-        .size = mem_reqs.size,
-        .is_host_visible = (properties & c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0,
     };
 }
 
@@ -1009,7 +979,7 @@ fn createShadowResources(ctx: *VulkanContext) !void {
         sampler_info.addressModeW = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
         sampler_info.anisotropyEnable = c.VK_FALSE;
         sampler_info.maxAnisotropy = 1.0;
-        sampler_info.borderColor = c.VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+        sampler_info.borderColor = c.VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
         sampler_info.compareEnable = c.VK_TRUE;
         sampler_info.compareOp = c.VK_COMPARE_OP_GREATER_OR_EQUAL;
 
@@ -1070,14 +1040,15 @@ fn createShadowResources(ctx: *VulkanContext) !void {
     };
 
     const shadow_binding = c.VkVertexInputBindingDescription{ .binding = 0, .stride = @sizeOf(rhi.Vertex), .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX };
-    var shadow_attrs: [1]c.VkVertexInputAttributeDescription = undefined;
+    var shadow_attrs: [2]c.VkVertexInputAttributeDescription = undefined;
     shadow_attrs[0] = .{ .binding = 0, .location = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 };
+    shadow_attrs[1] = .{ .binding = 0, .location = 1, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = 24 }; // normal offset
 
     var shadow_vertex_input = std.mem.zeroes(c.VkPipelineVertexInputStateCreateInfo);
     shadow_vertex_input.sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     shadow_vertex_input.vertexBindingDescriptionCount = 1;
     shadow_vertex_input.pVertexBindingDescriptions = &shadow_binding;
-    shadow_vertex_input.vertexAttributeDescriptionCount = 1;
+    shadow_vertex_input.vertexAttributeDescriptionCount = 2;
     shadow_vertex_input.pVertexAttributeDescriptions = &shadow_attrs[0];
 
     var shadow_input_assembly = std.mem.zeroes(c.VkPipelineInputAssemblyStateCreateInfo);
@@ -1088,7 +1059,7 @@ fn createShadowResources(ctx: *VulkanContext) !void {
     shadow_rasterizer.sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     shadow_rasterizer.lineWidth = 1.0;
     shadow_rasterizer.cullMode = c.VK_CULL_MODE_NONE;
-    shadow_rasterizer.frontFace = c.VK_FRONT_FACE_CLOCKWISE;
+    shadow_rasterizer.frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE;
     shadow_rasterizer.depthBiasEnable = c.VK_TRUE;
 
     var shadow_multisampling = std.mem.zeroes(c.VkPipelineMultisampleStateCreateInfo);
@@ -3807,11 +3778,9 @@ fn drawDepthTexture(ctx_ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.R
         debug_x,           debug_y + debug_h, 0.0, 1.0,
     };
 
-    // Map and copy vertices to debug shadow VBO
-    var map_ptr: ?*anyopaque = null;
-    if (c.vkMapMemory(ctx.vulkan_device.vk_device, ctx.debug_shadow.vbo.memory, 0, @sizeOf(@TypeOf(debug_vertices)), 0, &map_ptr) == c.VK_SUCCESS) {
-        @memcpy(@as([*]u8, @ptrCast(map_ptr.?))[0..@sizeOf(@TypeOf(debug_vertices))], std.mem.asBytes(&debug_vertices));
-        c.vkUnmapMemory(ctx.vulkan_device.vk_device, ctx.debug_shadow.vbo.memory);
+    // Use persistently mapped memory if available
+    if (ctx.debug_shadow.vbo.mapped_ptr) |ptr| {
+        @memcpy(@as([*]u8, @ptrCast(ptr))[0..@sizeOf(@TypeOf(debug_vertices))], std.mem.asBytes(&debug_vertices));
 
         const offset: c.VkDeviceSize = 0;
         c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &ctx.debug_shadow.vbo.buffer, &offset);
@@ -4175,9 +4144,11 @@ fn drawIndirect(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, command_buffer: r
             c.vkCmdBindDescriptorSets(cb, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, descriptor_set, 0, null);
 
             if (use_shadow) {
+                const cascade_index = ctx.shadow_system.pass_index;
+                const texel_size = ctx.shadow_texel_sizes[cascade_index];
                 const shadow_uniforms = ShadowModelUniforms{
-                    .light_space_matrix = ctx.shadow_system.pass_matrix,
-                    .model = Mat4.identity,
+                    .mvp = ctx.shadow_system.pass_matrix,
+                    .bias_params = .{ 2.0, 1.0, @floatFromInt(cascade_index), texel_size },
                 };
                 c.vkCmdPushConstants(cb, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
             } else {
@@ -4197,9 +4168,8 @@ fn drawIndirect(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, command_buffer: r
                 const map_size: usize = @as(usize, @intCast(draw_count)) * stride_bytes;
                 const cmd_size: usize = @intCast(cmd.size);
                 if (offset <= cmd_size and map_size <= cmd_size - offset) {
-                    var map_ptr: ?*anyopaque = null;
-                    if (c.vkMapMemory(ctx.vulkan_device.vk_device, cmd.memory, 0, cmd.size, 0, &map_ptr) == c.VK_SUCCESS and map_ptr != null) {
-                        const base = @as([*]const u8, @ptrCast(map_ptr.?)) + offset;
+                    if (cmd.mapped_ptr) |ptr| {
+                        const base = @as([*]const u8, @ptrCast(ptr)) + offset;
                         var draw_index: u32 = 0;
                         while (draw_index < draw_count) : (draw_index += 1) {
                             const cmd_ptr = @as(*const rhi.DrawIndirectCommand, @ptrCast(@alignCast(base + @as(usize, draw_index) * stride_bytes)));
@@ -4207,10 +4177,8 @@ fn drawIndirect(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, command_buffer: r
                             if (draw_cmd.vertexCount == 0 or draw_cmd.instanceCount == 0) continue;
                             c.vkCmdDraw(cb, draw_cmd.vertexCount, draw_cmd.instanceCount, draw_cmd.firstVertex, draw_cmd.firstInstance);
                         }
-                        c.vkUnmapMemory(ctx.vulkan_device.vk_device, cmd.memory);
                         return;
                     }
-                    if (map_ptr != null) c.vkUnmapMemory(ctx.vulkan_device.vk_device, cmd.memory);
                 } else {
                     std.log.warn("drawIndirect: command buffer range out of bounds (offset={}, size={}, buffer={})", .{ offset, map_size, cmd_size });
                 }
@@ -4277,9 +4245,11 @@ fn drawInstance(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, insta
         c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, descriptor_set, 0, null);
 
         if (use_shadow) {
+            const cascade_index = ctx.shadow_system.pass_index;
+            const texel_size = ctx.shadow_texel_sizes[cascade_index];
             const shadow_uniforms = ShadowModelUniforms{
-                .light_space_matrix = ctx.shadow_system.pass_matrix,
-                .model = Mat4.identity,
+                .mvp = ctx.shadow_system.pass_matrix.multiply(ctx.current_model),
+                .bias_params = .{ 2.0, 1.0, @floatFromInt(cascade_index), texel_size },
             };
             c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
         } else {
@@ -4380,9 +4350,11 @@ fn drawOffset(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: r
         }
 
         if (use_shadow) {
+            const cascade_index = ctx.shadow_system.pass_index;
+            const texel_size = ctx.shadow_texel_sizes[cascade_index];
             const shadow_uniforms = ShadowModelUniforms{
-                .light_space_matrix = ctx.shadow_system.pass_matrix,
-                .model = ctx.current_model,
+                .mvp = ctx.shadow_system.pass_matrix.multiply(ctx.current_model),
+                .bias_params = .{ 2.0, 1.0, @floatFromInt(cascade_index), texel_size },
             };
             c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
         } else {
@@ -4481,10 +4453,12 @@ fn begin2DPass(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void 
     ctx.ui_screen_height = screen_height;
     ctx.ui_in_progress = true;
 
-    // Map current frame's UI VBO memory
+    // Use persistently mapped memory if available
     const ui_vbo = ctx.ui_vbos[ctx.frames.current_frame];
-    if (c.vkMapMemory(ctx.vulkan_device.vk_device, ui_vbo.memory, 0, ui_vbo.size, 0, &ctx.ui_mapped_ptr) != c.VK_SUCCESS) {
-        std.log.err("Failed to map UI VBO memory!", .{});
+    if (ui_vbo.mapped_ptr) |ptr| {
+        ctx.ui_mapped_ptr = ptr;
+    } else {
+        std.log.err("UI VBO memory not mapped!", .{});
     }
 
     // Bind UI pipeline and VBO
@@ -4510,11 +4484,7 @@ fn end2DPass(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     if (!ctx.ui_in_progress) return;
 
-    if (ctx.ui_mapped_ptr != null) {
-        const ui_vbo = ctx.ui_vbos[ctx.frames.current_frame];
-        c.vkUnmapMemory(ctx.vulkan_device.vk_device, ui_vbo.memory);
-        ctx.ui_mapped_ptr = null;
-    }
+    ctx.ui_mapped_ptr = null;
 
     flushUI(ctx);
     if (ctx.ui_using_swapchain) {
@@ -4783,6 +4753,8 @@ fn updateShadowUniforms(ctx_ptr: *anyopaque, params: rhi.ShadowParams) void {
     var sizes = [_]f32{ 0, 0, 0, 0 };
     @memcpy(splits[0..rhi.SHADOW_CASCADE_COUNT], &params.cascade_splits);
     @memcpy(sizes[0..rhi.SHADOW_CASCADE_COUNT], &params.shadow_texel_sizes);
+
+    @memcpy(&ctx.shadow_texel_sizes, &params.shadow_texel_sizes);
 
     const shadow_uniforms = ShadowUniforms{
         .light_space_matrices = params.light_space_matrices,
