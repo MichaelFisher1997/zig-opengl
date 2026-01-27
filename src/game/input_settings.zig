@@ -80,6 +80,29 @@ pub const InputSettings = struct {
             };
         }
 
+        // --- SANITY CHECK FOR BROKEN MIGRATIONS ---
+        // If critical debug actions are mapped to Escape (common symptom of shifted indices), reset them.
+        const g_bind = settings.input_mapper.getBinding(.toggle_shadow_debug_vis);
+        const f4_bind = settings.input_mapper.getBinding(.toggle_timing_overlay);
+        var healed = false;
+
+        if (g_bind.primary == .key and g_bind.primary.key == .escape) {
+            log.log.warn("InputSettings: Detected broken G-key mapping (mapped to Escape). Resetting to Default (G).", .{});
+            settings.input_mapper.resetActionToDefault(.toggle_shadow_debug_vis);
+            healed = true;
+        }
+        if (f4_bind.primary == .key and f4_bind.primary.key == .escape) {
+            log.log.warn("InputSettings: Detected broken F4-key mapping (mapped to Escape). Resetting to Default (F4).", .{});
+            settings.input_mapper.resetActionToDefault(.toggle_timing_overlay);
+            healed = true;
+        }
+
+        if (healed) {
+            settings.save() catch {};
+        }
+
+        log.log.info("InputSettings: toggle_shadow_debug_vis is bound to {s}", .{settings.input_mapper.getBinding(.toggle_shadow_debug_vis).primary.getName()});
+
         return settings;
     }
 
