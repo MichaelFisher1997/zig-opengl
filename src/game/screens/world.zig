@@ -10,6 +10,7 @@ const rhi_pkg = @import("../../engine/graphics/rhi.zig");
 const render_graph_pkg = @import("../../engine/graphics/render_graph.zig");
 const PausedScreen = @import("paused.zig").PausedScreen;
 const DebugShadowOverlay = @import("../../engine/ui/debug_shadow_overlay.zig").DebugShadowOverlay;
+const log = @import("../../engine/core/log.zig");
 
 pub const WorldScreen = struct {
     context: EngineContext,
@@ -75,6 +76,7 @@ pub const WorldScreen = struct {
             self.last_debug_toggle_time = now;
         }
         if (can_toggle_debug and ctx.input_mapper.isActionPressed(ctx.input.interface(), .toggle_shadow_debug_vis)) {
+            log.log.info("Toggling shadow debug visualization (G pressed)", .{});
             ctx.settings.debug_shadows_active = !ctx.settings.debug_shadows_active;
             ctx.rhi.*.setDebugShadowView(ctx.settings.debug_shadows_active);
             self.last_debug_toggle_time = now;
