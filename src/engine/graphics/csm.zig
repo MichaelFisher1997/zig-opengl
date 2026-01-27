@@ -45,6 +45,7 @@ pub fn computeCascades(resolution: u32, camera_fov: f32, aspect: f32, near: f32,
 
     // Calculate matrices for each cascade
     var last_split = near;
+    const inv_cam_view = cam_view.inverse();
     for (0..CASCADE_COUNT) |i| {
         const split = cascades.cascade_splits[i];
 
@@ -65,7 +66,6 @@ pub fn computeCascades(resolution: u32, camera_fov: f32, aspect: f32, near: f32,
         radius = @ceil(radius * 16.0) / 16.0;
 
         // 2. Transform center to World Space
-        const inv_cam_view = cam_view.inverse();
         const center_world = inv_cam_view.transformPoint(center_view);
 
         // 3. Build Light Rotation Matrix (Looking FROM sun TO scene)

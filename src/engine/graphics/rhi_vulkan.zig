@@ -1019,11 +1019,6 @@ fn createShadowResources(ctx: *VulkanContext) !void {
         ctx.shadow_system.shadow_image_layouts[si] = c.VK_IMAGE_LAYOUT_UNDEFINED;
     }
 
-    if (ctx.shadow_system.shadow_pipeline != null) {
-        c.vkDestroyPipeline(vk, ctx.shadow_system.shadow_pipeline, null);
-        ctx.shadow_system.shadow_pipeline = null;
-    }
-
     const shadow_vert = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/shadow.vert.spv", ctx.allocator, @enumFromInt(1024 * 1024));
     defer ctx.allocator.free(shadow_vert);
     const shadow_frag = try std.fs.cwd().readFileAlloc("assets/shaders/vulkan/shadow.frag.spv", ctx.allocator, @enumFromInt(1024 * 1024));
@@ -1107,7 +1102,14 @@ fn createShadowResources(ctx: *VulkanContext) !void {
     shadow_pipeline_info.layout = ctx.pipeline_layout;
     shadow_pipeline_info.renderPass = ctx.shadow_system.shadow_render_pass;
     shadow_pipeline_info.subpass = 0;
-    try Utils.checkVk(c.vkCreateGraphicsPipelines(vk, null, 1, &shadow_pipeline_info, null, &ctx.shadow_system.shadow_pipeline));
+
+    var new_pipeline: c.VkPipeline = null;
+    try Utils.checkVk(c.vkCreateGraphicsPipelines(vk, null, 1, &shadow_pipeline_info, null, &new_pipeline));
+
+    if (ctx.shadow_system.shadow_pipeline != null) {
+        c.vkDestroyPipeline(vk, ctx.shadow_system.shadow_pipeline, null);
+    }
+    ctx.shadow_system.shadow_pipeline = new_pipeline;
 }
 
 /// Updates post-process descriptor sets to include bloom texture (called after bloom resources are created)
