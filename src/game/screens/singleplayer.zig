@@ -10,6 +10,7 @@ const EngineContext = Screen.EngineContext;
 const seed_gen = @import("../seed.zig");
 const log = @import("../../engine/core/log.zig");
 const Key = @import("../../engine/core/interfaces.zig").Key;
+const IRawInputProvider = @import("../../engine/input/interfaces.zig").IRawInputProvider;
 const Input = @import("../../engine/input/input.zig").Input;
 const WorldScreen = @import("world.zig").WorldScreen;
 const registry = @import("../../world/worldgen/registry.zig");
@@ -55,7 +56,7 @@ pub const SingleplayerScreen = struct {
         const self: *@This() = @ptrCast(@alignCast(ptr));
         _ = dt;
 
-        if (self.context.input_mapper.isActionPressed(self.context.input.interface(), .ui_back)) {
+        if (self.context.input_mapper.isActionPressed(self.context.input, .ui_back)) {
             self.context.screen_manager.popScreen();
             return;
         }
@@ -77,8 +78,8 @@ pub const SingleplayerScreen = struct {
         const mouse_y: f32 = @floatFromInt(mouse_pos.y);
         const mouse_clicked = ctx.input.isMouseButtonPressed(.left);
 
-        const screen_w: f32 = @floatFromInt(ctx.input.interface().getWindowWidth());
-        const screen_h: f32 = @floatFromInt(ctx.input.interface().getWindowHeight());
+        const screen_w: f32 = @floatFromInt(ctx.input.getWindowWidth());
+        const screen_h: f32 = @floatFromInt(ctx.input.getWindowHeight());
 
         // Scale UI based on screen height
         const ui_scale: f32 = @max(1.0, screen_h / 720.0);
@@ -132,7 +133,7 @@ pub const SingleplayerScreen = struct {
         if (Widgets.drawButton(ui, .{ .x = px + 30.0 * ui_scale, .y = byy, .width = hw, .height = btn_h }, "BACK", btn_scale, mouse_x, mouse_y, mouse_clicked)) {
             ctx.screen_manager.popScreen();
         }
-        if (Widgets.drawButton(ui, .{ .x = px + 30.0 * ui_scale + hw + 15.0 * ui_scale, .y = byy, .width = hw, .height = btn_h }, "CREATE", btn_scale, mouse_x, mouse_y, mouse_clicked) or ctx.input_mapper.isActionPressed(ctx.input.interface(), .ui_confirm)) {
+        if (Widgets.drawButton(ui, .{ .x = px + 30.0 * ui_scale + hw + 15.0 * ui_scale, .y = byy, .width = hw, .height = btn_h }, "CREATE", btn_scale, mouse_x, mouse_y, mouse_clicked) or ctx.input_mapper.isActionPressed(ctx.input, .ui_confirm)) {
             // Seed is a 64-bit unsigned integer. If left blank, a random one is generated.
             const seed = try seed_gen.resolveSeed(&self.seed_input, ctx.allocator);
             log.log.info("World seed: {} | Type: {s}", .{ seed, registry.getGeneratorInfo(self.selected_generator_index).name });
@@ -147,7 +148,7 @@ pub const SingleplayerScreen = struct {
     }
 };
 
-fn handleSeedTyping(seed_input: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, input: *const Input, max_len: usize) !void {
+fn handleSeedTyping(seed_input: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, input: IRawInputProvider, max_len: usize) !void {
     if (input.isKeyPressed(.backspace)) {
         if (seed_input.items.len > 0) _ = seed_input.pop();
     }

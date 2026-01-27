@@ -41,7 +41,7 @@ pub const GraphicsScreen = struct {
         const self: *@This() = @ptrCast(@alignCast(ptr));
         _ = dt;
 
-        if (self.context.input_mapper.isActionPressed(self.context.input.interface(), .ui_back)) {
+        if (self.context.input_mapper.isActionPressed(self.context.input, .ui_back)) {
             self.context.saveSettings();
             self.context.screen_manager.popScreen();
         }
@@ -64,8 +64,8 @@ pub const GraphicsScreen = struct {
         const mouse_clicked = ctx.input.isMouseButtonPressed(.left);
         const mouse_clicked_right = ctx.input.isMouseButtonPressed(.right);
 
-        const screen_w: f32 = @floatFromInt(ctx.input.interface().getWindowWidth());
-        const screen_h: f32 = @floatFromInt(ctx.input.interface().getWindowHeight());
+        const screen_w: f32 = @floatFromInt(ctx.input.getWindowWidth());
+        const screen_h: f32 = @floatFromInt(ctx.input.getWindowHeight());
 
         const auto_scale: f32 = @max(1.0, screen_h / 720.0);
         const ui_scale: f32 = auto_scale * settings.ui_scale;

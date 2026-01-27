@@ -137,10 +137,17 @@ pub const InputSettings = struct {
         try file.writeAll(json);
     }
 
-    /// Helper to save bindings directly from a mapper.
-    pub fn saveFromMapper(allocator: std.mem.Allocator, mapper: InputMapper) !void {
-        var settings = InputSettings.initFromMapper(allocator, mapper);
+    /// Helper to save bindings directly from a mapper interface.
+    pub fn saveFromMapper(allocator: std.mem.Allocator, mapper: input_mapper_pkg.IInputMapper) !void {
+        var settings = InputSettings.init(allocator);
         defer settings.deinit();
+
+        // Populate settings from interface
+        inline for (std.meta.fields(GameAction)) |field| {
+            const action: GameAction = @enumFromInt(field.value);
+            settings.input_mapper.bindings[@intFromEnum(action)] = mapper.getBinding(action);
+        }
+
         try settings.save();
     }
 

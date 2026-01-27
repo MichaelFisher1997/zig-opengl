@@ -20,9 +20,10 @@ const block = @import("../world/block.zig");
 const block_registry = @import("../world/block_registry.zig");
 const BlockType = block.BlockType;
 const Face = block.Face;
-const input_mapper = @import("input_mapper.zig");
-const InputMapper = input_mapper.InputMapper;
-const GameAction = input_mapper.GameAction;
+const input_mapper_pkg = @import("input_mapper.zig");
+const InputMapper = input_mapper_pkg.InputMapper;
+const IInputMapper = input_mapper_pkg.IInputMapper;
+const GameAction = input_mapper_pkg.GameAction;
 
 /// Player controller with physics and block interaction.
 pub const Player = struct {
@@ -153,7 +154,7 @@ pub const Player = struct {
     pub fn update(
         self: *Player,
         input: IRawInputProvider,
-        mapper: *const InputMapper,
+        mapper: IInputMapper,
         world: *World,
         delta_time: f32,
         current_time: f32,
@@ -203,7 +204,7 @@ pub const Player = struct {
     }
 
     /// Handle double-tap space for fly mode toggle (creative only)
-    fn handleFlyToggle(self: *Player, input: IRawInputProvider, mapper: *const InputMapper, current_time: f32) void {
+    fn handleFlyToggle(self: *Player, input: IRawInputProvider, mapper: IInputMapper, current_time: f32) void {
         if (!self.can_fly) return;
 
         if (mapper.isActionReleased(input, .jump)) {
@@ -225,7 +226,7 @@ pub const Player = struct {
     }
 
     /// Get horizontal movement direction from WASD input
-    fn getMovementDirection(self: *Player, input: IRawInputProvider, mapper: *const InputMapper) Vec3 {
+    fn getMovementDirection(self: *Player, input: IRawInputProvider, mapper: IInputMapper) Vec3 {
         var move_dir = Vec3.zero;
 
         // Get horizontal forward (ignore pitch for ground movement)
@@ -256,7 +257,7 @@ pub const Player = struct {
     }
 
     /// Update player when flying (creative mode)
-    fn updateFlying(self: *Player, input: IRawInputProvider, mapper: *const InputMapper, move_dir: Vec3, delta_time: f32) void {
+    fn updateFlying(self: *Player, input: IRawInputProvider, mapper: IInputMapper, move_dir: Vec3, delta_time: f32) void {
         var vel = move_dir.scale(FLY_SPEED);
 
         // Vertical movement
@@ -277,7 +278,7 @@ pub const Player = struct {
     fn updateWalking(
         self: *Player,
         input: IRawInputProvider,
-        mapper: *const InputMapper,
+        mapper: IInputMapper,
         move_dir: Vec3,
         world: *World,
         delta_time: f32,

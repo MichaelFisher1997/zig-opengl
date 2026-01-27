@@ -12,6 +12,41 @@ const MouseButton = interfaces.MouseButton;
 const Input = @import("../engine/input/input.zig").Input;
 const IRawInputProvider = @import("../engine/input/interfaces.zig").IRawInputProvider;
 
+pub const MovementVector = struct { x: f32, z: f32 };
+
+pub const IInputMapper = struct {
+    ptr: *const anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        getBinding: *const fn (ptr: *const anyopaque, action: GameAction) ActionBinding,
+        isActionActive: *const fn (ptr: *const anyopaque, input: IRawInputProvider, action: GameAction) bool,
+        isActionPressed: *const fn (ptr: *const anyopaque, input: IRawInputProvider, action: GameAction) bool,
+        isActionReleased: *const fn (ptr: *const anyopaque, input: IRawInputProvider, action: GameAction) bool,
+        getMovementVector: *const fn (ptr: *const anyopaque, input: IRawInputProvider) MovementVector,
+    };
+
+    pub fn getBinding(self: IInputMapper, action: GameAction) ActionBinding {
+        return self.vtable.getBinding(self.ptr, action);
+    }
+
+    pub fn isActionActive(self: IInputMapper, input: IRawInputProvider, action: GameAction) bool {
+        return self.vtable.isActionActive(self.ptr, input, action);
+    }
+
+    pub fn isActionPressed(self: IInputMapper, input: IRawInputProvider, action: GameAction) bool {
+        return self.vtable.isActionPressed(self.ptr, input, action);
+    }
+
+    pub fn isActionReleased(self: IInputMapper, input: IRawInputProvider, action: GameAction) bool {
+        return self.vtable.isActionReleased(self.ptr, input, action);
+    }
+
+    pub fn getMovementVector(self: IInputMapper, input: IRawInputProvider) MovementVector {
+        return self.vtable.getMovementVector(self.ptr, input);
+    }
+};
+
 /// All logical game actions that can be triggered by input.
 /// Gameplay code should query these actions instead of specific keys.
 pub const GameAction = enum(u8) {
@@ -84,7 +119,7 @@ pub const GameAction = enum(u8) {
     cycle_cascade,
     /// Pause/resume time
     toggle_time_scale,
-    /// Toggle creative mode
+    /// Toggle creative mode (Default: F3)
     toggle_creative,
 
     // Map controls
@@ -309,39 +344,6 @@ pub const DEFAULT_BINDINGS = blk: {
     break :blk bindings;
 };
 
-pub const IInputMapper = struct {
-    ptr: *const anyopaque,
-    vtable: *const VTable,
-
-    pub const VTable = struct {
-        getBinding: *const fn (ptr: *const anyopaque, action: GameAction) ActionBinding,
-        isActionActive: *const fn (ptr: *const anyopaque, input: IRawInputProvider, action: GameAction) bool,
-        isActionPressed: *const fn (ptr: *const anyopaque, input: IRawInputProvider, action: GameAction) bool,
-        isActionReleased: *const fn (ptr: *const anyopaque, input: IRawInputProvider, action: GameAction) bool,
-        getMovementVector: *const fn (ptr: *const anyopaque, input: IRawInputProvider) struct { x: f32, z: f32 },
-    };
-
-    pub fn getBinding(self: IInputMapper, action: GameAction) ActionBinding {
-        return self.vtable.getBinding(self.ptr, action);
-    }
-
-    pub fn isActionActive(self: IInputMapper, input: IRawInputProvider, action: GameAction) bool {
-        return self.vtable.isActionActive(self.ptr, input, action);
-    }
-
-    pub fn isActionPressed(self: IInputMapper, input: IRawInputProvider, action: GameAction) bool {
-        return self.vtable.isActionPressed(self.ptr, input, action);
-    }
-
-    pub fn isActionReleased(self: IInputMapper, input: IRawInputProvider, action: GameAction) bool {
-        return self.vtable.isActionReleased(self.ptr, input, action);
-    }
-
-    pub fn getMovementVector(self: IInputMapper, input: IRawInputProvider) struct { x: f32, z: f32 } {
-        return self.vtable.getMovementVector(self.ptr, input);
-    }
-};
-
 /// Input mapper that translates physical inputs to logical game actions.
 pub const InputMapper = struct {
     /// Current bindings for all actions
@@ -425,7 +427,7 @@ pub const InputMapper = struct {
     }
 
     /// Get movement vector based on current bindings.
-    pub fn getMovementVector(self: *const InputMapper, input: IRawInputProvider) struct { x: f32, z: f32 } {
+    pub fn getMovementVector(self: *const InputMapper, input: IRawInputProvider) MovementVector {
         var x: f32 = 0;
         var z: f32 = 0;
         if (self.isActionActive(input, .move_forward)) z += 1;
@@ -498,7 +500,7 @@ pub const InputMapper = struct {
         return self.isActionReleased(input, action);
     }
 
-    fn impl_getMovementVector(ptr: *const anyopaque, input: IRawInputProvider) struct { x: f32, z: f32 } {
+    fn impl_getMovementVector(ptr: *const anyopaque, input: IRawInputProvider) MovementVector {
         const self: *const InputMapper = @ptrCast(@alignCast(ptr));
         return self.getMovementVector(input);
     }

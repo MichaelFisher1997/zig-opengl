@@ -43,7 +43,7 @@ pub const PausedScreen = struct {
         const self: *@This() = @ptrCast(@alignCast(ptr));
         _ = dt;
 
-        if (self.context.input_mapper.isActionPressed(self.context.input.interface(), .ui_back)) {
+        if (self.context.input_mapper.isActionPressed(self.context.input, .ui_back)) {
             self.context.screen_manager.popScreen();
         }
     }
@@ -58,8 +58,8 @@ pub const PausedScreen = struct {
         ui.begin();
         defer ui.end();
 
-        const screen_w: f32 = @floatFromInt(ctx.input.interface().getWindowWidth());
-        const screen_h: f32 = @floatFromInt(ctx.input.interface().getWindowHeight());
+        const screen_w: f32 = @floatFromInt(ctx.input.getWindowWidth());
+        const screen_h: f32 = @floatFromInt(ctx.input.getWindowHeight());
 
         const mouse_pos = ctx.input.getMousePosition();
         const mouse_x: f32 = @floatFromInt(mouse_pos.x);

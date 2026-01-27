@@ -354,8 +354,8 @@ pub const App = struct {
             .env_map_ptr = &self.env_map,
             .shader = self.shader,
             .settings = &self.settings,
-            .input = &self.input,
-            .input_mapper = &self.input_mapper,
+            .input = self.input.interface(),
+            .input_mapper = self.input_mapper.interface(),
             .time = &self.time,
             .screen_manager = &self.screen_manager,
             .safe_render_mode = self.safe_render_mode,
@@ -370,7 +370,7 @@ pub const App = struct {
 
     pub fn saveAllSettings(self: *const App) void {
         settings_pkg.persistence.save(&self.settings, self.allocator);
-        InputSettings.saveFromMapper(self.allocator, self.input_mapper) catch |err| {
+        InputSettings.saveFromMapper(self.allocator, self.input_mapper.interface()) catch |err| {
             log.log.err("Failed to save input settings: {}", .{err});
         };
     }

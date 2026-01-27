@@ -50,32 +50,32 @@ pub const WorldScreen = struct {
         const now = ctx.time.elapsed;
         const can_toggle_debug = now - self.last_debug_toggle_time > 0.2;
 
-        if (ctx.input_mapper.isActionPressed(ctx.input.interface(), .ui_back)) {
+        if (ctx.input_mapper.isActionPressed(ctx.input, .ui_back)) {
             const paused_screen = try PausedScreen.init(ctx.allocator, ctx);
             errdefer paused_screen.deinit(paused_screen);
             ctx.screen_manager.pushScreen(paused_screen.screen());
             return;
         }
 
-        if (ctx.input_mapper.isActionPressed(ctx.input.interface(), .tab_menu)) {
-            ctx.input.interface().setMouseCapture(@ptrCast(ctx.window_manager.window), !ctx.input.interface().isMouseCaptured());
+        if (ctx.input_mapper.isActionPressed(ctx.input, .tab_menu)) {
+            ctx.input.setMouseCapture(@ptrCast(@alignCast(ctx.window_manager.window)), !ctx.input.isMouseCaptured());
         }
-        if (can_toggle_debug and ctx.input_mapper.isActionPressed(ctx.input.interface(), .toggle_wireframe)) {
+        if (can_toggle_debug and ctx.input_mapper.isActionPressed(ctx.input, .toggle_wireframe)) {
             ctx.settings.wireframe_enabled = !ctx.settings.wireframe_enabled;
             ctx.rhi.*.setWireframe(ctx.settings.wireframe_enabled);
             self.last_debug_toggle_time = now;
         }
-        if (can_toggle_debug and ctx.input_mapper.isActionPressed(ctx.input.interface(), .toggle_textures)) {
+        if (can_toggle_debug and ctx.input_mapper.isActionPressed(ctx.input, .toggle_textures)) {
             ctx.settings.textures_enabled = !ctx.settings.textures_enabled;
             ctx.rhi.*.setTexturesEnabled(ctx.settings.textures_enabled);
             self.last_debug_toggle_time = now;
         }
-        if (can_toggle_debug and ctx.input_mapper.isActionPressed(ctx.input.interface(), .toggle_vsync)) {
+        if (can_toggle_debug and ctx.input_mapper.isActionPressed(ctx.input, .toggle_vsync)) {
             ctx.settings.vsync = !ctx.settings.vsync;
             ctx.rhi.*.setVSync(ctx.settings.vsync);
             self.last_debug_toggle_time = now;
         }
-        if (can_toggle_debug and ctx.input_mapper.isActionPressed(ctx.input.interface(), .toggle_shadow_debug_vis)) {
+        if (can_toggle_debug and ctx.input_mapper.isActionPressed(ctx.input, .toggle_shadow_debug_vis)) {
             log.log.info("Toggling shadow debug visualization (G pressed)", .{});
             ctx.settings.debug_shadows_active = !ctx.settings.debug_shadows_active;
             ctx.rhi.*.setDebugShadowView(ctx.settings.debug_shadows_active);
@@ -98,8 +98,8 @@ pub const WorldScreen = struct {
         const ctx = self.context;
         const camera = &self.session.player.camera;
 
-        const screen_w: f32 = @floatFromInt(ctx.input.interface().getWindowWidth());
-        const screen_h: f32 = @floatFromInt(ctx.input.interface().getWindowHeight());
+        const screen_w: f32 = @floatFromInt(ctx.input.getWindowWidth());
+        const screen_h: f32 = @floatFromInt(ctx.input.getWindowHeight());
         const aspect = screen_w / screen_h;
 
         const view_proj_render = Mat4.perspectiveReverseZ(camera.fov, aspect, camera.near, camera.far).multiply(camera.getViewMatrixOriginCentered());
