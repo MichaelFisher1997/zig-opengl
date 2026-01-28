@@ -9,6 +9,37 @@ pub const ShadowCascades = struct {
     light_space_matrices: [CASCADE_COUNT]Mat4,
     cascade_splits: [CASCADE_COUNT]f32,
     texel_sizes: [CASCADE_COUNT]f32,
+
+    /// Initialize with safe defaults (zero-initialized)
+    pub fn initZero() ShadowCascades {
+        return .{
+            .light_space_matrices = .{Mat4.identity} ** CASCADE_COUNT,
+            .cascade_splits = .{0.0} ** CASCADE_COUNT,
+            .texel_sizes = .{0.0} ** CASCADE_COUNT,
+        };
+    }
+
+    /// Validate that all cascade data is finite and reasonable
+    pub fn isValid(self: ShadowCascades) bool {
+        for (0..CASCADE_COUNT) |i| {
+            // Check cascade splits are finite and increasing
+            if (!std.math.isFinite(self.cascade_splits[i])) return false;
+            if (self.cascade_splits[i] <= 0.0) return false;
+            if (i > 0 and self.cascade_splits[i] <= self.cascade_splits[i - 1]) return false;
+
+            // Check texel sizes are finite and positive
+            if (!std.math.isFinite(self.texel_sizes[i])) return false;
+            if (self.texel_sizes[i] <= 0.0) return false;
+
+            // Check light space matrices are finite
+            for (0..4) |row| {
+                for (0..4) |col| {
+                    if (!std.math.isFinite(self.light_space_matrices[i].data[row][col])) return false;
+                }
+            }
+        }
+        return true;
+    }
 };
 
 /// Computes stable cascaded shadow map matrices using texel snapping.
@@ -26,21 +57,38 @@ pub const ShadowCascades = struct {
 /// - lambda=0.92 biases the split scheme toward logarithmic distribution.
 /// - min/max Z offsets are tuned to avoid clipping during camera motion.
 pub fn computeCascades(resolution: u32, camera_fov: f32, aspect: f32, near: f32, far: f32, sun_dir: Vec3, cam_view: Mat4, z_range_01: bool) ShadowCascades {
-    const lambda = 0.92;
+    // Validate inputs to prevent division by zero
+    if (resolution == 0 or far <= near or near <= 0.0) {
+        return ShadowCascades.initZero();
+    }
+
     const shadow_dist = far;
 
-    var cascades: ShadowCascades = .{
-        .light_space_matrices = undefined,
-        .cascade_splits = undefined,
-        .texel_sizes = undefined,
-    };
+    var cascades = ShadowCascades.initZero();
 
-    // Calculate split distances (linear/log blend)
-    for (0..CASCADE_COUNT) |i| {
-        const p = @as(f32, @floatFromInt(i + 1)) / @as(f32, @floatFromInt(CASCADE_COUNT));
-        const log_split = near * std.math.pow(f32, shadow_dist / near, p);
-        const lin_split = near + (shadow_dist - near) * p;
-        cascades.cascade_splits[i] = std.math.lerp(lin_split, log_split, lambda);
+    // Smart cascade split strategy based on shadow distance
+    // For large distances (>500), use fixed percentages for better coverage
+    // For smaller distances, use logarithmic distribution for better near-detail
+    const SMART_SPLIT_THRESHOLD: f32 = 500.0;
+    const use_fixed_splits = shadow_dist > SMART_SPLIT_THRESHOLD;
+
+    if (use_fixed_splits) {
+        // Fixed percentage splits optimized for 4 cascades at large distances
+        // Splits at: 8%, 25%, 60%, 100% of shadow distance
+        // Gives cascade 0 more coverage for close-up detail (cave walls, etc.)
+        const split_ratios = [4]f32{ 0.08, 0.25, 0.60, 1.0 };
+        for (0..CASCADE_COUNT) |i| {
+            cascades.cascade_splits[i] = shadow_dist * split_ratios[i];
+        }
+    } else {
+        // Logarithmic splits for smaller distances (better near-detail)
+        const lambda = 0.92;
+        for (0..CASCADE_COUNT) |i| {
+            const p = @as(f32, @floatFromInt(i + 1)) / @as(f32, @floatFromInt(CASCADE_COUNT));
+            const log_split = near * std.math.pow(f32, shadow_dist / near, p);
+            const lin_split = near + (shadow_dist - near) * p;
+            cascades.cascade_splits[i] = std.math.lerp(lin_split, log_split, lambda);
+        }
     }
 
     // Calculate matrices for each cascade
@@ -126,7 +174,26 @@ pub fn computeCascades(resolution: u32, camera_fov: f32, aspect: f32, near: f32,
         last_split = split;
     }
 
+    // Validate results before returning
+    std.debug.assert(cascades.isValid());
+
     return cascades;
+}
+
+/// Validates cascade data and logs warnings if invalid
+pub fn validateCascades(cascades: ShadowCascades, log_scope: anytype) bool {
+    if (cascades.isValid()) return true;
+
+    log_scope.warn("Invalid shadow cascade data detected:", .{});
+    for (0..CASCADE_COUNT) |i| {
+        if (!std.math.isFinite(cascades.cascade_splits[i])) {
+            log_scope.warn("  Cascade {} split is non-finite: {}", .{ i, cascades.cascade_splits[i] });
+        }
+        if (!std.math.isFinite(cascades.texel_sizes[i])) {
+            log_scope.warn("  Cascade {} texel size is non-finite: {}", .{ i, cascades.texel_sizes[i] });
+        }
+    }
+    return false;
 }
 
 test "computeCascades splits and texel sizes" {
