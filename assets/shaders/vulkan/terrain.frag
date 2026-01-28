@@ -55,15 +55,16 @@ float cloudNoise(vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-float cloudFbm(vec2 p) {
-    float v = 0.0;
-    float a = 0.5;
-    for (int i = 0; i < 2; i++) { 
-        v += a * cloudNoise(p);
-        p *= 2.0;
-        a *= 0.5;
+float cloudFbm(vec2 p, int octaves) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    for (int i = 0; i < octaves; i++) {
+        value += amplitude * cloudNoise(p * frequency);
+        amplitude *= 0.5;
+        frequency *= 2.0;
     }
-    return v;
+    return value;
 }
 
 // 4x4 Bayer matrix for dithered LOD transitions
@@ -80,10 +81,14 @@ float bayerDither4x4(vec2 position) {
 }
 
 float getCloudShadow(vec3 worldPos, vec3 sunDir) {
+    const float cloudBlockSize = 12.0;
     vec3 actualWorldPos = worldPos + global.cam_pos.xyz;
     vec2 shadowOffset = sunDir.xz * (global.cloud_params.x - actualWorldPos.y) / max(sunDir.y, 0.1);
-    vec2 samplePos = (actualWorldPos.xz + shadowOffset + global.cloud_wind_offset.xy) * global.cloud_wind_offset.z;
-    float cloudValue = cloudFbm(samplePos * 0.5);
+    vec2 worldXZ = actualWorldPos.xz + shadowOffset + global.cloud_wind_offset.xy;
+    // Apply block quantization to match cloud rendering
+    vec2 pixelPos = floor(worldXZ / cloudBlockSize) * cloudBlockSize;
+    vec2 samplePos = pixelPos * global.cloud_wind_offset.z;
+    float cloudValue = cloudFbm(samplePos, 3);
     float threshold = 1.0 - global.cloud_wind_offset.w;
     float cloudMask = smoothstep(threshold - 0.1, threshold + 0.1, cloudValue);
     return cloudMask * global.lighting.w;

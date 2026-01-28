@@ -166,6 +166,7 @@ pub const ShadowConfig = struct {
     resolution: u32 = 4096,
     pcf_samples: u8 = 12,
     cascade_blend: bool = true,
+    strength: f32 = 0.35, // Cloud shadow intensity (0-1)
 };
 
 pub const ShadowParams = struct {
