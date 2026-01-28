@@ -47,7 +47,7 @@ pub const App = struct {
     atmosphere_system: *AtmosphereSystem,
     material_system: *MaterialSystem,
     audio_system: *AudioSystem,
-    shadow_passes: [3]render_graph_pkg.ShadowPass,
+    shadow_passes: [4]render_graph_pkg.ShadowPass,
     g_pass: render_graph_pkg.GPass,
     ssao_pass: render_graph_pkg.SSAOPass,
     sky_pass: render_graph_pkg.SkyPass,
@@ -238,6 +238,7 @@ pub const App = struct {
                 render_graph_pkg.ShadowPass.init(0),
                 render_graph_pkg.ShadowPass.init(1),
                 render_graph_pkg.ShadowPass.init(2),
+                render_graph_pkg.ShadowPass.init(3),
             },
             .g_pass = .{},
             .ssao_pass = .{},
@@ -289,6 +290,7 @@ pub const App = struct {
             try app.render_graph.addPass(app.shadow_passes[0].pass());
             try app.render_graph.addPass(app.shadow_passes[1].pass());
             try app.render_graph.addPass(app.shadow_passes[2].pass());
+            try app.render_graph.addPass(app.shadow_passes[3].pass());
             try app.render_graph.addPass(app.g_pass.pass());
             try app.render_graph.addPass(app.ssao_pass.pass());
             try app.render_graph.addPass(app.sky_pass.pass());

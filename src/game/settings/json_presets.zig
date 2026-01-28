@@ -6,6 +6,7 @@ const Settings = data.Settings;
 pub const PresetConfig = struct {
     name: []u8,
     shadow_quality: u32,
+    shadow_distance: f32,
     shadow_pcf_samples: u8,
     shadow_cascade_blend: bool,
     pbr_enabled: bool,
@@ -49,17 +50,26 @@ pub fn initPresets(allocator: std.mem.Allocator) !void {
     for (parsed.value) |preset| {
         var p = preset;
         // Validate preset values against metadata constraints
+        // Skip invalid presets instead of failing entire load
+        if (p.shadow_distance < 100.0 or p.shadow_distance > 1000.0) {
+            std.log.warn("Skipping preset '{s}': invalid shadow_distance {}", .{ p.name, p.shadow_distance });
+            continue;
+        }
         if (p.volumetric_density < 0.0 or p.volumetric_density > 0.5) {
-            return error.InvalidVolumetricDensity;
+            std.log.warn("Skipping preset '{s}': invalid volumetric_density {}", .{ p.name, p.volumetric_density });
+            continue;
         }
         if (p.volumetric_steps < 4 or p.volumetric_steps > 32) {
-            return error.InvalidVolumetricSteps;
+            std.log.warn("Skipping preset '{s}': invalid volumetric_steps {}", .{ p.name, p.volumetric_steps });
+            continue;
         }
         if (p.volumetric_scattering < 0.0 or p.volumetric_scattering > 1.0) {
-            return error.InvalidVolumetricScattering;
+            std.log.warn("Skipping preset '{s}': invalid volumetric_scattering {}", .{ p.name, p.volumetric_scattering });
+            continue;
         }
         if (p.bloom_intensity < 0.0 or p.bloom_intensity > 2.0) {
-            return error.InvalidBloomIntensity;
+            std.log.warn("Skipping preset '{s}': invalid bloom_intensity {}", .{ p.name, p.bloom_intensity });
+            continue;
         }
         // Duplicate name because parsed.deinit() will free strings
         p.name = try allocator.dupe(u8, preset.name);
@@ -80,6 +90,7 @@ pub fn apply(settings: *Settings, preset_idx: usize) void {
     if (preset_idx >= graphics_presets.items.len) return;
     const config = graphics_presets.items[preset_idx];
     settings.shadow_quality = config.shadow_quality;
+    settings.shadow_distance = config.shadow_distance;
     settings.shadow_pcf_samples = config.shadow_pcf_samples;
     settings.shadow_cascade_blend = config.shadow_cascade_blend;
     settings.pbr_enabled = config.pbr_enabled;
@@ -112,6 +123,7 @@ pub fn getIndex(settings: *const Settings) usize {
 fn matches(settings: *const Settings, preset: PresetConfig) bool {
     const epsilon = 0.0001;
     return settings.shadow_quality == preset.shadow_quality and
+        std.math.approxEqAbs(f32, settings.shadow_distance, preset.shadow_distance, epsilon) and
         settings.shadow_pcf_samples == preset.shadow_pcf_samples and
         settings.shadow_cascade_blend == preset.shadow_cascade_blend and
         settings.pbr_enabled == preset.pbr_enabled and
