@@ -475,19 +475,13 @@ pub const PipelineManager = struct {
         var sky_rasterizer = rasterizer.*;
         sky_rasterizer.cullMode = c.VK_CULL_MODE_NONE;
 
-        const vert_code = try std.fs.cwd().readFileAlloc(shader_registry.SKY_VERT, allocator, @enumFromInt(1024 * 1024));
-        defer allocator.free(vert_code);
-        const frag_code = try std.fs.cwd().readFileAlloc(shader_registry.SKY_FRAG, allocator, @enumFromInt(1024 * 1024));
-        defer allocator.free(frag_code);
-
-        const vert_module = try Utils.createShaderModule(vk_device, vert_code);
-        defer c.vkDestroyShaderModule(vk_device, vert_module, null);
-        const frag_module = try Utils.createShaderModule(vk_device, frag_code);
-        defer c.vkDestroyShaderModule(vk_device, frag_module, null);
+        const shaders = try loadShaderPair(allocator, vk_device, shader_registry.SKY_VERT, shader_registry.SKY_FRAG);
+        defer c.vkDestroyShaderModule(vk_device, shaders.vert, null);
+        defer c.vkDestroyShaderModule(vk_device, shaders.frag, null);
 
         var shader_stages = [_]c.VkPipelineShaderStageCreateInfo{
-            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_VERTEX_BIT, .module = vert_module, .pName = "main" },
-            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT, .module = frag_module, .pName = "main" },
+            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_VERTEX_BIT, .module = shaders.vert, .pName = "main" },
+            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT, .module = shaders.frag, .pName = "main" },
         };
 
         var vertex_input_info = std.mem.zeroes(c.VkPipelineVertexInputStateCreateInfo);
