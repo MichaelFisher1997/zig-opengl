@@ -1383,7 +1383,6 @@ fn createMainFramebuffers(ctx: *VulkanContext) !void {
     }
 }
 
-
 fn createSwapchainUIPipelines(ctx: *VulkanContext) !void {
     if (ctx.ui_swapchain_render_pass == null) return error.InitializationFailed;
 
