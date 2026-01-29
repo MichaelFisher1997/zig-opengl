@@ -36,8 +36,8 @@ pub const InvalidTextureHandle: TextureHandle = 0;
 
 pub const MAX_FRAMES_IN_FLIGHT = 2;
 /// Number of cascaded shadow map splits.
-/// 3 cascades provide a good balance between quality (near detail) and performance (draw calls).
-pub const SHADOW_CASCADE_COUNT = 3;
+/// 4 cascades provide smoother transitions for large shadow distances (1000+) while maintaining quality.
+pub const SHADOW_CASCADE_COUNT = 4;
 
 pub const BufferUsage = enum {
     vertex,

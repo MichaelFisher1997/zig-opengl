@@ -180,8 +180,10 @@ pub const WorldRenderer = struct {
         self.storage.chunks_mutex.lockShared();
         defer self.storage.chunks_mutex.unlockShared();
 
+        // FIX: Enable frustum culling for LOD chunks in shadow pass
+        // This ensures LOD chunks are properly culled using the light-space frustum
         if (lod_manager) |lod_mgr| {
-            lod_mgr.render(light_space_matrix, camera_pos, ChunkStorage.isChunkRenderable, @ptrCast(self.storage), false);
+            lod_mgr.render(light_space_matrix, camera_pos, ChunkStorage.isChunkRenderable, @ptrCast(self.storage), true);
         }
 
         const frustum = shadow_frustum;

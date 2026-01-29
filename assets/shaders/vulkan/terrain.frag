@@ -102,7 +102,7 @@ layout(set = 0, binding = 9) uniform sampler2D uEnvMap;          // Environment 
 layout(set = 0, binding = 10) uniform sampler2D uSSAOMap;       // SSAO Map
 
 layout(set = 0, binding = 2) uniform ShadowUniforms {
-    mat4 light_space_matrices[3];
+    mat4 light_space_matrices[4];
     vec4 cascade_splits;
     vec4 shadow_texel_sizes;
 } shadows;
@@ -177,9 +177,10 @@ float computeShadowFactor(vec3 fragPosWorld, vec3 N, vec3 L, int layer) {
     float tanTheta = sinTheta / NdotL;
     
     // Reverse-Z Bias: push fragment CLOSER to light (towards Near=1.0)
-    const float BASE_BIAS = 0.0015;
+    // Increased base bias to ensure shadows work when sun is overhead (NdotL ≈ 1)
+    const float BASE_BIAS = 0.0025;
     const float SLOPE_BIAS = 0.003;
-    const float MAX_BIAS = 0.012;
+    const float MAX_BIAS = 0.015;
     
     float bias = BASE_BIAS * cascadeScale + SLOPE_BIAS * min(tanTheta, 5.0) * cascadeScale;
     bias = min(bias, MAX_BIAS);

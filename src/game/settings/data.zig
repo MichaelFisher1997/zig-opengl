@@ -127,6 +127,11 @@ pub const Settings = struct {
             .label = "CASCADE BLENDING",
             .kind = .toggle,
         };
+        pub const shadow_distance = SettingMetadata{
+            .label = "SHADOW DISTANCE",
+            .description = "Maximum distance for shadow rendering (higher = more shadows but lower performance)",
+            .kind = .{ .slider = .{ .min = 100.0, .max = 1000.0, .step = 50.0 } },
+        };
         pub const pbr_enabled = SettingMetadata{
             .label = "PBR RENDERING",
             .kind = .toggle,
