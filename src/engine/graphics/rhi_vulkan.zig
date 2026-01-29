@@ -1146,7 +1146,6 @@ fn updatePostProcessDescriptorsWithBloom(ctx: *VulkanContext) void {
     }
 }
 
-
 fn createGPassResources(ctx: *VulkanContext) !void {
     destroyGPassResources(ctx);
     const normal_format = c.VK_FORMAT_R8G8B8A8_UNORM; // Store normals in [0,1] range
