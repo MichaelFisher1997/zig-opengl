@@ -1633,72 +1633,71 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
 fn deinit(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
 
-    // Safety checks for partially initialized context
-    // If device is null, we can't do any Vulkan cleanup
-    if (ctx.vulkan_device.vk_device == null) {
-        ctx.allocator.destroy(ctx);
-        return;
-    }
+    // Defensive: Check if vulkan_device has been properly initialized
+    // We check a field that would only be non-null if init progressed far enough
+    // vk_device is initialized in VulkanDevice.init, so if it's null, init failed early
+    const vk_device: c.VkDevice = ctx.vulkan_device.vk_device;
 
-    // Only wait for device if frames system was initialized
-    if (ctx.vulkan_device.vk_device != null and !ctx.frames.dry_run) {
-        _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
-    }
+    // Only proceed with Vulkan cleanup if we have a valid device
+    if (vk_device != null) {
+        // Wait for device to be idle before cleanup
+        _ = c.vkDeviceWaitIdle(vk_device);
 
-    // Destroy managers first (they own pipelines, render passes, and layouts)
-    // Managers handle null values internally
-    ctx.pipeline_manager.deinit(ctx.vulkan_device.vk_device);
-    ctx.render_pass_manager.deinit(ctx.vulkan_device.vk_device, ctx.allocator);
+        // Destroy managers first (they own pipelines, render passes, and layouts)
+        // Managers handle null values internally
+        ctx.pipeline_manager.deinit(vk_device);
+        ctx.render_pass_manager.deinit(vk_device, ctx.allocator);
 
-    destroyHDRResources(ctx);
-    destroyFXAAResources(ctx);
-    destroyBloomResources(ctx);
-    destroyVelocityResources(ctx);
-    destroyPostProcessResources(ctx);
-    destroyGPassResources(ctx);
+        destroyHDRResources(ctx);
+        destroyFXAAResources(ctx);
+        destroyBloomResources(ctx);
+        destroyVelocityResources(ctx);
+        destroyPostProcessResources(ctx);
+        destroyGPassResources(ctx);
 
-    // Destroy internal buffers and resources
-    // Helper to destroy raw VulkanBuffers
-    const device = ctx.vulkan_device.vk_device;
-    {
-        if (ctx.model_ubo.buffer != null) c.vkDestroyBuffer(device, ctx.model_ubo.buffer, null);
-        if (ctx.model_ubo.memory != null) c.vkFreeMemory(device, ctx.model_ubo.memory, null);
+        // Destroy internal buffers and resources
+        // Helper to destroy raw VulkanBuffers
+        const device = ctx.vulkan_device.vk_device;
+        {
+            if (ctx.model_ubo.buffer != null) c.vkDestroyBuffer(device, ctx.model_ubo.buffer, null);
+            if (ctx.model_ubo.memory != null) c.vkFreeMemory(device, ctx.model_ubo.memory, null);
 
-        if (ctx.dummy_instance_buffer.buffer != null) c.vkDestroyBuffer(device, ctx.dummy_instance_buffer.buffer, null);
-        if (ctx.dummy_instance_buffer.memory != null) c.vkFreeMemory(device, ctx.dummy_instance_buffer.memory, null);
+            if (ctx.dummy_instance_buffer.buffer != null) c.vkDestroyBuffer(device, ctx.dummy_instance_buffer.buffer, null);
+            if (ctx.dummy_instance_buffer.memory != null) c.vkFreeMemory(device, ctx.dummy_instance_buffer.memory, null);
 
-        for (ctx.ui_vbos) |buf| {
-            if (buf.buffer != null) c.vkDestroyBuffer(device, buf.buffer, null);
-            if (buf.memory != null) c.vkFreeMemory(device, buf.memory, null);
+            for (ctx.ui_vbos) |buf| {
+                if (buf.buffer != null) c.vkDestroyBuffer(device, buf.buffer, null);
+                if (buf.memory != null) c.vkFreeMemory(device, buf.memory, null);
+            }
         }
+
+        if (comptime build_options.debug_shadows) {
+            if (ctx.debug_shadow.vbo.buffer != null) c.vkDestroyBuffer(device, ctx.debug_shadow.vbo.buffer, null);
+            if (ctx.debug_shadow.vbo.memory != null) c.vkFreeMemory(device, ctx.debug_shadow.vbo.memory, null);
+        }
+        // Note: cloud_vbo is managed by resource manager and destroyed there
+
+        // Destroy dummy textures
+        ctx.resources.destroyTexture(ctx.dummy_texture);
+        ctx.resources.destroyTexture(ctx.dummy_normal_texture);
+        ctx.resources.destroyTexture(ctx.dummy_roughness_texture);
+        if (ctx.dummy_shadow_view != null) c.vkDestroyImageView(ctx.vulkan_device.vk_device, ctx.dummy_shadow_view, null);
+        if (ctx.dummy_shadow_image != null) c.vkDestroyImage(ctx.vulkan_device.vk_device, ctx.dummy_shadow_image, null);
+        if (ctx.dummy_shadow_memory != null) c.vkFreeMemory(ctx.vulkan_device.vk_device, ctx.dummy_shadow_memory, null);
+
+        ctx.shadow_system.deinit(ctx.vulkan_device.vk_device);
+
+        ctx.descriptors.deinit();
+        ctx.swapchain.deinit();
+        ctx.frames.deinit();
+        ctx.resources.deinit();
+
+        if (ctx.query_pool != null) {
+            c.vkDestroyQueryPool(ctx.vulkan_device.vk_device, ctx.query_pool, null);
+        }
+
+        ctx.vulkan_device.deinit();
     }
-
-    if (comptime build_options.debug_shadows) {
-        if (ctx.debug_shadow.vbo.buffer != null) c.vkDestroyBuffer(device, ctx.debug_shadow.vbo.buffer, null);
-        if (ctx.debug_shadow.vbo.memory != null) c.vkFreeMemory(device, ctx.debug_shadow.vbo.memory, null);
-    }
-    // Note: cloud_vbo is managed by resource manager and destroyed there
-
-    // Destroy dummy textures
-    ctx.resources.destroyTexture(ctx.dummy_texture);
-    ctx.resources.destroyTexture(ctx.dummy_normal_texture);
-    ctx.resources.destroyTexture(ctx.dummy_roughness_texture);
-    if (ctx.dummy_shadow_view != null) c.vkDestroyImageView(ctx.vulkan_device.vk_device, ctx.dummy_shadow_view, null);
-    if (ctx.dummy_shadow_image != null) c.vkDestroyImage(ctx.vulkan_device.vk_device, ctx.dummy_shadow_image, null);
-    if (ctx.dummy_shadow_memory != null) c.vkFreeMemory(ctx.vulkan_device.vk_device, ctx.dummy_shadow_memory, null);
-
-    ctx.shadow_system.deinit(ctx.vulkan_device.vk_device);
-
-    ctx.descriptors.deinit();
-    ctx.swapchain.deinit();
-    ctx.frames.deinit();
-    ctx.resources.deinit();
-
-    if (ctx.query_pool != null) {
-        c.vkDestroyQueryPool(ctx.vulkan_device.vk_device, ctx.query_pool, null);
-    }
-
-    ctx.vulkan_device.deinit();
 
     ctx.allocator.destroy(ctx);
 }
