@@ -447,13 +447,13 @@ fn destroySwapchainUIPipelines(ctx: *VulkanContext) void {
     const vk = ctx.vulkan_device.vk_device;
     if (vk == null) return;
 
-    if (ctx.ui_swapchain_pipeline != null) {
-        c.vkDestroyPipeline(vk, ctx.ui_swapchain_pipeline, null);
-        ctx.ui_swapchain_pipeline = null;
+    if (ctx.pipeline_manager.ui_swapchain_pipeline != null) {
+        c.vkDestroyPipeline(vk, ctx.pipeline_manager.ui_swapchain_pipeline, null);
+        ctx.pipeline_manager.ui_swapchain_pipeline = null;
     }
-    if (ctx.ui_swapchain_tex_pipeline != null) {
-        c.vkDestroyPipeline(vk, ctx.ui_swapchain_tex_pipeline, null);
-        ctx.ui_swapchain_tex_pipeline = null;
+    if (ctx.pipeline_manager.ui_swapchain_tex_pipeline != null) {
+        c.vkDestroyPipeline(vk, ctx.pipeline_manager.ui_swapchain_tex_pipeline, null);
+        ctx.pipeline_manager.ui_swapchain_tex_pipeline = null;
     }
 }
 
@@ -1383,118 +1383,6 @@ fn createMainFramebuffers(ctx: *VulkanContext) !void {
     }
 }
 
-fn createSwapchainUIPipelines(ctx: *VulkanContext) !void {
-    if (ctx.ui_swapchain_render_pass == null) return error.InitializationFailed;
-
-    destroySwapchainUIPipelines(ctx);
-    errdefer destroySwapchainUIPipelines(ctx);
-
-    var viewport_state = std.mem.zeroes(c.VkPipelineViewportStateCreateInfo);
-    viewport_state.sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewport_state.viewportCount = 1;
-    viewport_state.scissorCount = 1;
-
-    const dynamic_states = [_]c.VkDynamicState{ c.VK_DYNAMIC_STATE_VIEWPORT, c.VK_DYNAMIC_STATE_SCISSOR };
-    var dynamic_state = std.mem.zeroes(c.VkPipelineDynamicStateCreateInfo);
-    dynamic_state.sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamic_state.dynamicStateCount = 2;
-    dynamic_state.pDynamicStates = &dynamic_states;
-
-    var input_assembly = std.mem.zeroes(c.VkPipelineInputAssemblyStateCreateInfo);
-    input_assembly.sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    input_assembly.topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    var rasterizer = std.mem.zeroes(c.VkPipelineRasterizationStateCreateInfo);
-    rasterizer.sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.lineWidth = 1.0;
-    rasterizer.cullMode = c.VK_CULL_MODE_NONE;
-    rasterizer.frontFace = c.VK_FRONT_FACE_CLOCKWISE;
-
-    var multisampling = std.mem.zeroes(c.VkPipelineMultisampleStateCreateInfo);
-    multisampling.sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT;
-
-    var depth_stencil = std.mem.zeroes(c.VkPipelineDepthStencilStateCreateInfo);
-    depth_stencil.sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depth_stencil.depthTestEnable = c.VK_FALSE;
-    depth_stencil.depthWriteEnable = c.VK_FALSE;
-
-    var ui_color_blend_attachment = std.mem.zeroes(c.VkPipelineColorBlendAttachmentState);
-    ui_color_blend_attachment.colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT;
-    ui_color_blend_attachment.blendEnable = c.VK_TRUE;
-    ui_color_blend_attachment.srcColorBlendFactor = c.VK_BLEND_FACTOR_SRC_ALPHA;
-    ui_color_blend_attachment.dstColorBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    ui_color_blend_attachment.colorBlendOp = c.VK_BLEND_OP_ADD;
-    ui_color_blend_attachment.srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE;
-    ui_color_blend_attachment.dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ZERO;
-    ui_color_blend_attachment.alphaBlendOp = c.VK_BLEND_OP_ADD;
-
-    var ui_color_blending = std.mem.zeroes(c.VkPipelineColorBlendStateCreateInfo);
-    ui_color_blending.sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    ui_color_blending.attachmentCount = 1;
-    ui_color_blending.pAttachments = &ui_color_blend_attachment;
-
-    // UI
-    {
-        const vert_code = try std.fs.cwd().readFileAlloc(shader_registry.UI_VERT, ctx.allocator, @enumFromInt(1024 * 1024));
-        defer ctx.allocator.free(vert_code);
-        const frag_code = try std.fs.cwd().readFileAlloc(shader_registry.UI_FRAG, ctx.allocator, @enumFromInt(1024 * 1024));
-        defer ctx.allocator.free(frag_code);
-        const vert_module = try Utils.createShaderModule(ctx.vulkan_device.vk_device, vert_code);
-        defer c.vkDestroyShaderModule(ctx.vulkan_device.vk_device, vert_module, null);
-        const frag_module = try Utils.createShaderModule(ctx.vulkan_device.vk_device, frag_code);
-        defer c.vkDestroyShaderModule(ctx.vulkan_device.vk_device, frag_module, null);
-        var shader_stages = [_]c.VkPipelineShaderStageCreateInfo{
-            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_VERTEX_BIT, .module = vert_module, .pName = "main" },
-            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT, .module = frag_module, .pName = "main" },
-        };
-        const binding_description = c.VkVertexInputBindingDescription{ .binding = 0, .stride = 6 * @sizeOf(f32), .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX };
-        var attribute_descriptions: [2]c.VkVertexInputAttributeDescription = undefined;
-        attribute_descriptions[0] = .{ .binding = 0, .location = 0, .format = c.VK_FORMAT_R32G32_SFLOAT, .offset = 0 };
-        attribute_descriptions[1] = .{ .binding = 0, .location = 1, .format = c.VK_FORMAT_R32G32B32A32_SFLOAT, .offset = 2 * 4 };
-        var vertex_input_info = std.mem.zeroes(c.VkPipelineVertexInputStateCreateInfo);
-        vertex_input_info.sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-        vertex_input_info.vertexBindingDescriptionCount = 1;
-        vertex_input_info.pVertexBindingDescriptions = &binding_description;
-        vertex_input_info.vertexAttributeDescriptionCount = 2;
-        vertex_input_info.pVertexAttributeDescriptions = &attribute_descriptions[0];
-        var pipeline_info = std.mem.zeroes(c.VkGraphicsPipelineCreateInfo);
-        pipeline_info.sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipeline_info.stageCount = 2;
-        pipeline_info.pStages = &shader_stages[0];
-        pipeline_info.pVertexInputState = &vertex_input_info;
-        pipeline_info.pInputAssemblyState = &input_assembly;
-        pipeline_info.pViewportState = &viewport_state;
-        pipeline_info.pRasterizationState = &rasterizer;
-        pipeline_info.pMultisampleState = &multisampling;
-        pipeline_info.pDepthStencilState = &depth_stencil;
-        pipeline_info.pColorBlendState = &ui_color_blending;
-        pipeline_info.pDynamicState = &dynamic_state;
-        pipeline_info.layout = ctx.ui_pipeline_layout;
-        pipeline_info.renderPass = ctx.ui_swapchain_render_pass;
-        pipeline_info.subpass = 0;
-        try Utils.checkVk(c.vkCreateGraphicsPipelines(ctx.vulkan_device.vk_device, null, 1, &pipeline_info, null, &ctx.ui_swapchain_pipeline));
-
-        // Textured UI
-        const tex_vert_code = try std.fs.cwd().readFileAlloc(shader_registry.UI_TEX_VERT, ctx.allocator, @enumFromInt(1024 * 1024));
-        defer ctx.allocator.free(tex_vert_code);
-        const tex_frag_code = try std.fs.cwd().readFileAlloc(shader_registry.UI_TEX_FRAG, ctx.allocator, @enumFromInt(1024 * 1024));
-        defer ctx.allocator.free(tex_frag_code);
-        const tex_vert_module = try Utils.createShaderModule(ctx.vulkan_device.vk_device, tex_vert_code);
-        defer c.vkDestroyShaderModule(ctx.vulkan_device.vk_device, tex_vert_module, null);
-        const tex_frag_module = try Utils.createShaderModule(ctx.vulkan_device.vk_device, tex_frag_code);
-        defer c.vkDestroyShaderModule(ctx.vulkan_device.vk_device, tex_frag_module, null);
-        var tex_shader_stages = [_]c.VkPipelineShaderStageCreateInfo{
-            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_VERTEX_BIT, .module = tex_vert_module, .pName = "main" },
-            .{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT, .module = tex_frag_module, .pName = "main" },
-        };
-        pipeline_info.pStages = &tex_shader_stages[0];
-        pipeline_info.layout = ctx.ui_tex_pipeline_layout;
-        pipeline_info.renderPass = ctx.ui_swapchain_render_pass;
-        try Utils.checkVk(c.vkCreateGraphicsPipelines(ctx.vulkan_device.vk_device, null, 1, &pipeline_info, null, &ctx.ui_swapchain_tex_pipeline));
-    }
-}
-
 fn destroyMainRenderPassAndPipelines(ctx: *VulkanContext) void {
     if (ctx.vulkan_device.vk_device == null) return;
     _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
@@ -1508,41 +1396,41 @@ fn destroyMainRenderPassAndPipelines(ctx: *VulkanContext) void {
         c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.pipeline_manager.terrain_pipeline, null);
         ctx.pipeline_manager.terrain_pipeline = null;
     }
-    if (ctx.wireframe_pipeline != null) {
-        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.wireframe_pipeline, null);
-        ctx.wireframe_pipeline = null;
+    if (ctx.pipeline_manager.wireframe_pipeline != null) {
+        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.pipeline_manager.wireframe_pipeline, null);
+        ctx.pipeline_manager.wireframe_pipeline = null;
     }
-    if (ctx.selection_pipeline != null) {
-        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.selection_pipeline, null);
-        ctx.selection_pipeline = null;
+    if (ctx.pipeline_manager.selection_pipeline != null) {
+        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.pipeline_manager.selection_pipeline, null);
+        ctx.pipeline_manager.selection_pipeline = null;
     }
-    if (ctx.line_pipeline != null) {
-        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.line_pipeline, null);
-        ctx.line_pipeline = null;
+    if (ctx.pipeline_manager.line_pipeline != null) {
+        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.pipeline_manager.line_pipeline, null);
+        ctx.pipeline_manager.line_pipeline = null;
     }
     // Note: shadow_pipeline and shadow_render_pass are NOT destroyed here
     // because they don't depend on the swapchain or MSAA settings.
 
-    if (ctx.sky_pipeline != null) {
-        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.sky_pipeline, null);
-        ctx.sky_pipeline = null;
+    if (ctx.pipeline_manager.sky_pipeline != null) {
+        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.pipeline_manager.sky_pipeline, null);
+        ctx.pipeline_manager.sky_pipeline = null;
     }
-    if (ctx.ui_pipeline != null) {
-        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.ui_pipeline, null);
-        ctx.ui_pipeline = null;
+    if (ctx.pipeline_manager.ui_pipeline != null) {
+        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.pipeline_manager.ui_pipeline, null);
+        ctx.pipeline_manager.ui_pipeline = null;
     }
-    if (ctx.ui_tex_pipeline != null) {
-        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.ui_tex_pipeline, null);
-        ctx.ui_tex_pipeline = null;
+    if (ctx.pipeline_manager.ui_tex_pipeline != null) {
+        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.pipeline_manager.ui_tex_pipeline, null);
+        ctx.pipeline_manager.ui_tex_pipeline = null;
     }
     if (comptime build_options.debug_shadows) {
         if (ctx.debug_shadow.pipeline) |pipeline| c.vkDestroyPipeline(ctx.vulkan_device.vk_device, pipeline, null);
         ctx.debug_shadow.pipeline = null;
     }
 
-    if (ctx.cloud_pipeline != null) {
-        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.cloud_pipeline, null);
-        ctx.cloud_pipeline = null;
+    if (ctx.pipeline_manager.cloud_pipeline != null) {
+        c.vkDestroyPipeline(ctx.vulkan_device.vk_device, ctx.pipeline_manager.cloud_pipeline, null);
+        ctx.pipeline_manager.cloud_pipeline = null;
     }
     if (ctx.render_pass_manager.hdr_render_pass != null) {
         c.vkDestroyRenderPass(ctx.vulkan_device.vk_device, ctx.render_pass_manager.hdr_render_pass, null);
@@ -1759,7 +1647,7 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
 
     // Phase 3: FXAA and Bloom resources (depend on post-process sampler and HDR views)
     try ctx.fxaa.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.swapchain.getExtent(), ctx.swapchain.getImageFormat(), ctx.post_process_sampler, ctx.swapchain.getImageViews());
-    try createSwapchainUIPipelines(ctx);
+    try ctx.pipeline_manager.createSwapchainUIPipelines(ctx.allocator, ctx.vulkan_device.vk_device, ctx.render_pass_manager.ui_swapchain_render_pass);
     try ctx.bloom.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.hdr_view, ctx.swapchain.getExtent().width, ctx.swapchain.getExtent().height, c.VK_FORMAT_R16G16B16A16_SFLOAT);
 
     // Update post-process descriptor sets to include bloom texture (binding 2)
@@ -1990,7 +1878,7 @@ fn recreateSwapchainInternal(ctx: *VulkanContext) void {
     createPostProcessResources(ctx) catch |err| std.log.err("Failed to recreate post-process resources: {}", .{err});
     createSwapchainUIResources(ctx) catch |err| std.log.err("Failed to recreate swapchain UI resources: {}", .{err});
     ctx.fxaa.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.swapchain.getExtent(), ctx.swapchain.getImageFormat(), ctx.post_process_sampler, ctx.swapchain.getImageViews()) catch |err| std.log.err("Failed to recreate FXAA resources: {}", .{err});
-    createSwapchainUIPipelines(ctx) catch |err| std.log.err("Failed to recreate swapchain UI pipelines: {}", .{err});
+    ctx.pipeline_manager.createSwapchainUIPipelines(ctx.allocator, ctx.vulkan_device.vk_device, ctx.render_pass_manager.ui_swapchain_render_pass) catch |err| std.log.err("Failed to recreate swapchain UI pipelines: {}", .{err});
     ctx.bloom.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.hdr_view, ctx.swapchain.getExtent().width, ctx.swapchain.getExtent().height, c.VK_FORMAT_R16G16B16A16_SFLOAT) catch |err| std.log.err("Failed to recreate Bloom resources: {}", .{err});
     updatePostProcessDescriptorsWithBloom(ctx);
 
