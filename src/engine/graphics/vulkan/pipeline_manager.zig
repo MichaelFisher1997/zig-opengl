@@ -258,6 +258,9 @@ pub const PipelineManager = struct {
         // Destroy existing pipelines first
         self.destroyPipelines(vk_device);
 
+        // Setup rollback on failure - destroy any created pipelines if we fail partway
+        errdefer self.destroyPipelines(vk_device);
+
         const sample_count = getMSAASampleCountFlag(msaa_samples);
 
         // Common pipeline state
@@ -739,6 +742,9 @@ pub const PipelineManager = struct {
         ui_depth_stencil.depthTestEnable = c.VK_FALSE;
         ui_depth_stencil.depthWriteEnable = c.VK_FALSE;
 
+        // Validate pipeline layout exists before use
+        const layout = self.debug_shadow_pipeline_layout orelse return error.MissingPipelineLayout;
+
         var pipeline_info = std.mem.zeroes(c.VkGraphicsPipelineCreateInfo);
         pipeline_info.sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
         pipeline_info.stageCount = 2;
@@ -751,11 +757,13 @@ pub const PipelineManager = struct {
         pipeline_info.pDepthStencilState = &ui_depth_stencil;
         pipeline_info.pColorBlendState = color_blending;
         pipeline_info.pDynamicState = dynamic_state;
-        pipeline_info.layout = self.debug_shadow_pipeline_layout.?;
+        pipeline_info.layout = layout;
         pipeline_info.renderPass = hdr_render_pass;
         pipeline_info.subpass = 0;
 
-        try Utils.checkVk(c.vkCreateGraphicsPipelines(vk_device, null, 1, &pipeline_info, null, &self.debug_shadow_pipeline.?));
+        var pipeline: c.VkPipeline = null;
+        try Utils.checkVk(c.vkCreateGraphicsPipelines(vk_device, null, 1, &pipeline_info, null, &pipeline));
+        self.debug_shadow_pipeline = pipeline;
     }
 
     /// Create cloud pipeline
