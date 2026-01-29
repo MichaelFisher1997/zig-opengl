@@ -162,9 +162,6 @@ const VulkanContext = struct {
     pipeline_manager: PipelineManager = .{},
     render_pass_manager: RenderPassManager = .{},
 
-    // Initialization tracking
-    init_complete: bool = false,
-
     // Legacy / Feature State
 
     // Dummy shadow texture for fallback
@@ -1631,30 +1628,25 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
     query_pool_info.queryType = c.VK_QUERY_TYPE_TIMESTAMP;
     query_pool_info.queryCount = TOTAL_QUERY_COUNT;
     try Utils.checkVk(c.vkCreateQueryPool(ctx.vulkan_device.vk_device, &query_pool_info, null, &ctx.query_pool));
-
-    // Mark initialization as complete
-    ctx.init_complete = true;
 }
 
 fn deinit(ctx_ptr: *anyopaque) void {
-    // Safety check: ensure pointer is not null
-    const ptr_int = @intFromPtr(ctx_ptr);
-    if (ptr_int == 0) return;
-
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
 
-    // If initialization didn't complete, we can't safely clean up
-    // Just free the context memory and return
-    if (!ctx.init_complete) {
+    // Safety checks for partially initialized context
+    // If device is null, we can't do any Vulkan cleanup
+    if (ctx.vulkan_device.vk_device == null) {
         ctx.allocator.destroy(ctx);
         return;
     }
 
-    if (!ctx.frames.dry_run) {
+    // Only wait for device if frames system was initialized
+    if (ctx.vulkan_device.vk_device != null and !ctx.frames.dry_run) {
         _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
     }
 
     // Destroy managers first (they own pipelines, render passes, and layouts)
+    // Managers handle null values internally
     ctx.pipeline_manager.deinit(ctx.vulkan_device.vk_device);
     ctx.render_pass_manager.deinit(ctx.vulkan_device.vk_device, ctx.allocator);
 
