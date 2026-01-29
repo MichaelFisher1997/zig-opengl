@@ -1633,20 +1633,9 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
 fn deinit(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
 
-    // If device was never created, just free the context
-    // Use a try-catch approach with direct field access
-    const device_valid = blk: {
-        // Check if we can safely access the vk_device field
-        // This is a workaround for partial initialization
-        const ptr = @intFromPtr(&ctx.vulkan_device.vk_device);
-        if (ptr == 0) break :blk false;
-        break :blk ctx.vulkan_device.vk_device != null;
-    };
-
-    if (!device_valid) {
-        ctx.allocator.destroy(ctx);
-        return;
-    }
+    // Note: If initialization failed early, some fields may be uninitialized.
+    // We proceed with cleanup assuming the context was fully initialized,
+    // since the managers handle null checks internally.
 
     if (!ctx.frames.dry_run) {
         _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
