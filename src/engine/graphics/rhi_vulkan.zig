@@ -413,9 +413,9 @@ fn destroyGPassResources(ctx: *VulkanContext) void {
         c.vkDestroyFramebuffer(vk, ctx.g_framebuffer, null);
         ctx.g_framebuffer = null;
     }
-    if (ctx.g_render_pass != null) {
-        c.vkDestroyRenderPass(vk, ctx.g_render_pass, null);
-        ctx.g_render_pass = null;
+    if (ctx.render_pass_manager.g_render_pass != null) {
+        c.vkDestroyRenderPass(vk, ctx.render_pass_manager.g_render_pass, null);
+        ctx.render_pass_manager.g_render_pass = null;
     }
     if (ctx.g_normal_view != null) {
         c.vkDestroyImageView(vk, ctx.g_normal_view, null);
@@ -1151,87 +1151,8 @@ fn createGPassResources(ctx: *VulkanContext) !void {
     const normal_format = c.VK_FORMAT_R8G8B8A8_UNORM; // Store normals in [0,1] range
     const velocity_format = c.VK_FORMAT_R16G16_SFLOAT; // RG16F for velocity vectors
 
-    // 1. Create G-Pass render pass (outputs: normal + velocity colors + depth)
-    {
-        var attachments: [3]c.VkAttachmentDescription = undefined;
-
-        // Attachment 0: Normal buffer (color output)
-        attachments[0] = std.mem.zeroes(c.VkAttachmentDescription);
-        attachments[0].format = normal_format;
-        attachments[0].samples = c.VK_SAMPLE_COUNT_1_BIT;
-        attachments[0].loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachments[0].storeOp = c.VK_ATTACHMENT_STORE_OP_STORE;
-        attachments[0].stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[0].stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[0].initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[0].finalLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        // Attachment 1: Velocity buffer (color output for motion vectors)
-        attachments[1] = std.mem.zeroes(c.VkAttachmentDescription);
-        attachments[1].format = velocity_format;
-        attachments[1].samples = c.VK_SAMPLE_COUNT_1_BIT;
-        attachments[1].loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachments[1].storeOp = c.VK_ATTACHMENT_STORE_OP_STORE;
-        attachments[1].stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[1].stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[1].initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[1].finalLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        // Attachment 2: Depth buffer (shared with main pass for SSAO depth sampling)
-        attachments[2] = std.mem.zeroes(c.VkAttachmentDescription);
-        attachments[2].format = DEPTH_FORMAT;
-        attachments[2].samples = c.VK_SAMPLE_COUNT_1_BIT;
-        attachments[2].loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachments[2].storeOp = c.VK_ATTACHMENT_STORE_OP_STORE;
-        attachments[2].stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[2].stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[2].initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[2].finalLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        var color_refs = [_]c.VkAttachmentReference{
-            c.VkAttachmentReference{ .attachment = 0, .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
-            c.VkAttachmentReference{ .attachment = 1, .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
-        };
-        var depth_ref = c.VkAttachmentReference{ .attachment = 2, .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
-
-        var subpass = std.mem.zeroes(c.VkSubpassDescription);
-        subpass.pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 2;
-        subpass.pColorAttachments = &color_refs;
-        subpass.pDepthStencilAttachment = &depth_ref;
-
-        var dependencies: [2]c.VkSubpassDependency = undefined;
-        // Dependency 0: External -> G-Pass
-        dependencies[0] = std.mem.zeroes(c.VkSubpassDependency);
-        dependencies[0].srcSubpass = c.VK_SUBPASS_EXTERNAL;
-        dependencies[0].dstSubpass = 0;
-        dependencies[0].srcStageMask = c.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-        dependencies[0].dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dependencies[0].srcAccessMask = c.VK_ACCESS_MEMORY_READ_BIT;
-        dependencies[0].dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dependencies[0].dependencyFlags = c.VK_DEPENDENCY_BY_REGION_BIT;
-
-        // Dependency 1: G-Pass -> Fragment shader read (for SSAO)
-        dependencies[1] = std.mem.zeroes(c.VkSubpassDependency);
-        dependencies[1].srcSubpass = 0;
-        dependencies[1].dstSubpass = c.VK_SUBPASS_EXTERNAL;
-        dependencies[1].srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | c.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        dependencies[1].dstStageMask = c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependencies[1].srcAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dependencies[1].dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
-        dependencies[1].dependencyFlags = c.VK_DEPENDENCY_BY_REGION_BIT;
-
-        var rp_info = std.mem.zeroes(c.VkRenderPassCreateInfo);
-        rp_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        rp_info.attachmentCount = 3;
-        rp_info.pAttachments = &attachments;
-        rp_info.subpassCount = 1;
-        rp_info.pSubpasses = &subpass;
-        rp_info.dependencyCount = 2;
-        rp_info.pDependencies = &dependencies;
-
-        try Utils.checkVk(c.vkCreateRenderPass(ctx.vulkan_device.vk_device, &rp_info, null, &ctx.g_render_pass));
-    }
+    // Create G-Pass render pass using manager
+    try ctx.render_pass_manager.createGPassRenderPass(ctx.vulkan_device.vk_device);
 
     const vk = ctx.vulkan_device.vk_device;
     const extent = ctx.swapchain.getExtent();
@@ -1356,7 +1277,7 @@ fn createGPassResources(ctx: *VulkanContext) !void {
 
         var fb_info = std.mem.zeroes(c.VkFramebufferCreateInfo);
         fb_info.sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        fb_info.renderPass = ctx.g_render_pass;
+        fb_info.renderPass = ctx.render_pass_manager.g_render_pass;
         fb_info.attachmentCount = 3;
         fb_info.pAttachments = &fb_attachments;
         fb_info.width = extent.width;
@@ -1617,7 +1538,7 @@ fn createMainPipelines(ctx: *VulkanContext) !void {
             g_pipeline_info.pStages = &g_shader_stages[0];
             g_pipeline_info.pMultisampleState = &g_multisampling;
             g_pipeline_info.pColorBlendState = &g_color_blending;
-            g_pipeline_info.renderPass = ctx.g_render_pass;
+            g_pipeline_info.renderPass = ctx.render_pass_manager.g_render_pass;
             g_pipeline_info.subpass = 0;
 
             try Utils.checkVk(c.vkCreateGraphicsPipelines(ctx.vulkan_device.vk_device, null, 1, &g_pipeline_info, null, &ctx.g_pipeline));
@@ -2716,8 +2637,8 @@ fn beginGPassInternal(ctx: *VulkanContext) void {
     if (!ctx.frames.frame_in_progress or ctx.g_pass_active) return;
 
     // Safety: Skip G-pass if resources are not available
-    if (ctx.g_render_pass == null or ctx.g_framebuffer == null or ctx.g_pipeline == null) {
-        std.log.warn("beginGPass: skipping - resources null (rp={}, fb={}, pipeline={})", .{ ctx.g_render_pass != null, ctx.g_framebuffer != null, ctx.g_pipeline != null });
+    if (ctx.render_pass_manager.g_render_pass == null or ctx.g_framebuffer == null or ctx.g_pipeline == null) {
+        std.log.warn("beginGPass: skipping - resources null (rp={}, fb={}, pipeline={})", .{ ctx.render_pass_manager.g_render_pass != null, ctx.g_framebuffer != null, ctx.g_pipeline != null });
         return;
     }
 
@@ -2742,20 +2663,20 @@ fn beginGPassInternal(ctx: *VulkanContext) void {
 
     // Debug: check for NULL handles
     if (command_buffer == null) std.log.err("CRITICAL: command_buffer is NULL for frame {}", .{current_frame});
-    if (ctx.g_render_pass == null) std.log.err("CRITICAL: g_render_pass is NULL", .{});
+    if (ctx.render_pass_manager.g_render_pass == null) std.log.err("CRITICAL: g_render_pass is NULL", .{});
     if (ctx.g_framebuffer == null) std.log.err("CRITICAL: g_framebuffer is NULL", .{});
     if (ctx.pipeline_layout == null) std.log.err("CRITICAL: pipeline_layout is NULL", .{});
 
     var render_pass_info = std.mem.zeroes(c.VkRenderPassBeginInfo);
     render_pass_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    render_pass_info.renderPass = ctx.g_render_pass;
+    render_pass_info.renderPass = ctx.render_pass_manager.g_render_pass;
     render_pass_info.framebuffer = ctx.g_framebuffer;
     render_pass_info.renderArea.offset = .{ .x = 0, .y = 0 };
     render_pass_info.renderArea.extent = ctx.swapchain.getExtent();
 
     // Debug: log extent on first few frames
     if (ctx.frame_index < 10) {
-        // std.log.debug("beginGPass frame {}: extent {}x{} (cb={}, rp={}, fb={})", .{ ctx.frame_index, ctx.swapchain.getExtent().width, ctx.swapchain.getExtent().height, command_buffer != null, ctx.g_render_pass != null, ctx.g_framebuffer != null });
+        // std.log.debug("beginGPass frame {}: extent {}x{} (cb={}, rp={}, fb={})", .{ ctx.frame_index, ctx.swapchain.getExtent().width, ctx.swapchain.getExtent().height, command_buffer != null, ctx.render_pass_manager.g_render_pass != null, ctx.g_framebuffer != null });
     }
 
     var clear_values: [3]c.VkClearValue = undefined;
