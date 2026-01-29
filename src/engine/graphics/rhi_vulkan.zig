@@ -1744,25 +1744,16 @@ fn deinit(ctx_ptr: *anyopaque) void {
         _ = c.vkDeviceWaitIdle(ctx.vulkan_device.vk_device);
     }
 
-    destroyMainRenderPassAndPipelines(ctx);
+    // Destroy managers first (they own pipelines, render passes, and layouts)
+    ctx.pipeline_manager.deinit(ctx.vulkan_device.vk_device);
+    ctx.render_pass_manager.deinit(ctx.vulkan_device.vk_device, ctx.allocator);
+
     destroyHDRResources(ctx);
     destroyFXAAResources(ctx);
     destroyBloomResources(ctx);
     destroyVelocityResources(ctx);
     destroyPostProcessResources(ctx);
     destroyGPassResources(ctx);
-
-    if (ctx.pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.pipeline_layout, null);
-    if (ctx.sky_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.sky_pipeline_layout, null);
-    if (ctx.ui_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.ui_pipeline_layout, null);
-    if (ctx.ui_tex_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.ui_tex_pipeline_layout, null);
-    if (ctx.ui_tex_descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(ctx.vulkan_device.vk_device, ctx.ui_tex_descriptor_set_layout, null);
-    if (ctx.post_process_descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(ctx.vulkan_device.vk_device, ctx.post_process_descriptor_set_layout, null);
-    if (comptime build_options.debug_shadows) {
-        if (ctx.debug_shadow.pipeline_layout) |layout| c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, layout, null);
-        if (ctx.debug_shadow.descriptor_set_layout) |layout| c.vkDestroyDescriptorSetLayout(ctx.vulkan_device.vk_device, layout, null);
-    }
-    if (ctx.cloud_pipeline_layout != null) c.vkDestroyPipelineLayout(ctx.vulkan_device.vk_device, ctx.cloud_pipeline_layout, null);
 
     // Destroy internal buffers and resources
     // Helper to destroy raw VulkanBuffers
