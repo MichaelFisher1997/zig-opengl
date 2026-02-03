@@ -280,6 +280,12 @@ const VulkanContext = struct {
     ui_tex_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
     ui_tex_descriptor_pool: [MAX_FRAMES_IN_FLIGHT][64]c.VkDescriptorSet = .{.{null} ** 64} ** MAX_FRAMES_IN_FLIGHT,
     ui_tex_descriptor_next: [MAX_FRAMES_IN_FLIGHT]u32 = .{0} ** MAX_FRAMES_IN_FLIGHT,
+
+    // Dedicated descriptor pool for UI texture descriptor sets
+    // This pool is separate from the main descriptor pool to avoid conflicts with FXAA/Bloom
+    // during swapchain recreation. UI texture descriptor sets are allocated once and never freed.
+    ui_tex_dedicated_descriptor_pool: c.VkDescriptorPool = null,
+
     ui_vbos: [MAX_FRAMES_IN_FLIGHT]VulkanBuffer = .{VulkanBuffer{}} ** MAX_FRAMES_IN_FLIGHT,
     ui_screen_width: f32 = 0.0,
     ui_screen_height: f32 = 0.0,
@@ -1540,19 +1546,35 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
         ctx.ui_vbos[i] = try Utils.createVulkanBuffer(&ctx.vulkan_device, 1024 * 1024, c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     }
 
+    // Create dedicated descriptor pool for UI texture descriptor sets
+    // This isolates them from FXAA/Bloom descriptor set operations during swapchain recreation
+    {
+        const vk = ctx.vulkan_device.vk_device;
+        var pool_sizes = [_]c.VkDescriptorPoolSize{
+            .{ .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = MAX_FRAMES_IN_FLIGHT * 64 },
+        };
+        var pool_info = std.mem.zeroes(c.VkDescriptorPoolCreateInfo);
+        pool_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pool_info.poolSizeCount = pool_sizes.len;
+        pool_info.pPoolSizes = &pool_sizes[0];
+        pool_info.maxSets = MAX_FRAMES_IN_FLIGHT * 64;
+        pool_info.flags = c.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        try Utils.checkVk(c.vkCreateDescriptorPool(vk, &pool_info, null, &ctx.ui_tex_dedicated_descriptor_pool));
+        std.log.info("Created dedicated UI texture descriptor pool with {} sets", .{MAX_FRAMES_IN_FLIGHT * 64});
+    }
+
     for (0..MAX_FRAMES_IN_FLIGHT) |i| {
         ctx.descriptors_dirty[i] = true;
-        // Allocate UI texture descriptor sets
+        // Allocate UI texture descriptor sets from dedicated pool
         for (0..64) |j| {
             var alloc_info = std.mem.zeroes(c.VkDescriptorSetAllocateInfo);
             alloc_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            alloc_info.descriptorPool = ctx.descriptors.descriptor_pool;
+            alloc_info.descriptorPool = ctx.ui_tex_dedicated_descriptor_pool;
             alloc_info.descriptorSetCount = 1;
             alloc_info.pSetLayouts = &ctx.pipeline_manager.ui_tex_descriptor_set_layout;
             const result = c.vkAllocateDescriptorSets(ctx.vulkan_device.vk_device, &alloc_info, &ctx.ui_tex_descriptor_pool[i][j]);
             if (result != c.VK_SUCCESS) {
-                std.log.err("Failed to allocate UI texture descriptor set [{}][{}]: error {}. Pool state: maxSets={}, available may be exhausted by FXAA+Bloom+UI", .{ i, j, result, @as(u32, 1000) });
-                // Continue trying to allocate remaining sets - some may succeed
+                std.log.err("Failed to allocate UI texture descriptor set [{}][{}]: error {}", .{ i, j, result });
             }
         }
         ctx.ui_tex_descriptor_next[i] = 0;
@@ -1663,6 +1685,20 @@ fn deinit(ctx_ptr: *anyopaque) void {
         if (ctx.dummy_shadow_memory != null) c.vkFreeMemory(ctx.vulkan_device.vk_device, ctx.dummy_shadow_memory, null);
 
         ctx.shadow_system.deinit(ctx.vulkan_device.vk_device);
+
+        // Free all UI texture descriptor sets from dedicated pool
+        if (ctx.ui_tex_dedicated_descriptor_pool != null) {
+            for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+                for (0..64) |j| {
+                    if (ctx.ui_tex_descriptor_pool[i][j] != null) {
+                        _ = c.vkFreeDescriptorSets(ctx.vulkan_device.vk_device, ctx.ui_tex_dedicated_descriptor_pool, 1, &ctx.ui_tex_descriptor_pool[i][j]);
+                        ctx.ui_tex_descriptor_pool[i][j] = null;
+                    }
+                }
+            }
+            c.vkDestroyDescriptorPool(ctx.vulkan_device.vk_device, ctx.ui_tex_dedicated_descriptor_pool, null);
+            ctx.ui_tex_dedicated_descriptor_pool = null;
+        }
 
         ctx.descriptors.deinit();
         ctx.swapchain.deinit();
@@ -3766,6 +3802,12 @@ fn drawTexture2D(ctx_ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.Rect
     ctx.ui_tex_descriptor_next[frame] = @intCast((idx + 1) % pool_len);
     const ds = ctx.ui_tex_descriptor_pool[frame][idx];
 
+    // Defensive: Skip if descriptor set is null (not allocated or was freed)
+    if (ds == null) {
+        std.log.warn("drawTexture2D: Skipping - descriptor set is null at frame {} idx {}. This may indicate allocation failure.", .{ frame, idx });
+        return;
+    }
+
     var write = std.mem.zeroes(c.VkWriteDescriptorSet);
     write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     write.dstSet = ds;
@@ -4349,6 +4391,7 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.cloud_mesh_size = 10000.0;
     ctx.descriptors.descriptor_pool = null;
     ctx.descriptors.descriptor_set_layout = null;
+    ctx.ui_tex_dedicated_descriptor_pool = null;
     ctx.memory_type_index = 0;
     ctx.anisotropic_filtering = anisotropic_filtering;
     ctx.msaa_samples = msaa_samples;
