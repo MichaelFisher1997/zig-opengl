@@ -470,9 +470,9 @@ fn destroySwapchainUIResources(ctx: *VulkanContext) void {
     ctx.ui_swapchain_framebuffers.deinit(ctx.allocator);
     ctx.ui_swapchain_framebuffers = .empty;
 
-    if (ctx.ui_swapchain_render_pass != null) {
-        c.vkDestroyRenderPass(vk, ctx.ui_swapchain_render_pass, null);
-        ctx.ui_swapchain_render_pass = null;
+    if (ctx.render_pass_manager.ui_swapchain_render_pass) |rp| {
+        c.vkDestroyRenderPass(vk, rp, null);
+        ctx.render_pass_manager.ui_swapchain_render_pass = null;
     }
 }
 
@@ -845,47 +845,13 @@ fn createSwapchainUIResources(ctx: *VulkanContext) !void {
     destroySwapchainUIResources(ctx);
     errdefer destroySwapchainUIResources(ctx);
 
-    var color_attachment = std.mem.zeroes(c.VkAttachmentDescription);
-    color_attachment.format = ctx.swapchain.getImageFormat();
-    color_attachment.samples = c.VK_SAMPLE_COUNT_1_BIT;
-    color_attachment.loadOp = c.VK_ATTACHMENT_LOAD_OP_LOAD;
-    color_attachment.storeOp = c.VK_ATTACHMENT_STORE_OP_STORE;
-    color_attachment.stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    color_attachment.stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    color_attachment.initialLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    color_attachment.finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    var color_ref = c.VkAttachmentReference{ .attachment = 0, .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-
-    var subpass = std.mem.zeroes(c.VkSubpassDescription);
-    subpass.pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &color_ref;
-
-    var dependency = std.mem.zeroes(c.VkSubpassDependency);
-    dependency.srcSubpass = c.VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.srcAccessMask = 0;
-    dependency.dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | c.VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
-    dependency.dependencyFlags = c.VK_DEPENDENCY_BY_REGION_BIT;
-
-    var rp_info = std.mem.zeroes(c.VkRenderPassCreateInfo);
-    rp_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rp_info.attachmentCount = 1;
-    rp_info.pAttachments = &color_attachment;
-    rp_info.subpassCount = 1;
-    rp_info.pSubpasses = &subpass;
-    rp_info.dependencyCount = 1;
-    rp_info.pDependencies = &dependency;
-
-    try Utils.checkVk(c.vkCreateRenderPass(vk, &rp_info, null, &ctx.ui_swapchain_render_pass));
+    // Use RenderPassManager to create the UI swapchain render pass
+    try ctx.render_pass_manager.createUISwapchainRenderPass(vk, ctx.swapchain.getImageFormat());
 
     for (ctx.swapchain.getImageViews()) |iv| {
         var fb_info = std.mem.zeroes(c.VkFramebufferCreateInfo);
         fb_info.sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        fb_info.renderPass = ctx.ui_swapchain_render_pass;
+        fb_info.renderPass = ctx.render_pass_manager.ui_swapchain_render_pass.?;
         fb_info.attachmentCount = 1;
         fb_info.pAttachments = &iv;
         fb_info.width = ctx.swapchain.getExtent().width;
@@ -1443,8 +1409,8 @@ fn destroyMainRenderPassAndPipelines(ctx: *VulkanContext) void {
 
 fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device: ?*RenderDevice) anyerror!void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    // Ensure we cleanup everything on error
-    errdefer deinit(ctx_ptr);
+    // Note: Cleanup is handled by the caller (app.zig's errdefer rhi.deinit())
+    // Do NOT use errdefer here to avoid double-free
 
     ctx.allocator = allocator;
     ctx.render_device = render_device;
@@ -1576,8 +1542,19 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
 
     for (0..MAX_FRAMES_IN_FLIGHT) |i| {
         ctx.descriptors_dirty[i] = true;
-        // Init UI pools
-        for (0..64) |j| ctx.ui_tex_descriptor_pool[i][j] = null;
+        // Allocate UI texture descriptor sets
+        for (0..64) |j| {
+            var alloc_info = std.mem.zeroes(c.VkDescriptorSetAllocateInfo);
+            alloc_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            alloc_info.descriptorPool = ctx.descriptors.descriptor_pool;
+            alloc_info.descriptorSetCount = 1;
+            alloc_info.pSetLayouts = &ctx.pipeline_manager.ui_tex_descriptor_set_layout;
+            const result = c.vkAllocateDescriptorSets(ctx.vulkan_device.vk_device, &alloc_info, &ctx.ui_tex_descriptor_pool[i][j]);
+            if (result != c.VK_SUCCESS) {
+                std.log.err("Failed to allocate UI texture descriptor set [{}][{}]: error {}. Pool state: maxSets={}, available may be exhausted by FXAA+Bloom+UI", .{ i, j, result, @as(u32, 1000) });
+                // Continue trying to allocate remaining sets - some may succeed
+            }
+        }
         ctx.ui_tex_descriptor_next[i] = 0;
     }
 
@@ -2232,7 +2209,7 @@ fn beginFXAAPassInternal(ctx: *VulkanContext) void {
 fn beginFXAAPassForUI(ctx: *VulkanContext) void {
     if (!ctx.frames.frame_in_progress) return;
     if (ctx.fxaa.pass_active) return;
-    if (ctx.ui_swapchain_render_pass == null) return;
+    if (ctx.render_pass_manager.ui_swapchain_render_pass == null) return;
     if (ctx.ui_swapchain_framebuffers.items.len == 0) return;
 
     const image_index = ctx.frames.current_image_index;
@@ -2248,7 +2225,7 @@ fn beginFXAAPassForUI(ctx: *VulkanContext) void {
 
     var rp_begin = std.mem.zeroes(c.VkRenderPassBeginInfo);
     rp_begin.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rp_begin.renderPass = ctx.ui_swapchain_render_pass;
+    rp_begin.renderPass = ctx.render_pass_manager.ui_swapchain_render_pass.?;
     rp_begin.framebuffer = ctx.ui_swapchain_framebuffers.items[image_index];
     rp_begin.renderArea = .{ .offset = .{ .x = 0, .y = 0 }, .extent = extent };
     rp_begin.clearValueCount = 1;
@@ -4356,7 +4333,7 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.ui_tex_pipeline_layout = null;
     ctx.ui_swapchain_pipeline = null;
     ctx.ui_swapchain_tex_pipeline = null;
-    ctx.ui_swapchain_render_pass = null;
+    // ui_swapchain_render_pass is managed by render_pass_manager
     ctx.ui_swapchain_framebuffers = .empty;
     if (comptime build_options.debug_shadows) {
         ctx.debug_shadow.pipeline = null;
