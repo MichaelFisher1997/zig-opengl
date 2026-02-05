@@ -1250,6 +1250,10 @@ fn createGPassResources(ctx: *VulkanContext) !void {
 }
 
 /// Creates SSAO resources: render pass, AO image, noise texture, kernel UBO, framebuffer, pipeline.
+///
+/// Note: SSAO currently owns its own render passes/pipelines inside SSAOSystem.
+/// This is intentional for now and can be migrated to RenderPassManager/PipelineManager
+/// in a follow-up PR once feature parity is validated.
 fn createSSAOResources(ctx: *VulkanContext) !void {
     const extent = ctx.swapchain.getExtent();
     try ctx.ssao_system.init(
@@ -1730,7 +1734,9 @@ fn recreateSwapchainInternal(ctx: *VulkanContext) void {
         return;
     };
 
-    // Recreate resources
+    // Recreate resources using a fail-fast strategy.
+    // If any stage fails, we return immediately to avoid running with a partially
+    // recreated renderer state (which tends to produce undefined behavior later).
     std.debug.print("recreateSwapchainInternal: recreating resources...\n", .{});
     createHDRResources(ctx) catch |err| {
         std.log.err("Failed to recreate HDR resources: {}", .{err});
