@@ -1305,6 +1305,10 @@ fn createMainFramebuffers(ctx: *VulkanContext) !void {
     const use_msaa = ctx.msaa_samples > 1;
     const extent = ctx.swapchain.getExtent();
 
+    if (ctx.render_pass_manager.hdr_render_pass == null) {
+        return error.RenderPassNotInitialized;
+    }
+
     var fb_info = std.mem.zeroes(c.VkFramebufferCreateInfo);
     fb_info.sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     fb_info.renderPass = ctx.render_pass_manager.hdr_render_pass;
@@ -1728,16 +1732,46 @@ fn recreateSwapchainInternal(ctx: *VulkanContext) void {
 
     // Recreate resources
     std.debug.print("recreateSwapchainInternal: recreating resources...\n", .{});
-    createHDRResources(ctx) catch |err| std.log.err("Failed to recreate HDR resources: {}", .{err});
-    createGPassResources(ctx) catch |err| std.log.err("Failed to recreate G-Pass resources: {}", .{err});
-    createSSAOResources(ctx) catch |err| std.log.err("Failed to recreate SSAO resources: {}", .{err});
-    ctx.render_pass_manager.createMainRenderPass(ctx.vulkan_device.vk_device, ctx.swapchain.getExtent(), ctx.msaa_samples) catch |err| std.log.err("Failed to recreate render pass: {}", .{err});
-    ctx.pipeline_manager.createMainPipelines(ctx.allocator, ctx.vulkan_device.vk_device, ctx.render_pass_manager.hdr_render_pass, ctx.render_pass_manager.g_render_pass, ctx.msaa_samples) catch |err| std.log.err("Failed to recreate pipelines: {}", .{err});
-    createPostProcessResources(ctx) catch |err| std.log.err("Failed to recreate post-process resources: {}", .{err});
-    createSwapchainUIResources(ctx) catch |err| std.log.err("Failed to recreate swapchain UI resources: {}", .{err});
-    ctx.fxaa.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.swapchain.getExtent(), ctx.swapchain.getImageFormat(), ctx.post_process_sampler, ctx.swapchain.getImageViews()) catch |err| std.log.err("Failed to recreate FXAA resources: {}", .{err});
-    ctx.pipeline_manager.createSwapchainUIPipelines(ctx.allocator, ctx.vulkan_device.vk_device, ctx.render_pass_manager.ui_swapchain_render_pass) catch |err| std.log.err("Failed to recreate swapchain UI pipelines: {}", .{err});
-    ctx.bloom.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.hdr_view, ctx.swapchain.getExtent().width, ctx.swapchain.getExtent().height, c.VK_FORMAT_R16G16B16A16_SFLOAT) catch |err| std.log.err("Failed to recreate Bloom resources: {}", .{err});
+    createHDRResources(ctx) catch |err| {
+        std.log.err("Failed to recreate HDR resources: {}", .{err});
+        return;
+    };
+    createGPassResources(ctx) catch |err| {
+        std.log.err("Failed to recreate G-Pass resources: {}", .{err});
+        return;
+    };
+    createSSAOResources(ctx) catch |err| {
+        std.log.err("Failed to recreate SSAO resources: {}", .{err});
+        return;
+    };
+    ctx.render_pass_manager.createMainRenderPass(ctx.vulkan_device.vk_device, ctx.swapchain.getExtent(), ctx.msaa_samples) catch |err| {
+        std.log.err("Failed to recreate render pass: {}", .{err});
+        return;
+    };
+    ctx.pipeline_manager.createMainPipelines(ctx.allocator, ctx.vulkan_device.vk_device, ctx.render_pass_manager.hdr_render_pass, ctx.render_pass_manager.g_render_pass, ctx.msaa_samples) catch |err| {
+        std.log.err("Failed to recreate pipelines: {}", .{err});
+        return;
+    };
+    createPostProcessResources(ctx) catch |err| {
+        std.log.err("Failed to recreate post-process resources: {}", .{err});
+        return;
+    };
+    createSwapchainUIResources(ctx) catch |err| {
+        std.log.err("Failed to recreate swapchain UI resources: {}", .{err});
+        return;
+    };
+    ctx.fxaa.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.swapchain.getExtent(), ctx.swapchain.getImageFormat(), ctx.post_process_sampler, ctx.swapchain.getImageViews()) catch |err| {
+        std.log.err("Failed to recreate FXAA resources: {}", .{err});
+        return;
+    };
+    ctx.pipeline_manager.createSwapchainUIPipelines(ctx.allocator, ctx.vulkan_device.vk_device, ctx.render_pass_manager.ui_swapchain_render_pass) catch |err| {
+        std.log.err("Failed to recreate swapchain UI pipelines: {}", .{err});
+        return;
+    };
+    ctx.bloom.init(&ctx.vulkan_device, ctx.allocator, ctx.descriptors.descriptor_pool, ctx.hdr_view, ctx.swapchain.getExtent().width, ctx.swapchain.getExtent().height, c.VK_FORMAT_R16G16B16A16_SFLOAT) catch |err| {
+        std.log.err("Failed to recreate Bloom resources: {}", .{err});
+        return;
+    };
     updatePostProcessDescriptorsWithBloom(ctx);
 
     // Ensure all recreated images are in a known layout
@@ -2073,11 +2107,6 @@ fn beginGPassInternal(ctx: *VulkanContext) void {
     render_pass_info.framebuffer = ctx.g_framebuffer;
     render_pass_info.renderArea.offset = .{ .x = 0, .y = 0 };
     render_pass_info.renderArea.extent = ctx.swapchain.getExtent();
-
-    // Debug: log extent on first few frames
-    if (ctx.frame_index < 10) {
-        // std.log.debug("beginGPass frame {}: extent {}x{} (cb={}, rp={}, fb={})", .{ ctx.frame_index, ctx.swapchain.getExtent().width, ctx.swapchain.getExtent().height, command_buffer != null, ctx.render_pass_manager.g_render_pass != null, ctx.g_framebuffer != null });
-    }
 
     var clear_values: [3]c.VkClearValue = undefined;
     clear_values[0] = std.mem.zeroes(c.VkClearValue);
