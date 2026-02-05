@@ -177,12 +177,7 @@ const VulkanContext = struct {
 
     transfer_fence: c.VkFence = null, // Keep for legacy sync if needed
 
-    // Pipeline
-    pipeline_layout: c.VkPipelineLayout = null,
-    pipeline: c.VkPipeline = null,
-
-    sky_pipeline: c.VkPipeline = null,
-    sky_pipeline_layout: c.VkPipelineLayout = null,
+    // Pipeline (managed by pipeline_manager)
 
     // Binding State
     current_texture: rhi.TextureHandle,
@@ -205,7 +200,6 @@ const VulkanContext = struct {
     // Rendering options
     wireframe_enabled: bool = false,
     textures_enabled: bool = true,
-    wireframe_pipeline: c.VkPipeline = null,
     vsync_enabled: bool = true,
     present_mode: c.VkPresentModeKHR = c.VK_PRESENT_MODE_FIFO_KHR,
     anisotropic_filtering: u8 = 1,
@@ -223,15 +217,11 @@ const VulkanContext = struct {
     g_depth_view: c.VkImageView = null,
 
     // G-Pass & Passes
-    g_render_pass: c.VkRenderPass = null,
     main_framebuffer: c.VkFramebuffer = null,
     g_framebuffer: c.VkFramebuffer = null,
     // Track the extent G-pass resources were created with (for mismatch detection)
     g_pass_extent: c.VkExtent2D = .{ .width = 0, .height = 0 },
 
-    // G-Pass Pipelines
-    g_pipeline: c.VkPipeline = null,
-    g_pipeline_layout: c.VkPipelineLayout = null,
     gpu_fault_detected: bool = false,
 
     shadow_system: ShadowSystem,
@@ -267,14 +257,7 @@ const VulkanContext = struct {
     mutex: std.Thread.Mutex = .{},
     clear_color: [4]f32 = .{ 0.07, 0.08, 0.1, 1.0 },
 
-    // UI Pipeline
-    ui_pipeline: c.VkPipeline = null,
-    ui_pipeline_layout: c.VkPipelineLayout = null,
-    ui_tex_pipeline: c.VkPipeline = null,
-    ui_tex_pipeline_layout: c.VkPipelineLayout = null,
-    ui_swapchain_pipeline: c.VkPipeline = null,
-    ui_swapchain_tex_pipeline: c.VkPipeline = null,
-    ui_swapchain_render_pass: c.VkRenderPass = null,
+    // UI Resources
     ui_swapchain_framebuffers: std.ArrayListUnmanaged(c.VkFramebuffer) = .empty,
 
     ui_tex_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
@@ -287,15 +270,10 @@ const VulkanContext = struct {
     ui_in_progress: bool = false,
     ui_vertex_offset: u64 = 0,
     selection_mode: bool = false,
-    selection_pipeline: c.VkPipeline = null,
-    selection_pipeline_layout: c.VkPipelineLayout = null,
-    line_pipeline: c.VkPipeline = null,
     ui_flushed_vertex_count: u32 = 0,
     ui_mapped_ptr: ?*anyopaque = null,
 
-    // Cloud Pipeline
-    cloud_pipeline: c.VkPipeline = null,
-    cloud_pipeline_layout: c.VkPipelineLayout = null,
+    // Cloud resources
     cloud_vbo: VulkanBuffer = .{},
     cloud_ebo: VulkanBuffer = .{},
     cloud_mesh_size: f32 = 0.0,
@@ -388,6 +366,13 @@ fn destroyPostProcessResources(ctx: *VulkanContext) void {
         c.vkDestroyPipelineLayout(vk, ctx.post_process_pipeline_layout, null);
         ctx.post_process_pipeline_layout = null;
     }
+    // Free descriptor sets BEFORE destroying their layout
+    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+        if (ctx.post_process_descriptor_sets[i] != null) {
+            _ = c.vkFreeDescriptorSets(vk, ctx.descriptors.descriptor_pool, 1, &ctx.post_process_descriptor_sets[i]);
+            ctx.post_process_descriptor_sets[i] = null;
+        }
+    }
     if (ctx.post_process_descriptor_set_layout != null) {
         c.vkDestroyDescriptorSetLayout(vk, ctx.post_process_descriptor_set_layout, null);
         ctx.post_process_descriptor_set_layout = null;
@@ -403,15 +388,12 @@ fn destroyPostProcessResources(ctx: *VulkanContext) void {
 fn destroyGPassResources(ctx: *VulkanContext) void {
     const vk = ctx.vulkan_device.vk_device;
     destroyVelocityResources(ctx);
-    ctx.ssao_system.deinit(vk, ctx.allocator);
-    if (ctx.g_pipeline != null) {
-        c.vkDestroyPipeline(vk, ctx.g_pipeline, null);
-        ctx.g_pipeline = null;
+    ctx.ssao_system.deinit(vk, ctx.allocator, ctx.descriptors.descriptor_pool);
+    if (ctx.pipeline_manager.g_pipeline != null) {
+        c.vkDestroyPipeline(vk, ctx.pipeline_manager.g_pipeline, null);
+        ctx.pipeline_manager.g_pipeline = null;
     }
-    if (ctx.g_pipeline_layout != null) {
-        c.vkDestroyPipelineLayout(vk, ctx.g_pipeline_layout, null);
-        ctx.g_pipeline_layout = null;
-    }
+    // Note: g_pipeline uses pipeline_manager.pipeline_layout (shared), not a separate layout
     if (ctx.g_framebuffer != null) {
         c.vkDestroyFramebuffer(vk, ctx.g_framebuffer, null);
         ctx.g_framebuffer = null;
@@ -1620,6 +1602,13 @@ fn deinit(ctx_ptr: *anyopaque) void {
         // Wait for device to be idle before cleanup
         _ = c.vkDeviceWaitIdle(vk_device);
 
+        // Main HDR framebuffer is owned directly by VulkanContext.
+        // Destroy it explicitly during shutdown.
+        if (ctx.main_framebuffer != null) {
+            c.vkDestroyFramebuffer(vk_device, ctx.main_framebuffer, null);
+            ctx.main_framebuffer = null;
+        }
+
         // Destroy managers first (they own pipelines, render passes, and layouts)
         // Managers handle null values internally
         ctx.pipeline_manager.deinit(vk_device);
@@ -2048,8 +2037,8 @@ fn beginGPassInternal(ctx: *VulkanContext) void {
     if (!ctx.frames.frame_in_progress or ctx.g_pass_active) return;
 
     // Safety: Skip G-pass if resources are not available
-    if (ctx.render_pass_manager.g_render_pass == null or ctx.g_framebuffer == null or ctx.g_pipeline == null) {
-        std.log.warn("beginGPass: skipping - resources null (rp={}, fb={}, pipeline={})", .{ ctx.render_pass_manager.g_render_pass != null, ctx.g_framebuffer != null, ctx.g_pipeline != null });
+    if (ctx.render_pass_manager.g_render_pass == null or ctx.g_framebuffer == null or ctx.pipeline_manager.g_pipeline == null) {
+        std.log.warn("beginGPass: skipping - resources null (rp={}, fb={}, pipeline={})", .{ ctx.render_pass_manager.g_render_pass != null, ctx.g_framebuffer != null, ctx.pipeline_manager.g_pipeline != null });
         return;
     }
 
@@ -2076,7 +2065,7 @@ fn beginGPassInternal(ctx: *VulkanContext) void {
     if (command_buffer == null) std.log.err("CRITICAL: command_buffer is NULL for frame {}", .{current_frame});
     if (ctx.render_pass_manager.g_render_pass == null) std.log.err("CRITICAL: g_render_pass is NULL", .{});
     if (ctx.g_framebuffer == null) std.log.err("CRITICAL: g_framebuffer is NULL", .{});
-    if (ctx.pipeline_layout == null) std.log.err("CRITICAL: pipeline_layout is NULL", .{});
+    if (ctx.pipeline_manager.pipeline_layout == null) std.log.err("CRITICAL: pipeline_layout is NULL", .{});
 
     var render_pass_info = std.mem.zeroes(c.VkRenderPassBeginInfo);
     render_pass_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -2101,7 +2090,7 @@ fn beginGPassInternal(ctx: *VulkanContext) void {
     render_pass_info.pClearValues = &clear_values[0];
 
     c.vkCmdBeginRenderPass(command_buffer, &render_pass_info, c.VK_SUBPASS_CONTENTS_INLINE);
-    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.g_pipeline);
+    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.g_pipeline);
 
     const viewport = c.VkViewport{ .x = 0, .y = 0, .width = @floatFromInt(ctx.swapchain.getExtent().width), .height = @floatFromInt(ctx.swapchain.getExtent().height), .minDepth = 0, .maxDepth = 1 };
     c.vkCmdSetViewport(command_buffer, 0, 1, &viewport);
@@ -2111,7 +2100,7 @@ fn beginGPassInternal(ctx: *VulkanContext) void {
     const ds = ctx.descriptors.descriptor_sets[ctx.frames.current_frame];
     if (ds == null) std.log.err("CRITICAL: descriptor_set is NULL for frame {}", .{ctx.frames.current_frame});
 
-    c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, &ds, 0, null);
+    c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.pipeline_layout, 0, 1, &ds, 0, null);
 }
 
 fn beginGPass(ctx_ptr: *anyopaque) void {
@@ -2859,12 +2848,12 @@ fn beginCloudPass(ctx_ptr: *anyopaque, params: rhi.CloudParams) void {
     if (!ctx.main_pass_active) return;
 
     // Use dedicated cloud pipeline
-    if (ctx.cloud_pipeline == null) return;
+    if (ctx.pipeline_manager.cloud_pipeline == null) return;
 
     const command_buffer = ctx.frames.command_buffers[ctx.frames.current_frame];
 
     // Bind cloud pipeline
-    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.cloud_pipeline);
+    c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.cloud_pipeline);
     ctx.terrain_pipeline_bound = false;
 
     // CloudPushConstants: mat4 view_proj + 4 vec4s = 128 bytes
@@ -2884,7 +2873,7 @@ fn beginCloudPass(ctx_ptr: *anyopaque, params: rhi.CloudParams) void {
         .fog_params = .{ params.fog_color.x, params.fog_color.y, params.fog_color.z, params.fog_density },
     };
 
-    c.vkCmdPushConstants(command_buffer, ctx.cloud_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(CloudPushConstants), &pc);
+    c.vkCmdPushConstants(command_buffer, ctx.pipeline_manager.cloud_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(CloudPushConstants), &pc);
 }
 
 fn drawDepthTexture(ctx_ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.Rect) void {
@@ -2968,7 +2957,7 @@ fn drawDepthTexture(ctx_ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.R
     const restore_pipeline = getUIPipeline(ctx, false);
     if (restore_pipeline != null) {
         c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, restore_pipeline);
-        c.vkCmdPushConstants(command_buffer, ctx.ui_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
+        c.vkCmdPushConstants(command_buffer, ctx.pipeline_manager.ui_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
     }
 }
 
@@ -3245,8 +3234,8 @@ fn drawIndexed(ctx_ptr: *anyopaque, vbo_handle: rhi.BufferHandle, ebo_handle: rh
 
             // Use simple pipeline binding logic
             if (!ctx.terrain_pipeline_bound) {
-                const selected_pipeline = if (ctx.wireframe_enabled and ctx.wireframe_pipeline != null)
-                    ctx.wireframe_pipeline
+                const selected_pipeline = if (ctx.wireframe_enabled and ctx.pipeline_manager.wireframe_pipeline != null)
+                    ctx.pipeline_manager.wireframe_pipeline
                 else
                     ctx.pipeline_manager.terrain_pipeline;
                 if (selected_pipeline == null) return;
@@ -3258,7 +3247,7 @@ fn drawIndexed(ctx_ptr: *anyopaque, vbo_handle: rhi.BufferHandle, ebo_handle: rh
                 &ctx.descriptors.lod_descriptor_sets[ctx.frames.current_frame]
             else
                 &ctx.descriptors.descriptor_sets[ctx.frames.current_frame];
-            c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, descriptor_set, 0, null);
+            c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.pipeline_layout, 0, 1, descriptor_set, 0, null);
 
             const offset: c.VkDeviceSize = 0;
             c.vkCmdBindVertexBuffers(command_buffer, 0, 1, &vbo.buffer, &offset);
@@ -3297,12 +3286,12 @@ fn drawIndirect(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, command_buffer: r
                     ctx.shadow_system.pipeline_bound = true;
                 }
             } else if (use_g_pass) {
-                if (ctx.g_pipeline == null) return;
-                c.vkCmdBindPipeline(cb, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.g_pipeline);
+                if (ctx.pipeline_manager.g_pipeline == null) return;
+                c.vkCmdBindPipeline(cb, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.g_pipeline);
             } else {
                 if (!ctx.terrain_pipeline_bound) {
-                    const selected_pipeline = if (ctx.wireframe_enabled and ctx.wireframe_pipeline != null)
-                        ctx.wireframe_pipeline
+                    const selected_pipeline = if (ctx.wireframe_enabled and ctx.pipeline_manager.wireframe_pipeline != null)
+                        ctx.pipeline_manager.wireframe_pipeline
                     else
                         ctx.pipeline_manager.terrain_pipeline;
                     if (selected_pipeline == null) {
@@ -3318,7 +3307,7 @@ fn drawIndirect(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, command_buffer: r
                 &ctx.descriptors.lod_descriptor_sets[ctx.frames.current_frame]
             else
                 &ctx.descriptors.descriptor_sets[ctx.frames.current_frame];
-            c.vkCmdBindDescriptorSets(cb, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, descriptor_set, 0, null);
+            c.vkCmdBindDescriptorSets(cb, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.pipeline_layout, 0, 1, descriptor_set, 0, null);
 
             if (use_shadow) {
                 const cascade_index = ctx.shadow_system.pass_index;
@@ -3327,14 +3316,14 @@ fn drawIndirect(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, command_buffer: r
                     .mvp = ctx.shadow_system.pass_matrix,
                     .bias_params = .{ 2.0, 1.0, @floatFromInt(cascade_index), texel_size },
                 };
-                c.vkCmdPushConstants(cb, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
+                c.vkCmdPushConstants(cb, ctx.pipeline_manager.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
             } else {
                 const uniforms = ModelUniforms{
                     .model = Mat4.identity,
                     .color = .{ 1.0, 1.0, 1.0 },
                     .mask_radius = 0,
                 };
-                c.vkCmdPushConstants(cb, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
+                c.vkCmdPushConstants(cb, ctx.pipeline_manager.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
             }
 
             const offset_vals = [_]c.VkDeviceSize{0};
@@ -3401,12 +3390,12 @@ fn drawInstance(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, insta
                 ctx.shadow_system.pipeline_bound = true;
             }
         } else if (use_g_pass) {
-            if (ctx.g_pipeline == null) return;
-            c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.g_pipeline);
+            if (ctx.pipeline_manager.g_pipeline == null) return;
+            c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.g_pipeline);
         } else {
             if (!ctx.terrain_pipeline_bound) {
-                const selected_pipeline = if (ctx.wireframe_enabled and ctx.wireframe_pipeline != null)
-                    ctx.wireframe_pipeline
+                const selected_pipeline = if (ctx.wireframe_enabled and ctx.pipeline_manager.wireframe_pipeline != null)
+                    ctx.pipeline_manager.wireframe_pipeline
                 else
                     ctx.pipeline_manager.terrain_pipeline;
                 if (selected_pipeline == null) return;
@@ -3419,7 +3408,7 @@ fn drawInstance(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, insta
             &ctx.descriptors.lod_descriptor_sets[ctx.frames.current_frame]
         else
             &ctx.descriptors.descriptor_sets[ctx.frames.current_frame];
-        c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, descriptor_set, 0, null);
+        c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.pipeline_layout, 0, 1, descriptor_set, 0, null);
 
         if (use_shadow) {
             const cascade_index = ctx.shadow_system.pass_index;
@@ -3428,14 +3417,14 @@ fn drawInstance(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, insta
                 .mvp = ctx.shadow_system.pass_matrix.multiply(ctx.current_model),
                 .bias_params = .{ 2.0, 1.0, @floatFromInt(cascade_index), texel_size },
             };
-            c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
+            c.vkCmdPushConstants(command_buffer, ctx.pipeline_manager.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
         } else {
             const uniforms = ModelUniforms{
                 .model = Mat4.identity,
                 .color = .{ 1.0, 1.0, 1.0 },
                 .mask_radius = 0,
             };
-            c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
+            c.vkCmdPushConstants(command_buffer, ctx.pipeline_manager.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
         }
 
         const offset: c.VkDeviceSize = 0;
@@ -3492,25 +3481,25 @@ fn drawOffset(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: r
                 c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.shadow_system.shadow_pipeline);
                 ctx.shadow_system.pipeline_bound = true;
             }
-            c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, &ctx.descriptors.descriptor_sets[ctx.frames.current_frame], 0, null);
+            c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.pipeline_layout, 0, 1, &ctx.descriptors.descriptor_sets[ctx.frames.current_frame], 0, null);
         } else if (use_g_pass) {
-            if (ctx.g_pipeline == null) return;
-            c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.g_pipeline);
+            if (ctx.pipeline_manager.g_pipeline == null) return;
+            c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.g_pipeline);
 
             const descriptor_set = if (ctx.lod_mode)
                 &ctx.descriptors.lod_descriptor_sets[ctx.frames.current_frame]
             else
                 &ctx.descriptors.descriptor_sets[ctx.frames.current_frame];
-            c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, descriptor_set, 0, null);
+            c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.pipeline_layout, 0, 1, descriptor_set, 0, null);
         } else {
             const needs_rebinding = !ctx.terrain_pipeline_bound or ctx.selection_mode or mode == .lines;
             if (needs_rebinding) {
-                const selected_pipeline = if (ctx.selection_mode and ctx.selection_pipeline != null)
-                    ctx.selection_pipeline
-                else if (mode == .lines and ctx.line_pipeline != null)
-                    ctx.line_pipeline
-                else if (ctx.wireframe_enabled and ctx.wireframe_pipeline != null)
-                    ctx.wireframe_pipeline
+                const selected_pipeline = if (ctx.selection_mode and ctx.pipeline_manager.selection_pipeline != null)
+                    ctx.pipeline_manager.selection_pipeline
+                else if (mode == .lines and ctx.pipeline_manager.line_pipeline != null)
+                    ctx.pipeline_manager.line_pipeline
+                else if (ctx.wireframe_enabled and ctx.pipeline_manager.wireframe_pipeline != null)
+                    ctx.pipeline_manager.wireframe_pipeline
                 else
                     ctx.pipeline_manager.terrain_pipeline;
                 if (selected_pipeline == null) return;
@@ -3523,7 +3512,7 @@ fn drawOffset(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: r
                 &ctx.descriptors.lod_descriptor_sets[ctx.frames.current_frame]
             else
                 &ctx.descriptors.descriptor_sets[ctx.frames.current_frame];
-            c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_layout, 0, 1, descriptor_set, 0, null);
+            c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.pipeline_layout, 0, 1, descriptor_set, 0, null);
         }
 
         if (use_shadow) {
@@ -3533,14 +3522,14 @@ fn drawOffset(ctx_ptr: *anyopaque, handle: rhi.BufferHandle, count: u32, mode: r
                 .mvp = ctx.shadow_system.pass_matrix.multiply(ctx.current_model),
                 .bias_params = .{ 2.0, 1.0, @floatFromInt(cascade_index), texel_size },
             };
-            c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
+            c.vkCmdPushConstants(command_buffer, ctx.pipeline_manager.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ShadowModelUniforms), &shadow_uniforms);
         } else {
             const uniforms = ModelUniforms{
                 .model = ctx.current_model,
                 .color = ctx.current_color,
                 .mask_radius = ctx.current_mask_radius,
             };
-            c.vkCmdPushConstants(command_buffer, ctx.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
+            c.vkCmdPushConstants(command_buffer, ctx.pipeline_manager.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(ModelUniforms), &uniforms);
         }
 
         const offset_vbo: c.VkDeviceSize = @intCast(offset);
@@ -3595,7 +3584,7 @@ fn pushConstants(ctx_ptr: *anyopaque, stages: rhi.ShaderStageFlags, offset: u32,
     const cb = ctx.frames.command_buffers[ctx.frames.current_frame];
     // Currently we only have one main pipeline layout used for everything.
     // In a more SOLID system, we'd bind the layout associated with the current shader.
-    c.vkCmdPushConstants(cb, ctx.pipeline_layout, vk_stages, offset, size, data);
+    c.vkCmdPushConstants(cb, ctx.pipeline_manager.pipeline_layout, vk_stages, offset, size, data);
 }
 
 // 2D Rendering functions
@@ -3609,7 +3598,7 @@ fn begin2DPass(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void 
     defer ctx.mutex.unlock();
 
     const use_swapchain = ctx.post_process_ran_this_frame;
-    const ui_pipeline = if (use_swapchain) ctx.ui_swapchain_pipeline else ctx.ui_pipeline;
+    const ui_pipeline = if (use_swapchain) ctx.pipeline_manager.ui_swapchain_pipeline else ctx.pipeline_manager.ui_pipeline;
     if (ui_pipeline == null) return;
 
     // If post-process already ran, render UI directly to swapchain (overlay).
@@ -3648,7 +3637,7 @@ fn begin2DPass(ctx_ptr: *anyopaque, screen_width: f32, screen_height: f32) void 
 
     // Set orthographic projection
     const proj = Mat4.orthographic(0, ctx.ui_screen_width, ctx.ui_screen_height, 0, -1, 1);
-    c.vkCmdPushConstants(command_buffer, ctx.ui_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
+    c.vkCmdPushConstants(command_buffer, ctx.pipeline_manager.ui_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
 
     // Force Viewport/Scissor to match UI screen size
     const viewport = c.VkViewport{ .x = 0, .y = 0, .width = ctx.ui_screen_width, .height = ctx.ui_screen_height, .minDepth = 0, .maxDepth = 1 };
@@ -3713,9 +3702,9 @@ const VULKAN_SHADOW_CONTEXT_VTABLE = rhi.IShadowContext.VTable{
 
 fn getUIPipeline(ctx: *VulkanContext, textured: bool) c.VkPipeline {
     if (ctx.ui_using_swapchain) {
-        return if (textured) ctx.ui_swapchain_tex_pipeline else ctx.ui_swapchain_pipeline;
+        return if (textured) ctx.pipeline_manager.ui_swapchain_tex_pipeline else ctx.pipeline_manager.ui_swapchain_pipeline;
     }
-    return if (textured) ctx.ui_tex_pipeline else ctx.ui_pipeline;
+    return if (textured) ctx.pipeline_manager.ui_tex_pipeline else ctx.pipeline_manager.ui_pipeline;
 }
 
 fn bindUIPipeline(ctx_ptr: *anyopaque, textured: bool) void {
@@ -3775,11 +3764,11 @@ fn drawTexture2D(ctx_ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.Rect
     write.pImageInfo = &image_info;
 
     c.vkUpdateDescriptorSets(ctx.vulkan_device.vk_device, 1, &write, 0, null);
-    c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.ui_tex_pipeline_layout, 0, 1, &ds, 0, null);
+    c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, ctx.pipeline_manager.ui_tex_pipeline_layout, 0, 1, &ds, 0, null);
 
     // 4. Set Push Constants (Projection)
     const proj = Mat4.orthographic(0, ctx.ui_screen_width, ctx.ui_screen_height, 0, -1, 1);
-    c.vkCmdPushConstants(command_buffer, ctx.ui_tex_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
+    c.vkCmdPushConstants(command_buffer, ctx.pipeline_manager.ui_tex_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
 
     // 5. Draw
     const x = rect.x;
@@ -3817,7 +3806,7 @@ fn drawTexture2D(ctx_ptr: *anyopaque, texture: rhi.TextureHandle, rect: rhi.Rect
     const restore_pipeline = getUIPipeline(ctx, false);
     if (restore_pipeline != null) {
         c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, restore_pipeline);
-        c.vkCmdPushConstants(command_buffer, ctx.ui_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
+        c.vkCmdPushConstants(command_buffer, ctx.pipeline_manager.ui_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(Mat4), &proj.data);
     }
 }
 
@@ -3944,19 +3933,19 @@ fn updateShadowUniforms(ctx_ptr: *anyopaque, params: rhi.ShadowParams) anyerror!
 
 fn getNativeSkyPipeline(ctx_ptr: *anyopaque) u64 {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    return @intFromPtr(ctx.sky_pipeline);
+    return @intFromPtr(ctx.pipeline_manager.sky_pipeline);
 }
 fn getNativeSkyPipelineLayout(ctx_ptr: *anyopaque) u64 {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    return @intFromPtr(ctx.sky_pipeline_layout);
+    return @intFromPtr(ctx.pipeline_manager.sky_pipeline_layout);
 }
 fn getNativeCloudPipeline(ctx_ptr: *anyopaque) u64 {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    return @intFromPtr(ctx.cloud_pipeline);
+    return @intFromPtr(ctx.pipeline_manager.cloud_pipeline);
 }
 fn getNativeCloudPipelineLayout(ctx_ptr: *anyopaque) u64 {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
-    return @intFromPtr(ctx.cloud_pipeline_layout);
+    return @intFromPtr(ctx.pipeline_manager.cloud_pipeline_layout);
 }
 fn getNativeMainDescriptorSet(ctx_ptr: *anyopaque) u64 {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
@@ -4323,16 +4312,16 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
     ctx.swapchain.swapchain.msaa_color_view = null;
     ctx.swapchain.swapchain.msaa_color_memory = null;
     ctx.pipeline_manager.terrain_pipeline = null;
-    ctx.pipeline_layout = null;
-    ctx.wireframe_pipeline = null;
-    ctx.sky_pipeline = null;
-    ctx.sky_pipeline_layout = null;
-    ctx.ui_pipeline = null;
-    ctx.ui_pipeline_layout = null;
-    ctx.ui_tex_pipeline = null;
-    ctx.ui_tex_pipeline_layout = null;
-    ctx.ui_swapchain_pipeline = null;
-    ctx.ui_swapchain_tex_pipeline = null;
+    ctx.pipeline_manager.pipeline_layout = null;
+    ctx.pipeline_manager.wireframe_pipeline = null;
+    ctx.pipeline_manager.sky_pipeline = null;
+    ctx.pipeline_manager.sky_pipeline_layout = null;
+    ctx.pipeline_manager.ui_pipeline = null;
+    ctx.pipeline_manager.ui_pipeline_layout = null;
+    ctx.pipeline_manager.ui_tex_pipeline = null;
+    ctx.pipeline_manager.ui_tex_pipeline_layout = null;
+    ctx.pipeline_manager.ui_swapchain_pipeline = null;
+    ctx.pipeline_manager.ui_swapchain_tex_pipeline = null;
     // ui_swapchain_render_pass is managed by render_pass_manager
     ctx.ui_swapchain_framebuffers = .empty;
     if (comptime build_options.debug_shadows) {
@@ -4342,8 +4331,8 @@ pub fn createRHI(allocator: std.mem.Allocator, window: *c.SDL_Window, render_dev
         ctx.debug_shadow.vbo = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
         ctx.debug_shadow.descriptor_next = .{ 0, 0 };
     }
-    ctx.cloud_pipeline = null;
-    ctx.cloud_pipeline_layout = null;
+    ctx.pipeline_manager.cloud_pipeline = null;
+    ctx.pipeline_manager.cloud_pipeline_layout = null;
     ctx.cloud_vbo = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
     ctx.cloud_ebo = .{ .buffer = null, .memory = null, .size = 0, .is_host_visible = false };
     ctx.cloud_mesh_size = 10000.0;
