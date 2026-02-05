@@ -1410,7 +1410,7 @@ fn initContext(ctx_ptr: *anyopaque, allocator: std.mem.Allocator, render_device:
 
     // PR1: Initialize PipelineManager and RenderPassManager
     ctx.pipeline_manager = try PipelineManager.init(&ctx.vulkan_device, &ctx.descriptors, null);
-    ctx.render_pass_manager = RenderPassManager.init();
+    ctx.render_pass_manager = RenderPassManager.init(ctx.allocator);
 
     ctx.shadow_system = try ShadowSystem.init(allocator, ctx.shadow_resolution);
 
@@ -1616,7 +1616,7 @@ fn deinit(ctx_ptr: *anyopaque) void {
         // Destroy managers first (they own pipelines, render passes, and layouts)
         // Managers handle null values internally
         ctx.pipeline_manager.deinit(vk_device);
-        ctx.render_pass_manager.deinit(vk_device, ctx.allocator);
+        ctx.render_pass_manager.deinit(vk_device);
 
         destroyHDRResources(ctx);
         destroyFXAAResources(ctx);
@@ -2086,6 +2086,7 @@ fn beginGPassInternal(ctx: *VulkanContext) void {
         };
         createSSAOResources(ctx) catch |err| {
             std.log.err("Failed to recreate SSAO resources: {}", .{err});
+            return;
         };
     }
 
@@ -2095,11 +2096,10 @@ fn beginGPassInternal(ctx: *VulkanContext) void {
     const current_frame = ctx.frames.current_frame;
     const command_buffer = ctx.frames.command_buffers[current_frame];
 
-    // Debug: check for NULL handles
-    if (command_buffer == null) std.log.err("CRITICAL: command_buffer is NULL for frame {}", .{current_frame});
-    if (ctx.render_pass_manager.g_render_pass == null) std.log.err("CRITICAL: g_render_pass is NULL", .{});
-    if (ctx.g_framebuffer == null) std.log.err("CRITICAL: g_framebuffer is NULL", .{});
-    if (ctx.pipeline_manager.pipeline_layout == null) std.log.err("CRITICAL: pipeline_layout is NULL", .{});
+    if (command_buffer == null or ctx.pipeline_manager.pipeline_layout == null) {
+        std.log.err("beginGPass: invalid command state (cb={}, layout={})", .{ command_buffer != null, ctx.pipeline_manager.pipeline_layout != null });
+        return;
+    }
 
     var render_pass_info = std.mem.zeroes(c.VkRenderPassBeginInfo);
     render_pass_info.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
