@@ -429,6 +429,7 @@ pub const OverworldGenerator = struct {
 
     fn deinitWrapper(ptr: *anyopaque, allocator: std.mem.Allocator) void {
         const self: *OverworldGenerator = @ptrCast(@alignCast(ptr));
+        self.lighting_computer.deinit();
         allocator.destroy(self);
     }
 };

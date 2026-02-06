@@ -15,7 +15,6 @@ pub const CoastalGenerator = struct {
     }
 
     pub fn getSurfaceType(
-        _: *const CoastalGenerator,
         surface_builder: *const SurfaceBuilder,
         continentalness: f32,
         slope: i32,
@@ -41,7 +40,7 @@ pub const CoastalGenerator = struct {
         return height < sea_level and c >= self.ocean_threshold;
     }
 
-    pub fn applyCoastJitter(_: *const CoastalGenerator, base_continentalness: f32, coast_jitter: f32) f32 {
+    pub fn applyCoastJitter(base_continentalness: f32, coast_jitter: f32) f32 {
         return clamp01(base_continentalness + coast_jitter);
     }
 };

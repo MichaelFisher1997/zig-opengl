@@ -133,7 +133,7 @@ pub const TerrainShapeGenerator = struct {
         var noise = self.noise_sampler.sampleColumn(wx, wz, reduction);
         const cj_octaves: u16 = if (2 > reduction) 2 - @as(u16, reduction) else 1;
         const coast_jitter = self.noise_sampler.coast_jitter_noise.get2DOctaves(noise.warped_x, noise.warped_z, cj_octaves);
-        const c_jittered = self.coastal_generator.applyCoastJitter(noise.continentalness, coast_jitter);
+        const c_jittered = CoastalGenerator.applyCoastJitter(noise.continentalness, coast_jitter);
         noise.continentalness = c_jittered;
         noise.river_mask = self.noise_sampler.getRiverMask(noise.warped_x, noise.warped_z, reduction);
 
@@ -303,7 +303,7 @@ pub const TerrainShapeGenerator = struct {
                 const idx = local_x + local_z * CHUNK_SIZE_X;
                 const biome_def = biome_mod.getBiomeDefinition(phase_data.biome_ids[idx]);
                 phase_data.filler_depths[idx] = biome_def.surface.depth_range;
-                phase_data.coastal_types[idx] = self.coastal_generator.getSurfaceType(
+                phase_data.coastal_types[idx] = CoastalGenerator.getSurfaceType(
                     &self.surface_builder,
                     phase_data.continentalness_values[idx],
                     phase_data.slopes[idx],

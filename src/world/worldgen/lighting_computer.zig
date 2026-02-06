@@ -20,6 +20,8 @@ pub const LightingComputer = struct {
         return .{};
     }
 
+    pub fn deinit(_: *LightingComputer) void {}
+
     pub fn computeSkylight(_: *const LightingComputer, chunk: *Chunk) void {
         var local_z: u32 = 0;
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {

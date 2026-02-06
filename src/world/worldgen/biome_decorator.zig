@@ -26,13 +26,13 @@ pub const BiomeDecorator = struct {
     pub fn generateOres(self: *const BiomeDecorator, chunk: *Chunk) void {
         var prng = std.Random.DefaultPrng.init(self.ore_seed +% @as(u64, @bitCast(@as(i64, chunk.chunk_x))) *% 59381 +% @as(u64, @bitCast(@as(i64, chunk.chunk_z))) *% 28411);
         const random = prng.random();
-        self.placeOreVeins(chunk, .coal_ore, 20, 6, 10, 128, random);
-        self.placeOreVeins(chunk, .iron_ore, 10, 4, 5, 64, random);
-        self.placeOreVeins(chunk, .gold_ore, 3, 3, 2, 32, random);
-        self.placeOreVeins(chunk, .glowstone, 8, 4, 5, 40, random);
+        placeOreVeins(chunk, .coal_ore, 20, 6, 10, 128, random);
+        placeOreVeins(chunk, .iron_ore, 10, 4, 5, 64, random);
+        placeOreVeins(chunk, .gold_ore, 3, 3, 2, 32, random);
+        placeOreVeins(chunk, .glowstone, 8, 4, 5, 40, random);
     }
 
-    fn placeOreVeins(_: *const BiomeDecorator, chunk: *Chunk, block: BlockType, count: u32, size: u32, min_y: i32, max_y: i32, random: std.Random) void {
+    fn placeOreVeins(chunk: *Chunk, block: BlockType, count: u32, size: u32, min_y: i32, max_y: i32, random: std.Random) void {
         for (0..count) |_| {
             const cx = random.uintLessThan(u32, CHUNK_SIZE_X);
             const cz = random.uintLessThan(u32, CHUNK_SIZE_Z);
