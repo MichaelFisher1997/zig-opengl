@@ -4,6 +4,7 @@ const rhi = @import("../rhi.zig");
 const Utils = @import("utils.zig");
 const shader_registry = @import("shader_registry.zig");
 const build_options = @import("build_options");
+const bindings = @import("descriptor_bindings.zig");
 const lifecycle = @import("rhi_resource_lifecycle.zig");
 
 const DEPTH_FORMAT = c.VK_FORMAT_D32_SFLOAT;
@@ -324,7 +325,7 @@ pub fn createGPassResources(ctx: anytype) !void {
     try lifecycle.transitionImagesToShaderRead(ctx, &d_images, true);
 
     ctx.gpass.g_pass_extent = extent;
-    std.log.info("G-Pass resources created ({}x{}) with velocity buffer", .{ extent.width, extent.height });
+    std.log.debug("G-Pass resources created ({}x{}) with velocity buffer", .{ extent.width, extent.height });
 }
 
 pub fn createSSAOResources(ctx: anytype) !void {
@@ -358,7 +359,7 @@ pub fn createSSAOResources(ctx: anytype) !void {
         var main_ssao_write = std.mem.zeroes(c.VkWriteDescriptorSet);
         main_ssao_write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         main_ssao_write.dstSet = ctx.descriptors.descriptor_sets[i];
-        main_ssao_write.dstBinding = 10;
+        main_ssao_write.dstBinding = bindings.SSAO_TEXTURE;
         main_ssao_write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         main_ssao_write.descriptorCount = 1;
         main_ssao_write.pImageInfo = &main_ssao_info;

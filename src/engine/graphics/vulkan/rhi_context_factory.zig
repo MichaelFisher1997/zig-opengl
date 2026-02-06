@@ -22,6 +22,7 @@ pub fn createRHI(
     vtable: *const rhi.RHI.VTable,
 ) !rhi.RHI {
     const ctx = try allocator.create(VulkanContext);
+    errdefer allocator.destroy(ctx);
     @memset(std.mem.asBytes(ctx), 0);
 
     ctx.allocator = allocator;

@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("../../../c.zig").c;
 const rhi = @import("../rhi.zig");
 const build_options = @import("build_options");
+const bindings = @import("descriptor_bindings.zig");
 const lifecycle = @import("rhi_resource_lifecycle.zig");
 const setup = @import("rhi_resource_setup.zig");
 
@@ -187,11 +188,11 @@ pub fn prepareFrameState(ctx: anytype) void {
         const dummy_tex_entry = ctx.resources.textures.get(ctx.draw.dummy_texture);
 
         const atlas_slots = [_]struct { handle: rhi.TextureHandle, binding: u32 }{
-            .{ .handle = cur_tex, .binding = 1 },
-            .{ .handle = cur_nor, .binding = 6 },
-            .{ .handle = cur_rou, .binding = 7 },
-            .{ .handle = cur_dis, .binding = 8 },
-            .{ .handle = cur_env, .binding = 9 },
+            .{ .handle = cur_tex, .binding = bindings.ALBEDO_TEXTURE },
+            .{ .handle = cur_nor, .binding = bindings.NORMAL_TEXTURE },
+            .{ .handle = cur_rou, .binding = bindings.ROUGHNESS_TEXTURE },
+            .{ .handle = cur_dis, .binding = bindings.DISPLACEMENT_TEXTURE },
+            .{ .handle = cur_env, .binding = bindings.ENV_TEXTURE },
         };
 
         for (atlas_slots) |slot| {
@@ -231,7 +232,7 @@ pub fn prepareFrameState(ctx: anytype) void {
         writes[write_count] = std.mem.zeroes(c.VkWriteDescriptorSet);
         writes[write_count].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[write_count].dstSet = ctx.descriptors.descriptor_sets[ctx.frames.current_frame];
-        writes[write_count].dstBinding = 3;
+        writes[write_count].dstBinding = bindings.SHADOW_COMPARE_TEXTURE;
         writes[write_count].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[write_count].descriptorCount = 1;
         writes[write_count].pImageInfo = &image_infos[info_count];
@@ -246,7 +247,7 @@ pub fn prepareFrameState(ctx: anytype) void {
         writes[write_count] = std.mem.zeroes(c.VkWriteDescriptorSet);
         writes[write_count].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[write_count].dstSet = ctx.descriptors.descriptor_sets[ctx.frames.current_frame];
-        writes[write_count].dstBinding = 4;
+        writes[write_count].dstBinding = bindings.SHADOW_REGULAR_TEXTURE;
         writes[write_count].descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[write_count].descriptorCount = 1;
         writes[write_count].pImageInfo = &image_infos[info_count];

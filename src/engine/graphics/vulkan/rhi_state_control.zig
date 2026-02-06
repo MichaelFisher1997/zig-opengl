@@ -147,7 +147,10 @@ pub fn setAnisotropicFiltering(ctx: anytype, level: u8) void {
     ctx.options.anisotropic_filtering = level;
 }
 
-pub fn setVolumetricDensity(_: anytype, _: f32) void {}
+pub fn setVolumetricDensity(ctx: anytype, density: f32) void {
+    _ = ctx;
+    _ = density;
+}
 
 pub fn setMSAA(ctx: anytype, samples: u8) void {
     const clamped = @min(samples, ctx.vulkan_device.max_msaa_samples);

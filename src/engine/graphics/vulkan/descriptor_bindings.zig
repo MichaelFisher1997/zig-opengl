@@ -1,0 +1,11 @@
+pub const GLOBAL_UBO = 0;
+pub const ALBEDO_TEXTURE = 1;
+pub const SHADOW_UBO = 2;
+pub const SHADOW_COMPARE_TEXTURE = 3;
+pub const SHADOW_REGULAR_TEXTURE = 4;
+pub const INSTANCE_SSBO = 5;
+pub const NORMAL_TEXTURE = 6;
+pub const ROUGHNESS_TEXTURE = 7;
+pub const DISPLACEMENT_TEXTURE = 8;
+pub const ENV_TEXTURE = 9;
+pub const SSAO_TEXTURE = 10;

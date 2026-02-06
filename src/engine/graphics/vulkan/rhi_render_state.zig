@@ -3,6 +3,7 @@ const c = @import("../../../c.zig").c;
 const rhi = @import("../rhi.zig");
 const Mat4 = @import("../../math/mat4.zig").Mat4;
 const Vec3 = @import("../../math/vec3.zig").Vec3;
+const bindings = @import("descriptor_bindings.zig");
 const pass_orchestration = @import("rhi_pass_orchestration.zig");
 
 const GlobalUniforms = extern struct {
@@ -88,7 +89,7 @@ pub fn applyPendingDescriptorUpdates(ctx: anytype, frame_index: usize) void {
             var write = std.mem.zeroes(c.VkWriteDescriptorSet);
             write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             write.dstSet = ctx.descriptors.descriptor_sets[frame_index];
-            write.dstBinding = 5;
+            write.dstBinding = bindings.INSTANCE_SSBO;
             write.descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             write.descriptorCount = 1;
             write.pBufferInfo = &buffer_info;
@@ -111,7 +112,7 @@ pub fn applyPendingDescriptorUpdates(ctx: anytype, frame_index: usize) void {
             var write = std.mem.zeroes(c.VkWriteDescriptorSet);
             write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             write.dstSet = ctx.descriptors.lod_descriptor_sets[frame_index];
-            write.dstBinding = 5;
+            write.dstBinding = bindings.INSTANCE_SSBO;
             write.descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             write.descriptorCount = 1;
             write.pBufferInfo = &buffer_info;
