@@ -277,10 +277,10 @@ pub const IRenderContext = struct {
         endPostProcessPass: *const fn (ptr: *anyopaque) void,
         beginGPass: *const fn (ptr: *anyopaque) void,
         endGPass: *const fn (ptr: *anyopaque) void,
-        // FXAA Pass (Phase 3)
+        // FXAA pass
         beginFXAAPass: *const fn (ptr: *anyopaque) void,
         endFXAAPass: *const fn (ptr: *anyopaque) void,
-        // Bloom Pass (Phase 3)
+        // Bloom pass
         computeBloom: *const fn (ptr: *anyopaque) void,
         getEncoder: *const fn (ptr: *anyopaque) IGraphicsCommandEncoder,
         getStateContext: *const fn (ptr: *anyopaque) IRenderStateContext,
@@ -468,7 +468,7 @@ pub const RHI = struct {
         setVolumetricDensity: *const fn (ctx: *anyopaque, density: f32) void,
         setMSAA: *const fn (ctx: *anyopaque, samples: u8) void,
         recover: *const fn (ctx: *anyopaque) anyerror!void,
-        // Phase 3: FXAA and Bloom options
+        // Post-processing options
         setFXAA: *const fn (ctx: *anyopaque, enabled: bool) void,
         setBloom: *const fn (ctx: *anyopaque, enabled: bool) void,
         setBloomIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
@@ -696,7 +696,7 @@ pub const RHI = struct {
     pub fn bindUIPipeline(self: RHI, textured: bool) void {
         self.vtable.ui.bindPipeline(self.ptr, textured);
     }
-    // Phase 3: FXAA and Bloom controls
+    // Post-processing controls
     pub fn setFXAA(self: RHI, enabled: bool) void {
         self.vtable.setFXAA(self.ptr, enabled);
     }

@@ -30,7 +30,7 @@ pub const SceneContext = struct {
     disable_gpass_draw: bool,
     disable_ssao: bool,
     disable_clouds: bool,
-    // Phase 3: FXAA and Bloom flags
+    // Post-processing flags
     fxaa_enabled: bool = true,
     bloom_enabled: bool = true,
     overlay_renderer: ?*const fn (ctx: SceneContext) void = null,
@@ -355,7 +355,7 @@ pub const PostProcessPass = struct {
     }
 };
 
-// Phase 3: Bloom Pass - Computes bloom mip chain from HDR buffer
+// Bloom pass - computes bloom mip chain from HDR buffer
 pub const BloomPass = struct {
     enabled: bool = true,
     const VTABLE = IRenderPass.VTable{
@@ -377,7 +377,7 @@ pub const BloomPass = struct {
     }
 };
 
-// Phase 3: FXAA Pass - Applies FXAA to LDR output
+// FXAA pass - applies anti-aliasing to LDR output
 pub const FXAAPass = struct {
     enabled: bool = true,
     const VTABLE = IRenderPass.VTable{

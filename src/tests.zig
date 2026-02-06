@@ -10,6 +10,10 @@
 const std = @import("std");
 const testing = std.testing;
 
+pub const std_options: std.Options = .{
+    .log_level = .err,
+};
+
 const Vec3 = @import("zig-math").Vec3;
 const Mat4 = @import("zig-math").Mat4;
 const AABB = @import("zig-math").AABB;
@@ -45,6 +49,7 @@ const BiomeSource = @import("world/worldgen/biome.zig").BiomeSource;
 test {
     _ = @import("ecs_tests.zig");
     _ = @import("engine/graphics/vulkan_device.zig");
+    _ = @import("engine/graphics/vulkan/ssao_system_tests.zig");
     _ = @import("vulkan_tests.zig");
     _ = @import("engine/graphics/rhi_tests.zig");
     _ = @import("world/worldgen/schematics.zig");
