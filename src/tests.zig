@@ -924,6 +924,14 @@ const OverworldGenerator = @import("world/worldgen/overworld_generator.zig").Ove
 const deco_registry = @import("world/worldgen/decoration_registry.zig");
 const Generator = @import("world/worldgen/generator_interface.zig").Generator;
 
+fn chunkFingerprint(chunk: *const Chunk) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(std.mem.asBytes(&chunk.blocks));
+    hasher.update(std.mem.asBytes(&chunk.biomes));
+    hasher.update(std.mem.asBytes(&chunk.heightmap));
+    return hasher.final();
+}
+
 test "WorldGen same seed produces identical blocks at origin" {
     const allocator = testing.allocator;
 
@@ -1100,6 +1108,31 @@ test "WorldGen golden output for known seed at origin" {
     // 3. The surface block should be solid (not air/water)
     const surface_block = chunk.getBlock(8, surface_height, 8);
     try testing.expect(block_registry.getBlockDefinition(surface_block).is_solid);
+}
+
+test "WorldGen stable chunk fingerprints for known seed" {
+    const allocator = testing.allocator;
+    const seed: u64 = 424242;
+    var gen = OverworldGenerator.init(seed, allocator, deco_registry.StandardDecorationProvider.provider());
+
+    const positions = [_][2]i32{
+        .{ 0, 0 },
+        .{ 17, -9 },
+        .{ -23, 31 },
+    };
+
+    const expected = [_]u64{
+        3930377586382103994,
+        9537000129428755126,
+        17337144674893402850,
+    };
+
+    for (positions, 0..) |pos, i| {
+        var chunk = Chunk.init(pos[0], pos[1]);
+        gen.generate(&chunk, null);
+        const fp = chunkFingerprint(&chunk);
+        try testing.expectEqual(expected[i], fp);
+    }
 }
 
 test "WorldGen populates heightmap and biomes" {
