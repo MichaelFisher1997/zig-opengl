@@ -7,8 +7,6 @@ const MAX_LIGHT = @import("../chunk.zig").MAX_LIGHT;
 const block_registry = @import("../block_registry.zig");
 
 pub const LightingComputer = struct {
-    allocator: std.mem.Allocator,
-
     const LightNode = struct {
         x: u8,
         y: u16,
@@ -18,8 +16,8 @@ pub const LightingComputer = struct {
         b: u4,
     };
 
-    pub fn init(allocator: std.mem.Allocator) LightingComputer {
-        return .{ .allocator = allocator };
+    pub fn init() LightingComputer {
+        return .{};
     }
 
     pub fn computeSkylight(_: *const LightingComputer, chunk: *Chunk) void {
@@ -43,9 +41,9 @@ pub const LightingComputer = struct {
         }
     }
 
-    pub fn computeBlockLight(self: *const LightingComputer, chunk: *Chunk) !void {
+    pub fn computeBlockLight(_: *const LightingComputer, chunk: *Chunk, allocator: std.mem.Allocator) !void {
         var queue = std.ArrayListUnmanaged(LightNode){};
-        defer queue.deinit(self.allocator);
+        defer queue.deinit(allocator);
         var local_z: u32 = 0;
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
             var y: u32 = 0;
@@ -56,7 +54,7 @@ pub const LightingComputer = struct {
                     const emission = block_registry.getBlockDefinition(block).light_emission;
                     if (emission[0] > 0 or emission[1] > 0 or emission[2] > 0) {
                         chunk.setBlockLightRGB(local_x, y, local_z, emission[0], emission[1], emission[2]);
-                        try queue.append(self.allocator, .{
+                        try queue.append(allocator, .{
                             .x = @intCast(local_x),
                             .y = @intCast(y),
                             .z = @intCast(local_z),
@@ -96,7 +94,7 @@ pub const LightingComputer = struct {
                             const new_g = @max(next_g, current_g);
                             const new_b = @max(next_b, current_b);
                             chunk.setBlockLightRGB(ux, uy, uz, new_r, new_g, new_b);
-                            try queue.append(self.allocator, .{
+                            try queue.append(allocator, .{
                                 .x = @intCast(nx),
                                 .y = @intCast(ny),
                                 .z = @intCast(nz),

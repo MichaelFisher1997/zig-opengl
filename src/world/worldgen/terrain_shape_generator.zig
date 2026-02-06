@@ -22,7 +22,6 @@ pub const HeightSampler = height_sampler_mod.HeightSampler;
 const surface_builder_mod = @import("surface_builder.zig");
 pub const SurfaceBuilder = surface_builder_mod.SurfaceBuilder;
 pub const CoastalSurfaceType = surface_builder_mod.CoastalSurfaceType;
-const RiverGenerator = @import("river_generator.zig").RiverGenerator;
 const CoastalGenerator = @import("coastal_generator.zig").CoastalGenerator;
 
 pub const Params = struct {
@@ -73,7 +72,6 @@ pub const TerrainShapeGenerator = struct {
     surface_builder: SurfaceBuilder,
     biome_source: BiomeSource,
     cave_system: CaveSystem,
-    river_generator: RiverGenerator,
     coastal_generator: CoastalGenerator,
     params: Params,
 
@@ -89,7 +87,6 @@ pub const TerrainShapeGenerator = struct {
             .surface_builder = SurfaceBuilder.init(),
             .biome_source = BiomeSource.init(),
             .cave_system = CaveSystem.init(seed),
-            .river_generator = RiverGenerator.init(),
             .coastal_generator = CoastalGenerator.init(p.ocean_threshold),
             .params = p,
         };
@@ -138,7 +135,7 @@ pub const TerrainShapeGenerator = struct {
         const coast_jitter = self.noise_sampler.coast_jitter_noise.get2DOctaves(noise.warped_x, noise.warped_z, cj_octaves);
         const c_jittered = self.coastal_generator.applyCoastJitter(noise.continentalness, coast_jitter);
         noise.continentalness = c_jittered;
-        noise.river_mask = self.river_generator.getMask(&self.noise_sampler, noise.warped_x, noise.warped_z, reduction);
+        noise.river_mask = self.noise_sampler.getRiverMask(noise.warped_x, noise.warped_z, reduction);
 
         const region_seed = self.getRegionSeed();
         const wx_i: i32 = @intFromFloat(wx);

@@ -25,6 +25,7 @@ const gen_interface = @import("generator_interface.zig");
 const Generator = gen_interface.Generator;
 const GeneratorInfo = gen_interface.GeneratorInfo;
 const ColumnInfo = gen_interface.ColumnInfo;
+const log = @import("../../engine/core/log.zig");
 
 const terrain_shape_mod = @import("terrain_shape_generator.zig");
 const TerrainShapeGenerator = terrain_shape_mod.TerrainShapeGenerator;
@@ -69,7 +70,7 @@ pub const OverworldGenerator = struct {
             .cache_center_z = 0,
             .terrain_shape = TerrainShapeGenerator.initWithParams(seed, params.terrain_shape),
             .biome_decorator = BiomeDecorator.init(seed, decoration_provider),
-            .lighting_computer = LightingComputer.init(allocator),
+            .lighting_computer = LightingComputer.init(),
         };
     }
 
@@ -153,9 +154,10 @@ pub const OverworldGenerator = struct {
             self.cache_center_z = world_z;
         }
 
-        var phase_data: terrain_shape_mod.ChunkPhaseData = undefined;
+        const phase_data = self.allocator.create(terrain_shape_mod.ChunkPhaseData) catch return;
+        defer self.allocator.destroy(phase_data);
         if (!self.terrain_shape.prepareChunkPhaseData(
-            &phase_data,
+            phase_data,
             world_x,
             world_z,
             self.cache_center_x,
@@ -181,7 +183,7 @@ pub const OverworldGenerator = struct {
         defer if (worm_map_opt) |*map| map.deinit();
         const worm_map_ptr: ?*const terrain_shape_mod.CaveCarveMap = if (worm_map_opt) |*map| map else null;
 
-        if (!self.terrain_shape.fillChunkBlocks(chunk, &phase_data, worm_map_ptr, stop_flag)) return;
+        if (!self.terrain_shape.fillChunkBlocks(chunk, phase_data, worm_map_ptr, stop_flag)) return;
         if (stop_flag) |sf| if (sf.*) return;
         self.biome_decorator.generateOres(chunk);
         if (stop_flag) |sf| if (sf.*) return;
@@ -189,8 +191,9 @@ pub const OverworldGenerator = struct {
         if (stop_flag) |sf| if (sf.*) return;
         self.lighting_computer.computeSkylight(chunk);
         if (stop_flag) |sf| if (sf.*) return;
-        self.lighting_computer.computeBlockLight(chunk) catch |err| {
-            std.debug.print("Failed to compute block light: {}\n", .{err});
+        self.lighting_computer.computeBlockLight(chunk, self.allocator) catch |err| {
+            log.log.err("Failed to compute block light for chunk ({}, {}): {}", .{ chunk.chunk_x, chunk.chunk_z, err });
+            return;
         };
 
         chunk.generated = true;
@@ -206,7 +209,7 @@ pub const OverworldGenerator = struct {
     }
 
     pub fn computeBlockLight(self: *const OverworldGenerator, chunk: *Chunk) !void {
-        try self.lighting_computer.computeBlockLight(chunk);
+        try self.lighting_computer.computeBlockLight(chunk, self.allocator);
     }
 
     pub fn isOceanWater(self: *const OverworldGenerator, wx: f32, wz: f32) bool {
