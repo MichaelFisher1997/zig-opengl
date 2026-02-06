@@ -22,8 +22,7 @@ pub const LightingComputer = struct {
         return .{ .allocator = allocator };
     }
 
-    pub fn computeSkylight(self: *const LightingComputer, chunk: *Chunk) void {
-        _ = self;
+    pub fn computeSkylight(_: *const LightingComputer, chunk: *Chunk) void {
         var local_z: u32 = 0;
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
             var local_x: u32 = 0;

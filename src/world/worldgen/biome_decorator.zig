@@ -32,8 +32,7 @@ pub const BiomeDecorator = struct {
         self.placeOreVeins(chunk, .glowstone, 8, 4, 5, 40, random);
     }
 
-    fn placeOreVeins(self: *const BiomeDecorator, chunk: *Chunk, block: BlockType, count: u32, size: u32, min_y: i32, max_y: i32, random: std.Random) void {
-        _ = self;
+    fn placeOreVeins(_: *const BiomeDecorator, chunk: *Chunk, block: BlockType, count: u32, size: u32, min_y: i32, max_y: i32, random: std.Random) void {
         for (0..count) |_| {
             const cx = random.uintLessThan(u32, CHUNK_SIZE_X);
             const cz = random.uintLessThan(u32, CHUNK_SIZE_Z);

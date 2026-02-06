@@ -78,7 +78,11 @@ pub const TerrainShapeGenerator = struct {
     params: Params,
 
     pub fn init(seed: u64) TerrainShapeGenerator {
-        const p = Params{};
+        return initWithParams(seed, .{});
+    }
+
+    pub fn initWithParams(seed: u64, params: Params) TerrainShapeGenerator {
+        const p = params;
         return .{
             .noise_sampler = NoiseSampler.init(seed),
             .height_sampler = HeightSampler.init(),

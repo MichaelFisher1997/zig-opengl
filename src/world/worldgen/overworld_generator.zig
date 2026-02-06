@@ -53,13 +53,21 @@ pub const OverworldGenerator = struct {
     /// Distance threshold for cache recentering (blocks).
     pub const CACHE_RECENTER_THRESHOLD: i32 = 512;
 
+    pub const InitParams = struct {
+        terrain_shape: terrain_shape_mod.Params = .{},
+    };
+
     pub fn init(seed: u64, allocator: std.mem.Allocator, decoration_provider: DecorationProvider) OverworldGenerator {
+        return initWithParams(seed, allocator, decoration_provider, .{});
+    }
+
+    pub fn initWithParams(seed: u64, allocator: std.mem.Allocator, decoration_provider: DecorationProvider, params: InitParams) OverworldGenerator {
         return .{
             .allocator = allocator,
             .classification_cache = ClassificationCache.init(),
             .cache_center_x = 0,
             .cache_center_z = 0,
-            .terrain_shape = TerrainShapeGenerator.init(seed),
+            .terrain_shape = TerrainShapeGenerator.initWithParams(seed, params.terrain_shape),
             .biome_decorator = BiomeDecorator.init(seed, decoration_provider),
             .lighting_computer = LightingComputer.init(allocator),
         };
@@ -267,8 +275,7 @@ pub const OverworldGenerator = struct {
         }
     }
 
-    fn surfaceTypeToBlock(self: *const OverworldGenerator, surface_type: SurfaceType) BlockType {
-        _ = self;
+    fn surfaceTypeToBlock(_: *const OverworldGenerator, surface_type: SurfaceType) BlockType {
         return switch (surface_type) {
             .grass => .grass,
             .sand => .sand,
@@ -280,8 +287,7 @@ pub const OverworldGenerator = struct {
         };
     }
 
-    fn getSurfaceBlock(self: *const OverworldGenerator, biome_id: BiomeId, is_ocean: bool) BlockType {
-        _ = self;
+    fn getSurfaceBlock(_: *const OverworldGenerator, biome_id: BiomeId, is_ocean: bool) BlockType {
         if (is_ocean) return .sand;
         return switch (biome_id) {
             .desert, .badlands => .sand,
@@ -344,14 +350,13 @@ pub const OverworldGenerator = struct {
     }
 
     fn deriveSurfaceTypeInternal(
-        self: *const OverworldGenerator,
+        _: *const OverworldGenerator,
         biome_id: BiomeId,
         height: i32,
         sea_level: i32,
         is_ocean: bool,
         coastal_type: CoastalSurfaceType,
     ) SurfaceType {
-        _ = self;
         if (is_ocean and height < sea_level - 30) return .water_deep;
         if (is_ocean and height < sea_level) return .water_shallow;
 
