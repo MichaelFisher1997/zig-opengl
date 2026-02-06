@@ -49,7 +49,6 @@ pub const OverworldGenerator = struct {
     cache_center_z: i32,
     terrain_shape: TerrainShapeGenerator,
     biome_decorator: BiomeDecorator,
-    lighting_computer: LightingComputer,
 
     /// Distance threshold for cache recentering (blocks).
     pub const CACHE_RECENTER_THRESHOLD: i32 = 512;
@@ -70,7 +69,6 @@ pub const OverworldGenerator = struct {
             .cache_center_z = 0,
             .terrain_shape = TerrainShapeGenerator.initWithParams(seed, params.terrain_shape),
             .biome_decorator = BiomeDecorator.init(seed, decoration_provider),
-            .lighting_computer = LightingComputer.init(),
         };
     }
 
@@ -189,9 +187,9 @@ pub const OverworldGenerator = struct {
         if (stop_flag) |sf| if (sf.*) return;
         self.biome_decorator.generateFeatures(chunk, self.terrain_shape.getNoiseSampler());
         if (stop_flag) |sf| if (sf.*) return;
-        self.lighting_computer.computeSkylight(chunk);
+        LightingComputer.computeSkylight(chunk);
         if (stop_flag) |sf| if (sf.*) return;
-        self.lighting_computer.computeBlockLight(chunk, self.allocator) catch |err| {
+        LightingComputer.computeBlockLight(chunk, self.allocator) catch |err| {
             log.log.err("Failed to compute block light for chunk ({}, {}): {}", .{ chunk.chunk_x, chunk.chunk_z, err });
             return;
         };
@@ -202,14 +200,6 @@ pub const OverworldGenerator = struct {
 
     pub fn generateFeatures(self: *const OverworldGenerator, chunk: *Chunk) void {
         self.biome_decorator.generateFeatures(chunk, self.terrain_shape.getNoiseSampler());
-    }
-
-    pub fn computeSkylight(self: *const OverworldGenerator, chunk: *Chunk) void {
-        self.lighting_computer.computeSkylight(chunk);
-    }
-
-    pub fn computeBlockLight(self: *const OverworldGenerator, chunk: *Chunk) !void {
-        try self.lighting_computer.computeBlockLight(chunk, self.allocator);
     }
 
     pub fn isOceanWater(self: *const OverworldGenerator, wx: f32, wz: f32) bool {
@@ -429,7 +419,6 @@ pub const OverworldGenerator = struct {
 
     fn deinitWrapper(ptr: *anyopaque, allocator: std.mem.Allocator) void {
         const self: *OverworldGenerator = @ptrCast(@alignCast(ptr));
-        self.lighting_computer.deinit();
         allocator.destroy(self);
     }
 };

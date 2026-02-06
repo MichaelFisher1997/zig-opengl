@@ -16,13 +16,7 @@ pub const LightingComputer = struct {
         b: u4,
     };
 
-    pub fn init() LightingComputer {
-        return .{};
-    }
-
-    pub fn deinit(_: *LightingComputer) void {}
-
-    pub fn computeSkylight(_: *const LightingComputer, chunk: *Chunk) void {
+    pub fn computeSkylight(chunk: *Chunk) void {
         var local_z: u32 = 0;
         while (local_z < CHUNK_SIZE_Z) : (local_z += 1) {
             var local_x: u32 = 0;
@@ -43,7 +37,7 @@ pub const LightingComputer = struct {
         }
     }
 
-    pub fn computeBlockLight(_: *const LightingComputer, chunk: *Chunk, allocator: std.mem.Allocator) !void {
+    pub fn computeBlockLight(chunk: *Chunk, allocator: std.mem.Allocator) !void {
         var queue = std.ArrayListUnmanaged(LightNode){};
         defer queue.deinit(allocator);
         var local_z: u32 = 0;

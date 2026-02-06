@@ -80,18 +80,18 @@ pub const BiomeDecorator = struct {
                 const variant_val = noise_sampler.variant_noise.get2D(wx, wz);
                 const surface_block = chunk.getBlock(local_x, @intCast(surface_y), local_z);
 
-                self.decoration_provider.decorate(
-                    chunk,
-                    local_x,
-                    local_z,
-                    @intCast(surface_y),
-                    surface_block,
-                    biome,
-                    variant_val,
-                    allow_subbiomes,
-                    veg_mult,
-                    random,
-                );
+                self.decoration_provider.decorate(.{
+                    .chunk = chunk,
+                    .local_x = local_x,
+                    .local_z = local_z,
+                    .surface_y = @intCast(surface_y),
+                    .surface_block = surface_block,
+                    .biome = biome,
+                    .variant = variant_val,
+                    .allow_subbiomes = allow_subbiomes,
+                    .veg_mult = veg_mult,
+                    .random = random,
+                });
             }
         }
     }

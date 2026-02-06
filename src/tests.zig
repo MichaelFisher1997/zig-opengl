@@ -1175,6 +1175,7 @@ test "Decoration placement" {
 test "OverworldGenerator with mock decoration provider" {
     const allocator = std.testing.allocator;
     const DecorationProvider = @import("world/worldgen/decoration_provider.zig").DecorationProvider;
+    const DecorationContext = @import("world/worldgen/decoration_provider.zig").DecorationProvider.DecorationContext;
 
     const MockProvider = struct {
         called_count: *usize,
@@ -1190,29 +1191,8 @@ test "OverworldGenerator with mock decoration provider" {
             .decorate = decorate,
         };
 
-        fn decorate(
-            ptr: ?*anyopaque,
-            chunk: *Chunk,
-            local_x: u32,
-            local_z: u32,
-            surface_y: i32,
-            surface_block: BlockType,
-            biome: BiomeId,
-            variant: f32,
-            allow_subbiomes: bool,
-            veg_mult: f32,
-            random: std.Random,
-        ) void {
-            _ = chunk;
-            _ = local_x;
-            _ = local_z;
-            _ = surface_y;
-            _ = surface_block;
-            _ = biome;
-            _ = variant;
-            _ = allow_subbiomes;
-            _ = veg_mult;
-            _ = random;
+        fn decorate(ptr: ?*anyopaque, ctx: DecorationContext) void {
+            _ = ctx;
             const count: *usize = @ptrCast(@alignCast(ptr.?));
             count.* += 1;
         }
