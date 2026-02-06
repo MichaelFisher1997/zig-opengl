@@ -71,7 +71,7 @@ pub const SSAOSystem = struct {
         self.params.bias = DEFAULT_BIAS;
 
         try self.initRenderPasses(vk, ao_format);
-        errdefer self.deinit(vk, allocator);
+        errdefer self.deinit(vk, allocator, descriptor_pool);
 
         try self.initImages(device, width, height, ao_format);
         try self.initFramebuffers(vk, width, height);
@@ -490,12 +490,25 @@ pub const SSAOSystem = struct {
         }
     }
 
-    pub fn deinit(self: *SSAOSystem, vk: c.VkDevice, allocator: Allocator) void {
+    pub fn deinit(self: *SSAOSystem, vk: c.VkDevice, allocator: Allocator, descriptor_pool: c.VkDescriptorPool) void {
         _ = allocator;
         if (self.pipeline != null) c.vkDestroyPipeline(vk, self.pipeline, null);
         if (self.blur_pipeline != null) c.vkDestroyPipeline(vk, self.blur_pipeline, null);
         if (self.pipeline_layout != null) c.vkDestroyPipelineLayout(vk, self.pipeline_layout, null);
         if (self.blur_pipeline_layout != null) c.vkDestroyPipelineLayout(vk, self.blur_pipeline_layout, null);
+        // Free descriptor sets BEFORE destroying their layouts
+        if (descriptor_pool != null) {
+            for (0..rhi.MAX_FRAMES_IN_FLIGHT) |i| {
+                if (self.descriptor_sets[i] != null) {
+                    _ = c.vkFreeDescriptorSets(vk, descriptor_pool, 1, &self.descriptor_sets[i]);
+                    self.descriptor_sets[i] = null;
+                }
+                if (self.blur_descriptor_sets[i] != null) {
+                    _ = c.vkFreeDescriptorSets(vk, descriptor_pool, 1, &self.blur_descriptor_sets[i]);
+                    self.blur_descriptor_sets[i] = null;
+                }
+            }
+        }
         if (self.descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(vk, self.descriptor_set_layout, null);
         if (self.blur_descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(vk, self.blur_descriptor_set_layout, null);
         if (self.framebuffer != null) c.vkDestroyFramebuffer(vk, self.framebuffer, null);

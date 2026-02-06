@@ -17,6 +17,8 @@ const DEPTH_FORMAT = c.VK_FORMAT_D32_SFLOAT;
 
 /// Render pass manager handles all render pass and framebuffer resources
 pub const RenderPassManager = struct {
+    allocator: ?std.mem.Allocator = null,
+
     // Main render pass (HDR with optional MSAA)
     hdr_render_pass: c.VkRenderPass = null,
 
@@ -36,17 +38,21 @@ pub const RenderPassManager = struct {
     ui_swapchain_framebuffers: std.ArrayListUnmanaged(c.VkFramebuffer) = .empty,
 
     /// Initialize the render pass manager
-    pub fn init() RenderPassManager {
+    pub fn init(allocator: std.mem.Allocator) RenderPassManager {
         return .{
+            .allocator = allocator,
             .post_process_framebuffers = .empty,
             .ui_swapchain_framebuffers = .empty,
         };
     }
 
     /// Deinitialize and destroy all render passes and framebuffers
-    pub fn deinit(self: *RenderPassManager, vk_device: c.VkDevice, allocator: std.mem.Allocator) void {
-        self.destroyFramebuffers(vk_device, allocator);
+    pub fn deinit(self: *RenderPassManager, vk_device: c.VkDevice) void {
+        if (self.allocator) |allocator| {
+            self.destroyFramebuffers(vk_device, allocator);
+        }
         self.destroyRenderPasses(vk_device);
+        self.allocator = null;
     }
 
     /// Destroy all framebuffers
