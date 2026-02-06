@@ -143,9 +143,14 @@ pub const World = struct {
         self.storage.deinitWithoutRHI();
         self.renderer.deinit();
 
-        // Cleanup LOD manager if enabled
+        // Cleanup LOD system if enabled.
+        // LODManager must be deinit'd first (it uses gpu_bridge callbacks that reference the renderer's RHI).
+        // LODRenderer is deinit'd second (it owns GPU draw buffers).
         if (self.lod_manager) |lod_mgr| {
             lod_mgr.deinit();
+        }
+        if (self.lod_renderer) |lod_rend| {
+            lod_rend.deinit();
         }
 
         self.generator.deinit(self.allocator);

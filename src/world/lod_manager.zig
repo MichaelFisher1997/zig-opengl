@@ -74,6 +74,7 @@ pub const LODStats = struct {
     memory_used_mb: u32 = 0,
     upgrades_pending: u32 = 0,
     downgrades_pending: u32 = 0,
+    upload_failures: u32 = 0,
 
     pub fn totalLoaded(self: *const LODStats) u32 {
         var total: u32 = 0;
@@ -97,6 +98,7 @@ pub const LODStats = struct {
         self.memory_used_mb = 0;
         self.upgrades_pending = 0;
         self.downgrades_pending = 0;
+        self.upload_failures = 0;
     }
 
     pub fn recordState(self: *LODStats, lod_idx: usize, state: LODState) void {
@@ -293,7 +295,8 @@ pub const LODManager = struct {
         }
         self.deletion_queue.deinit(self.allocator);
 
-        self.renderer.deinit();
+        // NOTE: LODManager does NOT own the renderer lifetime.
+        // The renderer is owned by World and deinit'd there.
 
         self.allocator.destroy(self);
     }
@@ -540,7 +543,9 @@ pub const LODManager = struct {
                     };
                     if (self.meshes[i].get(key)) |mesh| {
                         self.gpu_bridge.upload(mesh) catch |err| {
-                            log.log.err("Failed to upload LOD{} mesh: {}", .{ i, err });
+                            log.log.warn("LOD{} mesh upload failed (will retry): {}", .{ i, err });
+                            self.stats.upload_failures += 1;
+                            chunk.state = .mesh_ready; // Revert to allow retry
                             continue;
                         };
                     }
@@ -1033,10 +1038,7 @@ test "LODManager initialization" {
             fn f(_: *anyopaque, _: *const [LODLevel.count]MeshMap, _: *const [LODLevel.count]RegionMap, _: ILODConfig, _: Mat4, _: Vec3, _: ?LODManager.ChunkChecker, _: ?*anyopaque, _: bool) void {}
         }.f,
         .deinit_fn = struct {
-            fn f(self_ptr: *anyopaque) void {
-                const state: *MockState = @ptrCast(@alignCast(self_ptr));
-                state.buffer_created = true; // Repurpose to verify deinit was called
-            }
+            fn f(_: *anyopaque) void {}
         }.f,
         .ptr = @ptrCast(&mock_state),
     };
@@ -1050,8 +1052,8 @@ test "LODManager initialization" {
 
     mgr.deinit();
 
-    // Verify deinit called renderer deinit
-    try std.testing.expect(mock_state.buffer_created);
+    // NOTE: LODManager does NOT call renderer.deinit() - renderer lifetime is
+    // owned by the caller (World). This is tested in the integration test below.
 
     // Check config values
     try std.testing.expectEqual(LODLevel.lod0, config.getLODForDistance(5));
@@ -1102,7 +1104,8 @@ test "LODManager end-to-end covered cleanup" {
         .radii = .{ 2, 4, 8, 16 },
     };
 
-    // Create mock GPU bridge (no-op)
+    // Create mock GPU bridge (no-op). Use a real pointer to satisfy debug assertions.
+    var noop_ctx: u8 = 0;
     const mock_bridge = LODGPUBridge{
         .on_upload = struct {
             fn f(_: *LODMesh, _: *anyopaque) rhi_types.RhiError!void {}
@@ -1113,10 +1116,10 @@ test "LODManager end-to-end covered cleanup" {
         .on_wait_idle = struct {
             fn f(_: *anyopaque) void {}
         }.f,
-        .ctx = undefined,
+        .ctx = @ptrCast(&noop_ctx),
     };
 
-    // Create mock render interface (no-op)
+    // Create mock render interface (no-op). Use a real pointer.
     const mock_render = LODRenderInterface{
         .render_fn = struct {
             fn f(_: *anyopaque, _: *const [LODLevel.count]MeshMap, _: *const [LODLevel.count]RegionMap, _: ILODConfig, _: Mat4, _: Vec3, _: ?LODManager.ChunkChecker, _: ?*anyopaque, _: bool) void {}
@@ -1124,7 +1127,7 @@ test "LODManager end-to-end covered cleanup" {
         .deinit_fn = struct {
             fn f(_: *anyopaque) void {}
         }.f,
-        .ptr = undefined,
+        .ptr = @ptrCast(&noop_ctx),
     };
 
     var mgr = try LODManager.init(allocator, config.interface(), mock_bridge, mock_render, mock_gen);

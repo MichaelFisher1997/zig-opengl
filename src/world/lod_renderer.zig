@@ -93,9 +93,6 @@ pub fn LODRenderer(comptime RHI: type) type {
             // Update frame index
             self.frame_index = self.rhi.getFrameIndex();
 
-            self.instance_data.clearRetainingCapacity();
-            self.draw_list.clearRetainingCapacity();
-
             // Set LOD mode on RHI
             self.rhi.setLODInstanceBuffer(self.instance_buffers[self.frame_index]);
 
@@ -364,4 +361,103 @@ test "LODRenderer render draw path" {
     try std.testing.expectEqual(@as(u32, 1), mock_state.set_matrix_calls);
     try std.testing.expectEqual(@as(u32, 42), mock_state.last_buffer_handle);
     try std.testing.expectEqual(@as(u32, 100), mock_state.last_vertex_count);
+}
+
+test "LODRenderer createGPUBridge and toInterface round-trip" {
+    const allocator = std.testing.allocator;
+
+    const MockRHIState = struct {
+        upload_calls: u32 = 0,
+        destroy_calls: u32 = 0,
+        wait_idle_calls: u32 = 0,
+        draw_calls: u32 = 0,
+        set_matrix_calls: u32 = 0,
+    };
+
+    const MockRHI = struct {
+        state: *MockRHIState,
+
+        pub fn createBuffer(self: @This(), _: usize, _: anytype) !u32 {
+            _ = self;
+            return 1;
+        }
+        pub fn destroyBuffer(self: @This(), _: u32) void {
+            self.state.destroy_calls += 1;
+        }
+        pub fn uploadBuffer(self: @This(), _: u32, _: []const u8) !void {
+            self.state.upload_calls += 1;
+        }
+        pub fn getFrameIndex(_: @This()) usize {
+            return 0;
+        }
+        pub fn waitIdle(self: @This()) void {
+            self.state.wait_idle_calls += 1;
+        }
+        pub fn setModelMatrix(self: @This(), _: Mat4, _: Vec3, _: f32) void {
+            self.state.set_matrix_calls += 1;
+        }
+        pub fn setLODInstanceBuffer(_: @This(), _: anytype) void {}
+        pub fn draw(self: @This(), _: u32, _: u32, _: anytype) void {
+            self.state.draw_calls += 1;
+        }
+    };
+
+    var mock_state = MockRHIState{};
+    const mock_rhi = MockRHI{ .state = &mock_state };
+
+    const Renderer = LODRenderer(MockRHI);
+    const renderer = try Renderer.init(allocator, mock_rhi);
+    defer renderer.deinit();
+
+    // Test createGPUBridge round-trip
+    const bridge = renderer.createGPUBridge();
+
+    // Verify bridge.waitIdle calls through to MockRHI.waitIdle
+    bridge.waitIdle();
+    try std.testing.expectEqual(@as(u32, 1), mock_state.wait_idle_calls);
+
+    // Verify bridge.destroy calls through to MockRHI.destroyBuffer (via LODMesh.deinit)
+    var test_mesh = LODMesh.init(allocator, .lod1);
+    test_mesh.buffer_handle = 99;
+    bridge.destroy(&test_mesh);
+    try std.testing.expectEqual(@as(u32, 1), mock_state.destroy_calls);
+    try std.testing.expectEqual(@as(u32, 0), test_mesh.buffer_handle); // deinit zeroes handle
+
+    // Test toInterface round-trip: render through type-erased interface
+    const iface = renderer.toInterface();
+
+    // Set up meshes/regions with a renderable chunk
+    var meshes: [LODLevel.count]MeshMap = undefined;
+    var regions: [LODLevel.count]RegionMap = undefined;
+    for (0..LODLevel.count) |i| {
+        meshes[i] = MeshMap.init(allocator);
+        regions[i] = RegionMap.init(allocator);
+    }
+    defer {
+        for (0..LODLevel.count) |i| {
+            meshes[i].deinit();
+            regions[i].deinit();
+        }
+    }
+
+    var mesh = LODMesh.init(allocator, .lod1);
+    mesh.buffer_handle = 42;
+    mesh.vertex_count = 50;
+    mesh.ready = true;
+
+    var chunk = LODChunk.init(0, 0, .lod1);
+    chunk.state = .renderable;
+
+    const key = LODRegionKey{ .rx = 0, .rz = 0, .lod = .lod1 };
+    try meshes[1].put(key, &mesh);
+    try regions[1].put(key, &chunk);
+
+    var mock_config = LODConfig{};
+
+    // Render through the type-erased interface
+    iface.render(&meshes, &regions, mock_config.interface(), Mat4.identity, Vec3.zero, null, null, true);
+
+    // Verify the real renderer's draw was invoked through the interface
+    try std.testing.expectEqual(@as(u32, 1), mock_state.draw_calls);
+    try std.testing.expectEqual(@as(u32, 1), mock_state.set_matrix_calls);
 }

@@ -28,15 +28,23 @@ pub const LODGPUBridge = struct {
     /// Opaque context pointer (typically the concrete RHI instance).
     ctx: *anyopaque,
 
+    /// Validate that ctx is not undefined/null. Debug-only check.
+    fn assertValidCtx(self: LODGPUBridge) void {
+        std.debug.assert(@intFromPtr(self.ctx) != 0xaaaa_aaaa_aaaa_aaaa); // Zig's undefined pattern
+    }
+
     pub fn upload(self: LODGPUBridge, mesh: *LODMesh) RhiError!void {
+        self.assertValidCtx();
         return self.on_upload(mesh, self.ctx);
     }
 
     pub fn destroy(self: LODGPUBridge, mesh: *LODMesh) void {
+        self.assertValidCtx();
         self.on_destroy(mesh, self.ctx);
     }
 
     pub fn waitIdle(self: LODGPUBridge) void {
+        self.assertValidCtx();
         self.on_wait_idle(self.ctx);
     }
 };
