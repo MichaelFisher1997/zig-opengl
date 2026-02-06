@@ -924,6 +924,14 @@ const OverworldGenerator = @import("world/worldgen/overworld_generator.zig").Ove
 const deco_registry = @import("world/worldgen/decoration_registry.zig");
 const Generator = @import("world/worldgen/generator_interface.zig").Generator;
 
+fn chunkFingerprint(chunk: *const Chunk) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(std.mem.asBytes(&chunk.blocks));
+    hasher.update(std.mem.asBytes(&chunk.biomes));
+    hasher.update(std.mem.asBytes(&chunk.heightmap));
+    return hasher.final();
+}
+
 test "WorldGen same seed produces identical blocks at origin" {
     const allocator = testing.allocator;
 
@@ -1102,6 +1110,31 @@ test "WorldGen golden output for known seed at origin" {
     try testing.expect(block_registry.getBlockDefinition(surface_block).is_solid);
 }
 
+test "WorldGen stable chunk fingerprints for known seed" {
+    const allocator = testing.allocator;
+    const seed: u64 = 424242;
+    var gen = OverworldGenerator.init(seed, allocator, deco_registry.StandardDecorationProvider.provider());
+
+    const positions = [_][2]i32{
+        .{ 0, 0 },
+        .{ 17, -9 },
+        .{ -23, 31 },
+    };
+
+    const expected = [_]u64{
+        3930377586382103994,
+        9537000129428755126,
+        17337144674893402850,
+    };
+
+    for (positions, 0..) |pos, i| {
+        var chunk = Chunk.init(pos[0], pos[1]);
+        gen.generate(&chunk, null);
+        const fp = chunkFingerprint(&chunk);
+        try testing.expectEqual(expected[i], fp);
+    }
+}
+
 test "WorldGen populates heightmap and biomes" {
     const allocator = testing.allocator;
     var gen = OverworldGenerator.init(42, allocator, deco_registry.StandardDecorationProvider.provider());
@@ -1142,6 +1175,7 @@ test "Decoration placement" {
 test "OverworldGenerator with mock decoration provider" {
     const allocator = std.testing.allocator;
     const DecorationProvider = @import("world/worldgen/decoration_provider.zig").DecorationProvider;
+    const DecorationContext = @import("world/worldgen/decoration_provider.zig").DecorationProvider.DecorationContext;
 
     const MockProvider = struct {
         called_count: *usize,
@@ -1157,29 +1191,8 @@ test "OverworldGenerator with mock decoration provider" {
             .decorate = decorate,
         };
 
-        fn decorate(
-            ptr: ?*anyopaque,
-            chunk: *Chunk,
-            local_x: u32,
-            local_z: u32,
-            surface_y: i32,
-            surface_block: BlockType,
-            biome: BiomeId,
-            variant: f32,
-            allow_subbiomes: bool,
-            veg_mult: f32,
-            random: std.Random,
-        ) void {
-            _ = chunk;
-            _ = local_x;
-            _ = local_z;
-            _ = surface_y;
-            _ = surface_block;
-            _ = biome;
-            _ = variant;
-            _ = allow_subbiomes;
-            _ = veg_mult;
-            _ = random;
+        fn decorate(ptr: ?*anyopaque, ctx: DecorationContext) void {
+            _ = ctx;
             const count: *usize = @ptrCast(@alignCast(ptr.?));
             count.* += 1;
         }
