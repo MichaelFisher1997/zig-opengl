@@ -11,6 +11,13 @@ const LODRegionKeyContext = lod_chunk.LODRegionKeyContext;
 const LODMesh = @import("lod_mesh.zig").LODMesh;
 const CHUNK_SIZE_X = @import("chunk.zig").CHUNK_SIZE_X;
 
+const lod_gpu = @import("lod_upload_queue.zig");
+const LODGPUBridge = lod_gpu.LODGPUBridge;
+const LODRenderInterface = lod_gpu.LODRenderInterface;
+const MeshMap = lod_gpu.MeshMap;
+const RegionMap = lod_gpu.RegionMap;
+const ChunkChecker = lod_gpu.ChunkChecker;
+
 const Vec3 = @import("../engine/math/vec3.zig").Vec3;
 const Mat4 = @import("../engine/math/mat4.zig").Mat4;
 const Frustum = @import("../engine/math/frustum.zig").Frustum;
@@ -22,6 +29,7 @@ const log = @import("../engine/core/log.zig");
 /// - createBuffer(size: usize, usage: BufferUsage) !BufferHandle
 /// - destroyBuffer(handle: BufferHandle) void
 /// - getFrameIndex() usize
+/// - setLODInstanceBuffer(handle: BufferHandle) void
 /// - setModelMatrix(model: Mat4, color: Vec3, mask_radius: f32) void
 /// - draw(handle: BufferHandle, count: u32, mode: DrawMode) void
 pub fn LODRenderer(comptime RHI: type) type {
@@ -70,13 +78,15 @@ pub fn LODRenderer(comptime RHI: type) type {
             self.allocator.destroy(self);
         }
 
-        /// Render all LOD meshes
+        /// Render all LOD meshes using explicitly provided data.
         pub fn render(
             self: *Self,
-            manager: anytype,
+            meshes: *const [LODLevel.count]MeshMap,
+            regions: *const [LODLevel.count]RegionMap,
+            config: ILODConfig,
             view_proj: Mat4,
             camera_pos: Vec3,
-            chunk_checker: ?*const fn (i32, i32, *anyopaque) bool,
+            chunk_checker: ?ChunkChecker,
             checker_ctx: ?*anyopaque,
             use_frustum: bool,
         ) void {
@@ -99,7 +109,7 @@ pub fn LODRenderer(comptime RHI: type) type {
             // Process from highest LOD down
             var i: usize = LODLevel.count - 1;
             while (i > 0) : (i -= 1) {
-                self.collectVisibleMeshes(manager, &manager.meshes[i], &manager.regions[i], view_proj, camera_pos, frustum, lod_y_offset, chunk_checker, checker_ctx, use_frustum) catch |err| {
+                self.collectVisibleMeshes(&meshes[i], &regions[i], config, view_proj, camera_pos, frustum, lod_y_offset, chunk_checker, checker_ctx, use_frustum) catch |err| {
                     log.log.err("Failed to collect visible meshes for LOD{}: {}", .{ i, err });
                 };
             }
@@ -115,14 +125,14 @@ pub fn LODRenderer(comptime RHI: type) type {
 
         fn collectVisibleMeshes(
             self: *Self,
-            manager: anytype,
-            meshes: anytype,
-            regions: anytype,
+            meshes: *const MeshMap,
+            regions: *const RegionMap,
+            config: ILODConfig,
             view_proj: Mat4,
             camera_pos: Vec3,
             frustum: Frustum,
             lod_y_offset: f32,
-            chunk_checker: ?*const fn (i32, i32, *anyopaque) bool,
+            chunk_checker: ?ChunkChecker,
             checker_ctx: ?*anyopaque,
             use_frustum: bool,
         ) !void {
@@ -163,7 +173,7 @@ pub fn LODRenderer(comptime RHI: type) type {
 
                     const model = Mat4.translate(Vec3.init(@as(f32, @floatFromInt(bounds.min_x)) - camera_pos.x, -camera_pos.y + lod_y_offset, @as(f32, @floatFromInt(bounds.min_z)) - camera_pos.z));
 
-                    const mask_radius = manager.config.calculateMaskRadius() * @as(f32, @floatFromInt(CHUNK_SIZE_X));
+                    const mask_radius = config.calculateMaskRadius() * @as(f32, @floatFromInt(CHUNK_SIZE_X));
                     try self.instance_data.append(self.allocator, .{
                         .view_proj = view_proj,
                         .model = model,
@@ -173,6 +183,59 @@ pub fn LODRenderer(comptime RHI: type) type {
                     try self.draw_list.append(self.allocator, mesh);
                 }
             }
+        }
+
+        /// Create a LODGPUBridge that delegates to this renderer's RHI.
+        pub fn createGPUBridge(self: *Self) LODGPUBridge {
+            const Wrapper = struct {
+                fn onUpload(mesh: *LODMesh, ctx: *anyopaque) rhi_types.RhiError!void {
+                    const rhi: *RHI = @ptrCast(@alignCast(ctx));
+                    return mesh.upload(rhi.*);
+                }
+                fn onDestroy(mesh: *LODMesh, ctx: *anyopaque) void {
+                    const rhi: *RHI = @ptrCast(@alignCast(ctx));
+                    mesh.deinit(rhi.*);
+                }
+                fn onWaitIdle(ctx: *anyopaque) void {
+                    const rhi: *RHI = @ptrCast(@alignCast(ctx));
+                    rhi.waitIdle();
+                }
+            };
+            return .{
+                .on_upload = Wrapper.onUpload,
+                .on_destroy = Wrapper.onDestroy,
+                .on_wait_idle = Wrapper.onWaitIdle,
+                .ctx = @ptrCast(&self.rhi),
+            };
+        }
+
+        /// Create a type-erased LODRenderInterface from this renderer.
+        pub fn toInterface(self: *Self) LODRenderInterface {
+            const Wrapper = struct {
+                fn renderFn(
+                    self_ptr: *anyopaque,
+                    meshes: *const [LODLevel.count]MeshMap,
+                    regions: *const [LODLevel.count]RegionMap,
+                    config: ILODConfig,
+                    view_proj: Mat4,
+                    camera_pos: Vec3,
+                    chunk_checker: ?ChunkChecker,
+                    checker_ctx: ?*anyopaque,
+                    use_frustum: bool,
+                ) void {
+                    const renderer: *Self = @ptrCast(@alignCast(self_ptr));
+                    renderer.render(meshes, regions, config, view_proj, camera_pos, chunk_checker, checker_ctx, use_frustum);
+                }
+                fn deinitFn(self_ptr: *anyopaque) void {
+                    const renderer: *Self = @ptrCast(@alignCast(self_ptr));
+                    renderer.deinit();
+                }
+            };
+            return .{
+                .render_fn = Wrapper.renderFn,
+                .deinit_fn = Wrapper.deinitFn,
+                .ptr = self,
+            };
         }
     };
 }
@@ -268,10 +331,6 @@ test "LODRenderer render draw path" {
     var chunk = LODChunk.init(0, 0, .lod1);
     chunk.state = .renderable;
 
-    // Create mock manager with meshes and regions
-    const MeshMap = std.HashMap(LODRegionKey, *LODMesh, LODRegionKeyContext, 80);
-    const RegionMap = std.HashMap(LODRegionKey, *LODChunk, LODRegionKeyContext, 80);
-
     var meshes: [LODLevel.count]MeshMap = undefined;
     var regions: [LODLevel.count]RegionMap = undefined;
     for (0..LODLevel.count) |i| {
@@ -290,31 +349,15 @@ test "LODRenderer render draw path" {
     try meshes[1].put(key, &mesh);
     try regions[1].put(key, &chunk);
 
-    const MockManager = struct {
-        meshes: *[LODLevel.count]MeshMap,
-        regions: *[LODLevel.count]RegionMap,
-        config: ILODConfig,
-
-        pub fn unloadLODWhereChunksLoaded(_: @This(), _: anytype, _: anytype) void {}
-        pub fn areAllChunksLoaded(_: @This(), _: anytype, _: anytype, _: anytype) bool {
-            return false; // Not loaded, so LOD should render
-        }
-    };
-
     var mock_config = LODConfig{};
-    const mock_manager = MockManager{
-        .meshes = &meshes,
-        .regions = &regions,
-        .config = mock_config.interface(),
-    };
 
     // Create view-projection matrix that includes origin (where our chunk is)
     // Use identity for simplicity - frustum will include everything
     const view_proj = Mat4.identity;
     const camera_pos = Vec3.zero;
 
-    // Call render
-    renderer.render(mock_manager, view_proj, camera_pos, null, null, true);
+    // Call render with explicit parameters
+    renderer.render(&meshes, &regions, mock_config.interface(), view_proj, camera_pos, null, null, true);
 
     // Verify draw was called with correct parameters
     try std.testing.expectEqual(@as(u32, 1), mock_state.draw_calls);
