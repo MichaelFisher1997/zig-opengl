@@ -18,11 +18,74 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get PR diff
+        id: diff
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.ref }} --depth=100
+          git fetch origin ${{ github.event.pull_request.head.ref }} --depth=100
+          git diff origin/${{ github.event.pull_request.base.ref }}...origin/${{ github.event.pull_request.head.ref }} > pr_diff.txt
+          echo "Diff saved to pr_diff.txt"
+
+      - name: Fetch previous review comments
+        id: previous-reviews
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const reviews = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            
+            const comments = await github.rest.pulls.listReviewComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            
+            const allComments = [];
+            
+            // Get comments from all reviews
+            for (const review of reviews.data) {
+              if (review.body) {
+                allComments.push({
+                  user: review.user.login,
+                  body: review.body,
+                  submitted_at: review.submitted_at
+                });
+              }
+            }
+            
+            // Add inline review comments
+            for (const comment of comments.data) {
+              allComments.push({
+                user: comment.user.login,
+                body: comment.body,
+                file: comment.path,
+                line: comment.line,
+                submitted_at: comment.created_at
+              });
+            }
+            
+            // Sort by date (oldest first)
+            allComments.sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at));
+            
+            // Format for output
+            const formattedComments = allComments
+              .filter(c => c.user.includes('bot') || c.user.includes('actions') || c.user.includes('opencode'))
+              .map(c => `Review by ${c.user} at ${c.submitted_at}:\n${c.body}`)
+              .join('\n\n---\n\n');
+            
+            require('fs').writeFileSync('previous_reviews.txt', formattedComments || 'No previous automated reviews found.');
+            console.log('Previous reviews saved to previous_reviews.txt');
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
@@ -36,12 +99,104 @@ jobs:
       - name: Run opencode
         uses: anomalyco/opencode/github@latest
         env:
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
         with:
-          model: minimax-coding-plan/MiniMax-M2.1
+          model: kimi-for-coding/k2p5
           prompt: |
-            1. If the PR tags or references any issues (e.g., "Fixes #123"), verify if the implementation fully satisfies the requirements of those issues. If no issues are tagged, proceed without mentioning it.
-            2. If there are previous code reviews on this PR, verify if the feedback has been addressed. If there are no previous reviews, do not mention their absence.
-            3. Analyze for code quality issues, potential bugs, and architectural improvements.
-            4. Enforce SOLID principles. Provide a table breakdown scoring the PR on each of the 5 SOLID points (Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion). For each point, provide a score (e.g., 0-10 or N/A) and specific, actionable suggestions on where and how to improve.
+            You are reviewing a pull request. The following files are available in the working directory:
+            - pr_diff.txt: The current diff of this PR against the base branch
+            - previous_reviews.txt: Previous automated review comments on this PR
+
+            First, read and analyze these files to understand:
+            1. What changed in the current PR (pr_diff.txt)
+            2. What feedback was given in previous reviews (previous_reviews.txt)
+
+            Then perform your review and output it in the following STRICT STRUCTURE:
+
+            ---
+
+            ## 📋 Summary
+            2-3 sentences summarizing the PR purpose, scope, and overall quality.
+
+            ## ✅ Resolved Issues
+            List issues from previous_reviews.txt that have been fixed. Format:
+            - **[RESOLVED]** ~File:Line - Brief description of what was fixed~ (strikethrough)
+            - **[RESOLVED]** ~Another fixed issue~
+            
+            If no previous issues: "No previous issues to verify."
+
+            ## 🔴 Critical Issues (Must Fix - Blocks Merge)
+            Only issues that could cause crashes, security vulnerabilities, data loss, or major bugs.
+            
+            For each issue, use this exact format:
+            ```
+            **[CRITICAL]** `File:Line` - Issue Title
+            **Confidence:** High|Medium|Low (how sure you are this is a real problem)
+            **Description:** Clear explanation of the issue
+            **Impact:** What could go wrong if merged
+            **Suggested Fix:** Specific code changes needed
+            ```
+
+            ## ⚠️ High Priority Issues (Should Fix)
+            Significant code quality issues, potential bugs, or architectural problems.
+            
+            Same format as Critical, but with **[HIGH]** prefix.
+
+            ## 💡 Medium Priority Issues (Nice to Fix)
+            Style issues, minor optimizations, or code clarity improvements.
+            
+            Same format, with **[MEDIUM]** prefix.
+
+            ## ℹ️ Low Priority Suggestions (Optional)
+            Minor suggestions, documentation improvements, or subjective preferences.
+            
+            Same format, with **[LOW]** prefix.
+
+            ## 📊 SOLID Principles Score
+            | Principle | Score | Notes |
+            |-----------|-------|-------|
+            | Single Responsibility | 0-10 | Brief justification |
+            | Open/Closed | 0-10 | Brief justification |
+            | Liskov Substitution | 0-10 | Brief justification |
+            | Interface Segregation | 0-10 | Brief justification |
+            | Dependency Inversion | 0-10 | Brief justification |
+            | **Average** | **X.X** | |
+
+            ## 🎯 Final Assessment
+
+            ### Overall Confidence Score: XX%
+            Rate your confidence in this PR being ready to merge (0-100%).
+            **How to interpret:**
+            - 0-30%: Major concerns, do not merge without significant rework
+            - 31-60%: Moderate concerns, several issues need addressing
+            - 61-80%: Minor concerns, mostly ready with some fixes
+            - 81-100%: High confidence, ready to merge or with trivial fixes
+
+            ### Confidence Breakdown:
+            - **Code Quality:** XX% (how well-written is the code?)
+            - **Completeness:** XX% (does it fulfill requirements?)
+            - **Risk Level:** XX% (how risky is this change?)
+            - **Test Coverage:** XX% (are changes adequately tested?)
+
+            ### Merge Readiness:
+            - [ ] All critical issues resolved
+            - [ ] SOLID average score >= 6.0
+            - [ ] Overall confidence >= 60%
+            - [ ] No security concerns
+            - [ ] Tests present and passing (if applicable)
+
+            ### Verdict:
+            **MERGE** | **MERGE WITH FIXES** | **DO NOT MERGE**
+            
+            One-sentence explanation of the verdict.
+
+            ---
+
+            **Review Guidelines:**
+            1. Only report issues that exist in pr_diff.txt (current code)
+            2. Be extremely specific with file paths and line numbers
+            3. For previous review items, mark as RESOLVED if fixed, or report again with current line numbers if still present
+            4. Confidence scores should reflect how certain you are - use "Low" when unsure
+            5. If you have nothing meaningful to add to a section, write "None identified" instead of omitting it
+            6. Always provide actionable fixes, never just complaints
 
