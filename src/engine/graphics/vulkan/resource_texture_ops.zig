@@ -225,7 +225,10 @@ pub fn createTexture(self: anytype, width: u32, height: u32, format: rhi.Texture
 
 pub fn createTexture3D(self: anytype, width: u32, height: u32, depth: u32, format: rhi.TextureFormat, config: rhi.TextureConfig, data_opt: ?[]const u8) rhi.RhiError!rhi.TextureHandle {
     var texture_config = config;
-    texture_config.generate_mipmaps = false;
+    if (texture_config.generate_mipmaps) {
+        std.log.warn("3D texture mipmaps are not supported yet; disabling generate_mipmaps", .{});
+        texture_config.generate_mipmaps = false;
+    }
 
     const vk_format: c.VkFormat = switch (format) {
         .rgba => c.VK_FORMAT_R8G8B8A8_UNORM,
