@@ -25,7 +25,8 @@ void main() {
         return;
     }
 
-    vec3 center = sampleCell(cell, gridSize) * 0.82;
+    // propagation.x = neighbor propagation factor, propagation.y = center retention
+    vec3 center = sampleCell(cell, gridSize) * push_data.propagation.y;
     vec3 accum = center;
     float f = push_data.propagation.x;
 
