@@ -89,6 +89,8 @@ pub const BLOCK_TEXTURES = [_]TextureMapping{
     .{ .name = "flower_red", .files = &.{ "flower_red.png", "flower_rose.png", "poppy.png" } },
     .{ .name = "flower_yellow", .files = &.{ "flower_yellow.png", "flower_dandelion.png", "dandelion.png" } },
     .{ .name = "dead_bush", .files = &.{ "dead_bush.png", "deadbush.png" } },
+    .{ .name = "torch", .files = &.{ "torch.png", "torch_on.png" } },
+    .{ .name = "lava", .files = &.{ "lava.png", "lava_still.png" } },
 };
 
 pub const LoadedTexture = struct {

@@ -7,8 +7,10 @@ layout(set = 0, binding = 0) uniform sampler2D uHDRBuffer;
 layout(set = 0, binding = 2) uniform sampler2D uBloomTexture;
 
 layout(push_constant) uniform PostProcessParams {
-    float bloomEnabled;   // 0.0 = disabled, 1.0 = enabled
-    float bloomIntensity; // Final bloom blend intensity
+    float bloomEnabled;      // 0.0 = disabled, 1.0 = enabled
+    float bloomIntensity;    // Final bloom blend intensity
+    float vignetteIntensity; // 0.0 = none, 1.0 = full vignette
+    float filmGrainIntensity;// 0.0 = none, 1.0 = heavy grain
 } postParams;
 
 layout(set = 0, binding = 1) uniform GlobalUniforms {
@@ -107,6 +109,42 @@ vec3 ACESFilm(vec3 x) {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
+// Vignette effect - darkens edges of the screen
+vec3 applyVignette(vec3 color, vec2 uv, float intensity) {
+    if (intensity <= 0.0) return color;
+    
+    // Convert UV from [0,1] to [-1,1] range, centered at (0.5, 0.5)
+    vec2 centered = uv * 2.0 - 1.0;
+    
+    // Calculate distance from center (circular vignette)
+    float dist = length(centered);
+    
+    // Smooth vignette falloff
+    float vignette = smoothstep(1.0, 0.4, dist * (1.0 + intensity));
+    
+    // Apply vignette - darker at edges
+    return color * mix(0.3, 1.0, vignette * (1.0 - intensity * 0.5) + intensity * 0.5);
+}
+
+// Pseudo-random function for film grain
+float random(vec2 uv) {
+    return fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Film grain effect - adds animated noise
+vec3 applyFilmGrain(vec3 color, vec2 uv, float intensity, float time) {
+    if (intensity <= 0.0) return color;
+    
+    // Generate grain using UV and time for animation
+    float grain = random(uv + time * 0.01);
+    
+    // Convert to signed noise centered around 0
+    grain = (grain - 0.5) * 2.0;
+    
+    // Apply grain with intensity - subtle effect
+    return color + grain * intensity * 0.05;
+}
+
 void main() {
     vec3 hdrColor = texture(uHDRBuffer, inUV).rgb;
     
@@ -124,6 +162,12 @@ void main() {
     } else {
         color = ACESFilm(hdrColor * global.pbr_params.y);
     }
+    
+    // Apply vignette effect
+    color = applyVignette(color, inUV, postParams.vignetteIntensity);
+    
+    // Apply film grain effect
+    color = applyFilmGrain(color, inUV, postParams.filmGrainIntensity, global.params.x);
     
     outColor = vec4(color, 1.0);
 }

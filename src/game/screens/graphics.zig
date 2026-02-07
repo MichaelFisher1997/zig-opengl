@@ -220,6 +220,14 @@ pub const GraphicsScreen = struct {
                     ctx.rhi.*.setBloom(settings.bloom_enabled);
                 } else if (std.mem.eql(u8, decl.name, "bloom_intensity")) {
                     ctx.rhi.*.setBloomIntensity(settings.bloom_intensity);
+                } else if (std.mem.eql(u8, decl.name, "vignette_enabled")) {
+                    ctx.rhi.*.setVignetteEnabled(settings.vignette_enabled);
+                } else if (std.mem.eql(u8, decl.name, "vignette_intensity")) {
+                    ctx.rhi.*.setVignetteIntensity(settings.vignette_intensity);
+                } else if (std.mem.eql(u8, decl.name, "film_grain_enabled")) {
+                    ctx.rhi.*.setFilmGrainEnabled(settings.film_grain_enabled);
+                } else if (std.mem.eql(u8, decl.name, "film_grain_intensity")) {
+                    ctx.rhi.*.setFilmGrainIntensity(settings.film_grain_intensity);
                 }
             }
 

@@ -323,6 +323,10 @@ const MockContext = struct {
         .setFXAA = undefined,
         .setBloom = undefined,
         .setBloomIntensity = undefined,
+        .setVignetteEnabled = undefined,
+        .setVignetteIntensity = undefined,
+        .setFilmGrainEnabled = undefined,
+        .setFilmGrainIntensity = undefined,
     };
 
     const MOCK_ENCODER_VTABLE = rhi.IGraphicsCommandEncoder.VTable{

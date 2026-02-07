@@ -8,6 +8,8 @@ const VulkanBuffer = @import("resource_manager.zig").VulkanBuffer;
 pub const PostProcessPushConstants = extern struct {
     bloom_enabled: f32,
     bloom_intensity: f32,
+    vignette_intensity: f32,
+    film_grain_intensity: f32,
 };
 
 pub const PostProcessSystem = struct {

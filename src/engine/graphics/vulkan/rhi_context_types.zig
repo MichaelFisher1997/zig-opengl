@@ -98,6 +98,13 @@ const ShadowRuntime = struct {
     shadow_resolution: u32,
 };
 
+const PostProcessState = struct {
+    vignette_enabled: bool = true,
+    vignette_intensity: f32 = 0.3,
+    film_grain_enabled: bool = true,
+    film_grain_intensity: f32 = 0.15,
+};
+
 const RenderOptions = struct {
     wireframe_enabled: bool = false,
     textures_enabled: bool = true,
@@ -193,6 +200,7 @@ pub const VulkanContext = struct {
     debug_shadow: DebugShadowResources = .{},
     fxaa: FXAASystem = .{},
     bloom: BloomSystem = .{},
+    post_process_state: PostProcessState = .{},
     velocity: VelocityResources = .{},
 
     timing: TimingState = .{},
