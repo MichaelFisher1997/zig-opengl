@@ -406,7 +406,14 @@ void main() {
 
     vec3 L = normalize(global.sun_dir.xyz);
     float nDotL = max(dot(N, L), 0.0);
-    int layer = viewDistance < shadows.cascade_splits[0] ? 0 : (viewDistance < shadows.cascade_splits[1] ? 1 : 2);
+    // NaN guard: if cascade_splits contain NaN, comparisons return false and
+    // we fall through to cascade 2 (widest). Also guard against zero/negative
+    // splits which indicate uninitialized or invalid cascade data.
+    int layer = 2;
+    if (shadows.cascade_splits[0] > 0.0 && shadows.cascade_splits[1] > 0.0) {
+        layer = viewDistance < shadows.cascade_splits[0] ? 0
+              : (viewDistance < shadows.cascade_splits[1] ? 1 : 2);
+    }
     float shadowFactor = computeShadowCascades(vFragPosWorld, N, L, viewDistance, layer);
     
     float cloudShadow = (global.cloud_params.w > 0.5 && global.params.w > 0.05 && global.sun_dir.y > 0.05) ? getCloudShadow(vFragPosWorld, global.sun_dir.xyz) : 0.0;

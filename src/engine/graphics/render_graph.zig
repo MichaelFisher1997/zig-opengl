@@ -35,8 +35,9 @@ pub const SceneContext = struct {
     bloom_enabled: bool = true,
     overlay_renderer: ?*const fn (ctx: SceneContext) void = null,
     overlay_ctx: ?*anyopaque = null,
-    // Cached shadow cascades computed once per frame
-    cached_cascades: ?CSM.ShadowCascades = null,
+    // Pointer to frame-local cascade storage, computed once per frame by the first
+    // ShadowPass and reused by subsequent cascade passes to guarantee consistency.
+    cached_cascades: *?CSM.ShadowCascades,
 };
 
 pub const IRenderPass = struct {
@@ -146,8 +147,9 @@ pub const ShadowPass = struct {
         const cascade_idx = self.cascade_index;
         const rhi = ctx.rhi;
 
-        // Compute cascades once per frame and cache in SceneContext
-        const cascades = if (ctx.cached_cascades) |cached| cached else blk: {
+        // Compute cascades once per frame and cache via shared pointer so all
+        // cascade passes within the same frame use identical matrices.
+        const cascades = if (ctx.cached_cascades.*) |cached| cached else blk: {
             const computed = CSM.computeCascades(
                 ctx.shadow.resolution,
                 ctx.camera.fov,
@@ -163,6 +165,7 @@ pub const ShadowPass = struct {
                 log.log.err("ShadowPass{}: Invalid cascade data, skipping shadow pass", .{cascade_idx});
                 return error.InvalidShadowCascades;
             }
+            ctx.cached_cascades.* = computed;
             break :blk computed;
         };
 
