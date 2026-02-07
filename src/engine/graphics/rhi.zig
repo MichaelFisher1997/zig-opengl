@@ -472,6 +472,10 @@ pub const RHI = struct {
         setFXAA: *const fn (ctx: *anyopaque, enabled: bool) void,
         setBloom: *const fn (ctx: *anyopaque, enabled: bool) void,
         setBloomIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
+        setVignetteEnabled: *const fn (ctx: *anyopaque, enabled: bool) void,
+        setVignetteIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
+        setFilmGrainEnabled: *const fn (ctx: *anyopaque, enabled: bool) void,
+        setFilmGrainIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
     };
 
     pub fn factory(self: RHI) IResourceFactory {
@@ -705,5 +709,17 @@ pub const RHI = struct {
     }
     pub fn setBloomIntensity(self: RHI, intensity: f32) void {
         self.vtable.setBloomIntensity(self.ptr, intensity);
+    }
+    pub fn setVignetteEnabled(self: RHI, enabled: bool) void {
+        self.vtable.setVignetteEnabled(self.ptr, enabled);
+    }
+    pub fn setVignetteIntensity(self: RHI, intensity: f32) void {
+        self.vtable.setVignetteIntensity(self.ptr, intensity);
+    }
+    pub fn setFilmGrainEnabled(self: RHI, enabled: bool) void {
+        self.vtable.setFilmGrainEnabled(self.ptr, enabled);
+    }
+    pub fn setFilmGrainIntensity(self: RHI, intensity: f32) void {
+        self.vtable.setFilmGrainIntensity(self.ptr, intensity);
     }
 };

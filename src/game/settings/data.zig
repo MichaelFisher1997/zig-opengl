@@ -74,6 +74,12 @@ pub const Settings = struct {
     bloom_enabled: bool = true,
     bloom_intensity: f32 = 0.5,
 
+    // Post-Processing Settings (Phase 6)
+    vignette_enabled: bool = false,
+    vignette_intensity: f32 = 0.3,
+    film_grain_enabled: bool = false,
+    film_grain_intensity: f32 = 0.15,
+
     // Texture Settings
     max_texture_resolution: u32 = 512, // 16, 32, 64, 128, 256, 512
 
@@ -190,6 +196,24 @@ pub const Settings = struct {
         pub const bloom_intensity = SettingMetadata{
             .label = "BLOOM INTENSITY",
             .kind = .{ .slider = .{ .min = 0.0, .max = 2.0, .step = 0.1 } },
+        };
+        pub const vignette_enabled = SettingMetadata{
+            .label = "VIGNETTE",
+            .description = "Darkens screen edges for cinematic effect",
+            .kind = .toggle,
+        };
+        pub const vignette_intensity = SettingMetadata{
+            .label = "VIGNETTE INTENSITY",
+            .kind = .{ .slider = .{ .min = 0.0, .max = 1.0, .step = 0.05 } },
+        };
+        pub const film_grain_enabled = SettingMetadata{
+            .label = "FILM GRAIN",
+            .description = "Adds subtle noise for film-like appearance",
+            .kind = .toggle,
+        };
+        pub const film_grain_intensity = SettingMetadata{
+            .label = "GRAIN INTENSITY",
+            .kind = .{ .slider = .{ .min = 0.0, .max = 1.0, .step = 0.05 } },
         };
         pub const volumetric_density = SettingMetadata{
             .label = "FOG DENSITY",

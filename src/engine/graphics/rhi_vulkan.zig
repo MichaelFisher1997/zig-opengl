@@ -197,6 +197,26 @@ fn setBloomIntensity(ctx_ptr: *anyopaque, intensity: f32) void {
     ctx.bloom.intensity = intensity;
 }
 
+fn setVignetteEnabled(ctx_ptr: *anyopaque, enabled: bool) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.post_process_state.vignette_enabled = enabled;
+}
+
+fn setVignetteIntensity(ctx_ptr: *anyopaque, intensity: f32) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.post_process_state.vignette_intensity = intensity;
+}
+
+fn setFilmGrainEnabled(ctx_ptr: *anyopaque, enabled: bool) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.post_process_state.film_grain_enabled = enabled;
+}
+
+fn setFilmGrainIntensity(ctx_ptr: *anyopaque, intensity: f32) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.post_process_state.film_grain_intensity = intensity;
+}
+
 fn endFrame(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.mutex.lock();
@@ -705,6 +725,10 @@ const VULKAN_RHI_VTABLE = rhi.RHI.VTable{
     .setFXAA = setFXAA,
     .setBloom = setBloom,
     .setBloomIntensity = setBloomIntensity,
+    .setVignetteEnabled = setVignetteEnabled,
+    .setVignetteIntensity = setVignetteIntensity,
+    .setFilmGrainEnabled = setFilmGrainEnabled,
+    .setFilmGrainIntensity = setFilmGrainIntensity,
 };
 
 fn beginPassTiming(ctx_ptr: *anyopaque, pass_name: []const u8) void {
