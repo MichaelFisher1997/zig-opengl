@@ -48,7 +48,14 @@ jobs:
             ---
 
             ## 📋 Summary
-            2-3 sentences summarizing the PR purpose, scope, and overall quality.
+            First, check if the PR description mentions any linked issues (e.g., "Closes #123", "Fixes #456", "Resolves #789"). 
+            
+            If linked issues are found:
+            - Mention the issue number(s) explicitly
+            - Verify the PR actually implements what the issue(s) requested
+            - State whether the implementation fully satisfies the issue requirements
+            
+            Then provide 2-3 sentences summarizing the PR purpose, scope, and overall quality.
 
             ## 🔴 Critical Issues (Must Fix - Blocks Merge)
             Only issues that could cause crashes, security vulnerabilities, data loss, or major bugs.
@@ -118,8 +125,9 @@ jobs:
             ---
 
             **Review Guidelines:**
-            1. Be extremely specific with file paths and line numbers
-            2. Confidence scores should reflect how certain you are - use "Low" when unsure
-            3. If you have nothing meaningful to add to a section, write "None identified" instead of omitting it
-            4. Always provide actionable fixes, never just complaints
+            1. Check the PR description for linked issues ("Fixes #123", "Closes #456", etc.) and verify the implementation
+            2. Be extremely specific with file paths and line numbers
+            3. Confidence scores should reflect how certain you are - use "Low" when unsure
+            4. If you have nothing meaningful to add to a section, write "None identified" instead of omitting it
+            5. Always provide actionable fixes, never just complaints
 
