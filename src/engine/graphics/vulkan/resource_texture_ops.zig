@@ -225,6 +225,7 @@ pub fn createTexture(self: anytype, width: u32, height: u32, format: rhi.Texture
 
 /// Creates a 3D texture resource.
 /// Note: `config.generate_mipmaps` is currently forced off for 3D textures.
+/// Other config parameters (filtering, wrapping, render-target flag) are respected.
 pub fn createTexture3D(self: anytype, width: u32, height: u32, depth: u32, format: rhi.TextureFormat, config: rhi.TextureConfig, data_opt: ?[]const u8) rhi.RhiError!rhi.TextureHandle {
     var texture_config = config;
     if (texture_config.generate_mipmaps) {
