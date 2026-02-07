@@ -130,9 +130,21 @@ pub fn computeCascades(resolution: u32, camera_fov: f32, aspect: f32, near: f32,
 
         // Stabilize ortho bounds by snapping center to texel grid
         // ONLY snap X and Y. Snapping Z causes depth range shifts and flickering.
+        //
+        // Use relative-to-integer-origin snapping to maintain float32 precision
+        // at large world coordinates. Without this, @floor(large_value / small_texel)
+        // produces a huge integer that loses precision when multiplied back.
+        //
+        // Decompose: center = integer_origin + fractional_offset
+        // Snap the fractional part to the texel grid (where float32 has full precision),
+        // then reconstruct: snapped = integer_origin + round_to_grid(fractional_offset)
+        const origin_x = @as(f32, @floatFromInt(@as(i32, @intFromFloat(center_ls.x))));
+        const origin_y = @as(f32, @floatFromInt(@as(i32, @intFromFloat(center_ls.y))));
+        const frac_x = center_ls.x - origin_x;
+        const frac_y = center_ls.y - origin_y;
         const center_snapped = Vec3.init(
-            @floor(center_ls.x / texel_size) * texel_size,
-            @floor(center_ls.y / texel_size) * texel_size,
+            origin_x + @floor(frac_x / texel_size) * texel_size,
+            origin_y + @floor(frac_y / texel_size) * texel_size,
             center_ls.z,
         );
 
@@ -174,8 +186,11 @@ pub fn computeCascades(resolution: u32, camera_fov: f32, aspect: f32, near: f32,
         last_split = split;
     }
 
-    // Validate results before returning
-    std.debug.assert(cascades.isValid());
+    // Validate results before returning - use runtime check instead of
+    // debug.assert so invalid data is caught in ReleaseFast builds too.
+    if (!cascades.isValid()) {
+        return ShadowCascades.initZero();
+    }
 
     return cascades;
 }

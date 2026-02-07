@@ -189,6 +189,10 @@ pub const WorldScreen = struct {
 
             const env_map_handle = if (ctx.env_map_ptr) |e_ptr| (if (e_ptr.*) |t| t.handle else 0) else 0;
 
+            // Frame-local cascade storage: computed once by the first ShadowPass,
+            // then reused by subsequent cascade passes for consistency.
+            var frame_cascades: ?@import("../../engine/graphics/csm.zig").ShadowCascades = null;
+
             const render_ctx = render_graph_pkg.SceneContext{
                 .rhi = ctx.rhi.*, // SceneContext expects value for now
                 .world = self.session.world,
@@ -211,6 +215,7 @@ pub const WorldScreen = struct {
                 .bloom_enabled = ctx.settings.bloom_enabled,
                 .overlay_renderer = renderOverlay,
                 .overlay_ctx = self,
+                .cached_cascades = &frame_cascades,
             };
             try ctx.render_graph.execute(render_ctx);
         }
