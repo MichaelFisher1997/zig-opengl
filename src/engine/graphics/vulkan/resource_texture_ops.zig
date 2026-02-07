@@ -224,7 +224,9 @@ pub fn createTexture(self: anytype, width: u32, height: u32, format: rhi.Texture
 }
 
 pub fn createTexture3D(self: anytype, width: u32, height: u32, depth: u32, format: rhi.TextureFormat, config: rhi.TextureConfig, data_opt: ?[]const u8) rhi.RhiError!rhi.TextureHandle {
-    _ = config;
+    var texture_config = config;
+    texture_config.generate_mipmaps = false;
+
     const vk_format: c.VkFormat = switch (format) {
         .rgba => c.VK_FORMAT_R8G8B8A8_UNORM,
         .rgba_srgb => c.VK_FORMAT_R8G8B8A8_SRGB,
@@ -239,6 +241,7 @@ pub fn createTexture3D(self: anytype, width: u32, height: u32, depth: u32, forma
 
     var usage_flags: c.VkImageUsageFlags = c.VK_IMAGE_USAGE_TRANSFER_DST_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT;
     if (format == .rgba32f) usage_flags |= c.VK_IMAGE_USAGE_STORAGE_BIT;
+    if (texture_config.is_render_target) usage_flags |= c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
     var staging_offset: u64 = 0;
     if (data_opt) |data| {
@@ -342,14 +345,7 @@ pub fn createTexture3D(self: anytype, width: u32, height: u32, depth: u32, forma
     view_info.subresourceRange.baseArrayLayer = 0;
     view_info.subresourceRange.layerCount = 1;
 
-    const sampler = try Utils.createSampler(self.vulkan_device, .{
-        .min_filter = .linear,
-        .mag_filter = .linear,
-        .wrap_s = .clamp_to_edge,
-        .wrap_t = .clamp_to_edge,
-        .generate_mipmaps = false,
-        .is_render_target = false,
-    }, 1, self.vulkan_device.max_anisotropy);
+    const sampler = try Utils.createSampler(self.vulkan_device, texture_config, 1, self.vulkan_device.max_anisotropy);
     errdefer c.vkDestroySampler(device, sampler, null);
 
     try Utils.checkVk(c.vkCreateImageView(device, &view_info, null, &view));
@@ -366,14 +362,7 @@ pub fn createTexture3D(self: anytype, width: u32, height: u32, depth: u32, forma
         .height = height,
         .depth = depth,
         .format = format,
-        .config = .{
-            .min_filter = .linear,
-            .mag_filter = .linear,
-            .wrap_s = .clamp_to_edge,
-            .wrap_t = .clamp_to_edge,
-            .generate_mipmaps = false,
-            .is_render_target = false,
-        },
+        .config = texture_config,
         .is_3d = true,
         .is_owned = true,
     });
