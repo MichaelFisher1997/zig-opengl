@@ -3,6 +3,7 @@
 //! Computes biome-tinted colors for blocks using 3x3 biome averaging.
 //! Only grass (top face), leaves, and water receive biome tints.
 
+const std = @import("std");
 const Chunk = @import("../chunk.zig").Chunk;
 const BlockType = @import("../block.zig").BlockType;
 const Face = @import("../block.zig").Face;
@@ -68,5 +69,6 @@ pub inline fn getBlockColor(chunk: *const Chunk, neighbors: NeighborChunks, axis
         }
     }
 
+    std.debug.assert(count > 0);
     return .{ r / count, g / count, b / count };
 }

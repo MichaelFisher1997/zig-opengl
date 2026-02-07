@@ -92,6 +92,8 @@ pub inline fn calculateQuadAO(
             s1 = getAOAt(chunk, neighbors, vx + dir_x, vy, vz + z_off);
             s2 = getAOAt(chunk, neighbors, vx, vy + dir_y, vz + z_off);
             c = getAOAt(chunk, neighbors, vx + dir_x, vy + dir_y, vz + z_off);
+        } else {
+            unreachable;
         }
 
         ao[i] = calculateVertexAO(s1, s2, c);

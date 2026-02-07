@@ -25,6 +25,16 @@ const ao_calculator = @import("ao_calculator.zig");
 const lighting_sampler = @import("lighting_sampler.zig");
 const biome_color_sampler = @import("biome_color_sampler.zig");
 
+/// Maximum light level difference (per channel) allowed when merging adjacent
+/// faces into a single greedy quad. A tolerance of 1 produces imperceptible
+/// banding while significantly reducing vertex count.
+const MAX_LIGHT_DIFF_FOR_MERGE: u8 = 1;
+
+/// Maximum per-channel color difference allowed when merging adjacent faces.
+/// 0.02 is roughly 5/256 — below the perceptible threshold for biome tint
+/// gradients, keeping quads large without visible color steps.
+const MAX_COLOR_DIFF_FOR_MERGE: f32 = 0.02;
+
 const FaceKey = struct {
     block: BlockType,
     side: bool,
@@ -100,12 +110,12 @@ pub fn meshSlice(
                 const r_diff = @as(i8, @intCast(nxt.light.getBlockLightR())) - @as(i8, @intCast(k.light.getBlockLightR()));
                 const g_diff = @as(i8, @intCast(nxt.light.getBlockLightG())) - @as(i8, @intCast(k.light.getBlockLightG()));
                 const b_diff = @as(i8, @intCast(nxt.light.getBlockLightB())) - @as(i8, @intCast(k.light.getBlockLightB()));
-                if (@abs(sky_diff) > 1 or @abs(r_diff) > 1 or @abs(g_diff) > 1 or @abs(b_diff) > 1) break;
+                if (@abs(sky_diff) > MAX_LIGHT_DIFF_FOR_MERGE or @abs(r_diff) > MAX_LIGHT_DIFF_FOR_MERGE or @abs(g_diff) > MAX_LIGHT_DIFF_FOR_MERGE or @abs(b_diff) > MAX_LIGHT_DIFF_FOR_MERGE) break;
 
                 const diff_r = @abs(nxt.color[0] - k.color[0]);
                 const diff_g = @abs(nxt.color[1] - k.color[1]);
                 const diff_b = @abs(nxt.color[2] - k.color[2]);
-                if (diff_r > 0.02 or diff_g > 0.02 or diff_b > 0.02) break;
+                if (diff_r > MAX_COLOR_DIFF_FOR_MERGE or diff_g > MAX_COLOR_DIFF_FOR_MERGE or diff_b > MAX_COLOR_DIFF_FOR_MERGE) break;
             }
             var height: u32 = 1;
             var dvh: u32 = 1;
@@ -120,12 +130,12 @@ pub fn meshSlice(
                     const r_diff = @as(i8, @intCast(nxt.light.getBlockLightR())) - @as(i8, @intCast(k.light.getBlockLightR()));
                     const g_diff = @as(i8, @intCast(nxt.light.getBlockLightG())) - @as(i8, @intCast(k.light.getBlockLightG()));
                     const b_diff = @as(i8, @intCast(nxt.light.getBlockLightB())) - @as(i8, @intCast(k.light.getBlockLightB()));
-                    if (@abs(sky_diff) > 1 or @abs(r_diff) > 1 or @abs(g_diff) > 1 or @abs(b_diff) > 1) break :outer;
+                    if (@abs(sky_diff) > MAX_LIGHT_DIFF_FOR_MERGE or @abs(r_diff) > MAX_LIGHT_DIFF_FOR_MERGE or @abs(g_diff) > MAX_LIGHT_DIFF_FOR_MERGE or @abs(b_diff) > MAX_LIGHT_DIFF_FOR_MERGE) break :outer;
 
                     const diff_r = @abs(nxt.color[0] - k.color[0]);
                     const diff_g = @abs(nxt.color[1] - k.color[1]);
                     const diff_b = @abs(nxt.color[2] - k.color[2]);
-                    if (diff_r > 0.02 or diff_g > 0.02 or diff_b > 0.02) break :outer;
+                    if (diff_r > MAX_COLOR_DIFF_FOR_MERGE or diff_g > MAX_COLOR_DIFF_FOR_MERGE or diff_b > MAX_COLOR_DIFF_FOR_MERGE) break :outer;
                 }
                 height += 1;
             }

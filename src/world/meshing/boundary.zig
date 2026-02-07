@@ -82,19 +82,40 @@ pub inline fn getLightCross(chunk: *const Chunk, neighbors: NeighborChunks, x: i
 }
 
 /// Get biome ID with cross-chunk neighbor lookup.
+/// Handles diagonal corners (both X and Z out of bounds) by clamping to the
+/// nearest in-bounds corner of the appropriate neighbor or current chunk.
 pub inline fn getBiomeAt(chunk: *const Chunk, neighbors: NeighborChunks, x: i32, z: i32) biome_mod.BiomeId {
+    // Diagonal corners: both X and Z are out of bounds simultaneously.
+    // We don't have diagonal neighbor chunks, so fall back to the X-axis
+    // neighbor at its clamped Z edge, or the current chunk's nearest corner.
+    if (x < 0 and z < 0) {
+        if (neighbors.west) |w| return w.getBiome(CHUNK_SIZE_X - 1, 0);
+        return chunk.getBiome(0, 0);
+    }
+    if (x < 0 and z >= CHUNK_SIZE_Z) {
+        if (neighbors.west) |w| return w.getBiome(CHUNK_SIZE_X - 1, CHUNK_SIZE_Z - 1);
+        return chunk.getBiome(0, CHUNK_SIZE_Z - 1);
+    }
+    if (x >= CHUNK_SIZE_X and z < 0) {
+        if (neighbors.east) |e| return e.getBiome(0, 0);
+        return chunk.getBiome(CHUNK_SIZE_X - 1, 0);
+    }
+    if (x >= CHUNK_SIZE_X and z >= CHUNK_SIZE_Z) {
+        if (neighbors.east) |e| return e.getBiome(0, CHUNK_SIZE_Z - 1);
+        return chunk.getBiome(CHUNK_SIZE_X - 1, CHUNK_SIZE_Z - 1);
+    }
+
+    // Single-axis boundary cases (Z is guaranteed in-bounds here)
     if (x < 0) {
-        if (z >= 0 and z < CHUNK_SIZE_Z) {
-            if (neighbors.west) |w| return w.getBiome(CHUNK_SIZE_X - 1, @intCast(z));
-        }
-        return chunk.getBiome(0, @intCast(std.math.clamp(z, 0, CHUNK_SIZE_Z - 1)));
+        if (neighbors.west) |w| return w.getBiome(CHUNK_SIZE_X - 1, @intCast(z));
+        return chunk.getBiome(0, @intCast(z));
     }
     if (x >= CHUNK_SIZE_X) {
-        if (z >= 0 and z < CHUNK_SIZE_Z) {
-            if (neighbors.east) |e| return e.getBiome(0, @intCast(z));
-        }
-        return chunk.getBiome(CHUNK_SIZE_X - 1, @intCast(std.math.clamp(z, 0, CHUNK_SIZE_Z - 1)));
+        if (neighbors.east) |e| return e.getBiome(0, @intCast(z));
+        return chunk.getBiome(CHUNK_SIZE_X - 1, @intCast(z));
     }
+
+    // X is in-bounds; only Z may be out of bounds
     if (z < 0) {
         if (neighbors.north) |n| return n.getBiome(@intCast(x), CHUNK_SIZE_Z - 1);
         return chunk.getBiome(@intCast(x), 0);
