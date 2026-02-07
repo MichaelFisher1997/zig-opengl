@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    const shader_cmd = b.addSystemCommand(&.{ "sh", "-c", "for f in assets/shaders/vulkan/*.vert assets/shaders/vulkan/*.frag; do glslangValidator -V \"$f\" -o \"$f.spv\"; done" });
+    const shader_cmd = b.addSystemCommand(&.{ "sh", "-c", "for f in assets/shaders/vulkan/*.vert assets/shaders/vulkan/*.frag assets/shaders/vulkan/*.comp; do glslangValidator -V \"$f\" -o \"$f.spv\"; done" });
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
@@ -176,6 +176,8 @@ pub fn build(b: *std.Build) void {
     const validate_vulkan_ssao_frag = b.addSystemCommand(&.{ "glslangValidator", "-V", "assets/shaders/vulkan/ssao.frag" });
     const validate_vulkan_ssao_blur_frag = b.addSystemCommand(&.{ "glslangValidator", "-V", "assets/shaders/vulkan/ssao_blur.frag" });
     const validate_vulkan_g_pass_frag = b.addSystemCommand(&.{ "glslangValidator", "-V", "assets/shaders/vulkan/g_pass.frag" });
+    const validate_vulkan_lpv_inject_comp = b.addSystemCommand(&.{ "glslangValidator", "-V", "assets/shaders/vulkan/lpv_inject.comp" });
+    const validate_vulkan_lpv_propagate_comp = b.addSystemCommand(&.{ "glslangValidator", "-V", "assets/shaders/vulkan/lpv_propagate.comp" });
 
     test_step.dependOn(&validate_vulkan_terrain_vert.step);
     test_step.dependOn(&validate_vulkan_terrain_frag.step);
@@ -195,4 +197,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&validate_vulkan_ssao_frag.step);
     test_step.dependOn(&validate_vulkan_ssao_blur_frag.step);
     test_step.dependOn(&validate_vulkan_g_pass_frag.step);
+    test_step.dependOn(&validate_vulkan_lpv_inject_comp.step);
+    test_step.dependOn(&validate_vulkan_lpv_propagate_comp.step);
 }

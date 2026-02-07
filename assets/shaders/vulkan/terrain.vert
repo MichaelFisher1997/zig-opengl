@@ -39,6 +39,8 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
     vec4 pbr_params; // x = pbr_quality, y = exposure, z = saturation, w = ssao_strength
     vec4 volumetric_params; // x = enabled, y = density, z = steps, w = scattering
     vec4 viewport_size; // xy = width/height
+    vec4 lpv_params; // x = enabled, y = intensity, z = cell_size, w = grid_size
+    vec4 lpv_origin; // xyz = world origin
 } global;
 
 layout(push_constant) uniform ModelUniforms {

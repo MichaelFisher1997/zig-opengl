@@ -203,6 +203,7 @@ const MockContext = struct {
         .updateBuffer = updateBuffer,
         .destroyBuffer = destroyBuffer,
         .createTexture = createTexture,
+        .createTexture3D = createTexture3D,
         .destroyTexture = destroyTexture,
         .updateTexture = updateTexture,
         .createShader = createShader,
@@ -236,6 +237,16 @@ const MockContext = struct {
         _ = ptr;
         _ = width;
         _ = height;
+        _ = format;
+        _ = config;
+        _ = data;
+        return 1;
+    }
+    fn createTexture3D(ptr: *anyopaque, width: u32, height: u32, depth: u32, format: rhi.TextureFormat, config: rhi.TextureConfig, data: ?[]const u8) rhi.RhiError!rhi.TextureHandle {
+        _ = ptr;
+        _ = width;
+        _ = height;
+        _ = depth;
         _ = format;
         _ = config;
         _ = data;

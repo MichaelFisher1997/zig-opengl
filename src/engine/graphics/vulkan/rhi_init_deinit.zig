@@ -13,9 +13,10 @@ const ShadowSystem = @import("shadow_system.zig").ShadowSystem;
 const Utils = @import("utils.zig");
 const lifecycle = @import("rhi_resource_lifecycle.zig");
 const setup = @import("rhi_resource_setup.zig");
+const rhi_timing = @import("rhi_timing.zig");
 
 const MAX_FRAMES_IN_FLIGHT = rhi.MAX_FRAMES_IN_FLIGHT;
-const TOTAL_QUERY_COUNT = 22 * MAX_FRAMES_IN_FLIGHT;
+const TOTAL_QUERY_COUNT = rhi_timing.QUERY_COUNT_PER_FRAME * MAX_FRAMES_IN_FLIGHT;
 
 pub fn initContext(ctx: anytype, allocator: std.mem.Allocator, render_device: ?*RenderDevice) !void {
     ctx.allocator = allocator;
@@ -108,6 +109,7 @@ pub fn initContext(ctx: anytype, allocator: std.mem.Allocator, render_device: ?*
     ctx.draw.current_roughness_texture = ctx.draw.dummy_roughness_texture;
     ctx.draw.current_displacement_texture = ctx.draw.dummy_roughness_texture;
     ctx.draw.current_env_texture = ctx.draw.dummy_texture;
+    ctx.draw.current_lpv_texture = ctx.draw.dummy_texture;
 
     const cloud_vbo_handle = try ctx.resources.createBuffer(8 * @sizeOf(f32), .vertex);
     std.log.info("Cloud VBO handle: {}, map count: {}", .{ cloud_vbo_handle, ctx.resources.buffers.count() });

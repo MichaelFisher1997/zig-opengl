@@ -15,8 +15,9 @@ const shadow_bridge = @import("vulkan/rhi_shadow_bridge.zig");
 const native_access = @import("vulkan/rhi_native_access.zig");
 const render_state = @import("vulkan/rhi_render_state.zig");
 const init_deinit = @import("vulkan/rhi_init_deinit.zig");
+const rhi_timing = @import("vulkan/rhi_timing.zig");
 
-const QUERY_COUNT_PER_FRAME = 22;
+const QUERY_COUNT_PER_FRAME = rhi_timing.QUERY_COUNT_PER_FRAME;
 
 const VulkanContext = @import("vulkan/rhi_context_types.zig").VulkanContext;
 
@@ -315,6 +316,13 @@ fn createTexture(ctx_ptr: *anyopaque, width: u32, height: u32, format: rhi.Textu
     return ctx.resources.createTexture(width, height, format, config, data_opt);
 }
 
+fn createTexture3D(ctx_ptr: *anyopaque, width: u32, height: u32, depth: u32, format: rhi.TextureFormat, config: rhi.TextureConfig, data_opt: ?[]const u8) rhi.RhiError!rhi.TextureHandle {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+    return ctx.resources.createTexture3D(width, height, depth, format, config, data_opt);
+}
+
 fn destroyTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.resources.destroyTexture(handle);
@@ -338,6 +346,7 @@ fn bindTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, slot: u32) void {
         7 => ctx.draw.current_roughness_texture = resolved,
         8 => ctx.draw.current_displacement_texture = resolved,
         9 => ctx.draw.current_env_texture = resolved,
+        11 => ctx.draw.current_lpv_texture = resolved,
         else => ctx.draw.current_texture = resolved,
     }
 }
@@ -661,6 +670,7 @@ const VULKAN_RHI_VTABLE = rhi.RHI.VTable{
         .updateBuffer = updateBuffer,
         .destroyBuffer = destroyBuffer,
         .createTexture = createTexture,
+        .createTexture3D = createTexture3D,
         .destroyTexture = destroyTexture,
         .updateTexture = updateTexture,
         .createShader = createShader,

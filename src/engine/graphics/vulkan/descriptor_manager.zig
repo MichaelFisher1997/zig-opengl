@@ -22,6 +22,8 @@ const GlobalUniforms = extern struct {
     pbr_params: [4]f32,
     volumetric_params: [4]f32,
     viewport_size: [4]f32,
+    lpv_params: [4]f32,
+    lpv_origin: [4]f32,
 };
 
 const ShadowUniforms = extern struct {
@@ -154,6 +156,8 @@ pub const DescriptorManager = struct {
             .{ .binding = 9, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
             // 10: SSAO Map
             .{ .binding = 10, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+            // 11: LPV Grid Atlas
+            .{ .binding = 11, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
         };
 
         var layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
