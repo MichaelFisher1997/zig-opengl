@@ -11,9 +11,9 @@ const VulkanContext = @import("vulkan/rhi_context_types.zig").VulkanContext;
 const Utils = @import("vulkan/utils.zig");
 
 const MAX_LIGHTS_PER_UPDATE: usize = 2048;
-// Tuned for stable 6-neighbor propagation without runaway energy.
+// Approximate 1/7 energy spread for 6-neighbor propagation, tuned to avoid runaway amplification.
 const DEFAULT_PROPAGATION_FACTOR: f32 = 0.14;
-// Retain most energy in the current cell to prevent over-blur.
+// Keep most energy in the center cell to reduce over-blur and preserve local contrast.
 const DEFAULT_CENTER_RETENTION: f32 = 0.82;
 const INJECT_SHADER_PATH = "assets/shaders/vulkan/lpv_inject.comp.spv";
 const PROPAGATE_SHADER_PATH = "assets/shaders/vulkan/lpv_propagate.comp.spv";
