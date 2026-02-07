@@ -262,7 +262,12 @@ pub const WorldScreen = struct {
             DebugShadowOverlay.draw(ctx.rhi.ui(), ctx.rhi.shadow(), screen_w, screen_h, .{});
         }
         if (ctx.settings.debug_lpv_overlay_active) {
-            const cfg = DebugLPVOverlay.Config{};
+            const overlay_size = std.math.clamp(220.0 * ctx.settings.ui_scale, 160.0, screen_h * 0.4);
+            const cfg = DebugLPVOverlay.Config{
+                .width = overlay_size,
+                .height = overlay_size,
+                .spacing = 10.0 * ctx.settings.ui_scale,
+            };
             const r = DebugLPVOverlay.rect(screen_h, cfg);
             DebugLPVOverlay.draw(ctx.rhi.ui(), ctx.lpv_system.getDebugOverlayTextureHandle(), screen_w, screen_h, cfg);
 

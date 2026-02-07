@@ -240,6 +240,7 @@ pub const LPVSystem = struct {
             @memcpy(@as([*]u8, @ptrCast(ptr))[0..bytes.len], bytes);
         }
 
+        // Keep debug overlay generation on LPV update ticks only (not every frame).
         self.buildDebugOverlay(lights[0..], light_count);
         try self.uploadDebugOverlay();
 
@@ -425,6 +426,9 @@ pub const LPVSystem = struct {
         defer self.allocator.free(empty);
         @memset(empty, 0.0);
         const bytes = std.mem.sliceAsBytes(empty);
+
+        // Atlas fallback: store Z slices stacked in Y (height = grid_size * grid_size).
+        // This stays until terrain/material sampling fully migrates to native 3D textures.
 
         self.grid_texture_a = try self.rhi.createTexture(
             self.grid_size,
