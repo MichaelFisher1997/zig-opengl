@@ -17,6 +17,8 @@ test_output.txt
 *.swp
 .DS_Store
 *.spv
+!assets/shaders/vulkan/lpv_inject.comp.spv
+!assets/shaders/vulkan/lpv_propagate.comp.spv
 wiki/
 *.exr
 *.hdr
