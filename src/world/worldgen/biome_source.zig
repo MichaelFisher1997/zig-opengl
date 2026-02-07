@@ -50,6 +50,10 @@ pub const BiomeSource = struct {
     ///
     /// Selects a biome based on climate and structural parameters,
     /// with optional river override.
+    ///
+    /// Note: `self` is retained (rather than making this a namespace function)
+    /// so that BiomeSource remains a consistent instance-based interface.
+    /// Future dimension support (e.g., Nether) may use `self.params` here.
     pub fn selectBiome(
         self: *const BiomeSource,
         climate: ClimateParams,

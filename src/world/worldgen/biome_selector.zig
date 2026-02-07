@@ -238,7 +238,13 @@ pub fn selectBiomeWithConstraintsAndRiver(climate: ClimateParams, structural: St
 // LOD-optimized Biome Functions (Issue #114)
 // ============================================================================
 
-/// Simplified biome selection for LOD2+ (no structural constraints)
+/// Simplified biome selection for LOD2+ (no structural constraints).
+///
+/// Intentionally excludes transition micro-biomes (foothills, marsh, dry_plains,
+/// coastal_plains), special biomes (mushroom_fields, mangrove_swamp), beach,
+/// and mountain variants. These are either rare, narrow-band, or structurally
+/// dependent biomes that don't significantly affect distant terrain silhouette.
+/// The full Voronoi selection handles them when chunks enter LOD0/LOD1 range.
 pub fn selectBiomeSimple(climate: ClimateParams) BiomeId {
     const heat = climate.temperature * 100.0;
     const humidity = climate.humidity * 100.0;

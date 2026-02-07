@@ -548,11 +548,25 @@ pub const BIOME_REGISTRY: []const BiomeDefinition = &.{
     },
 };
 
-/// Get the BiomeDefinition for a given BiomeId
-pub fn getBiomeDefinition(id: BiomeId) *const BiomeDefinition {
-    for (BIOME_REGISTRY) |*biome| {
-        if (biome.id == id) return biome;
+/// Comptime-generated lookup table for O(1) BiomeDefinition access by BiomeId.
+const BIOME_LOOKUP: [21]*const BiomeDefinition = blk: {
+    var table: [21]*const BiomeDefinition = undefined;
+    var filled = [_]bool{false} ** 21;
+    for (BIOME_REGISTRY) |*def| {
+        const idx = @intFromEnum(def.id);
+        table[idx] = def;
+        filled[idx] = true;
     }
-    // All biomes in BiomeId enum must have a corresponding definition in BIOME_REGISTRY
-    unreachable;
+    // Verify every BiomeId has a definition
+    for (0..21) |i| {
+        if (!filled[i]) {
+            @compileError("BIOME_REGISTRY is missing a BiomeDefinition entry");
+        }
+    }
+    break :blk table;
+};
+
+/// Get the BiomeDefinition for a given BiomeId (O(1) comptime lookup).
+pub fn getBiomeDefinition(id: BiomeId) *const BiomeDefinition {
+    return BIOME_LOOKUP[@intFromEnum(id)];
 }
