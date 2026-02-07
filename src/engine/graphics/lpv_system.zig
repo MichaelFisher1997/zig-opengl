@@ -11,6 +11,10 @@ const VulkanContext = @import("vulkan/rhi_context_types.zig").VulkanContext;
 const Utils = @import("vulkan/utils.zig");
 
 const MAX_LIGHTS_PER_UPDATE: usize = 2048;
+const DEFAULT_PROPAGATION_FACTOR: f32 = 0.14;
+const DEFAULT_CENTER_RETENTION: f32 = 0.82;
+const INJECT_SHADER_PATH = "assets/shaders/vulkan/lpv_inject.comp.spv";
+const PROPAGATE_SHADER_PATH = "assets/shaders/vulkan/lpv_propagate.comp.spv";
 
 const GpuLight = extern struct {
     pos_radius: [4]f32,
@@ -27,8 +31,7 @@ const InjectPush = extern struct {
 const PropagatePush = extern struct {
     grid_size: u32,
     _pad0: [3]u32,
-    propagation_factor: f32,
-    _pad1: [3]f32,
+    propagation: [4]f32,
 };
 
 pub const LPVSystem = struct {
@@ -53,6 +56,8 @@ pub const LPVSystem = struct {
     cell_size: f32,
     intensity: f32,
     propagation_iterations: u32,
+    propagation_factor: f32,
+    center_retention: f32,
     enabled: bool,
     update_interval_frames: u32 = 6,
 
@@ -102,6 +107,8 @@ pub const LPVSystem = struct {
             .cell_size = @max(cell_size, 0.5),
             .intensity = std.math.clamp(intensity, 0.0, 4.0),
             .propagation_iterations = std.math.clamp(propagation_iterations, 1, 8),
+            .propagation_factor = DEFAULT_PROPAGATION_FACTOR,
+            .center_retention = DEFAULT_CENTER_RETENTION,
             .enabled = enabled,
             .was_enabled_last_frame = enabled,
             .debug_overlay_pixels = &.{},
@@ -123,6 +130,9 @@ pub const LPVSystem = struct {
             c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         );
         errdefer self.destroyLightBuffer();
+
+        try ensureShaderFileExists(INJECT_SHADER_PATH);
+        try ensureShaderFileExists(PROPAGATE_SHADER_PATH);
 
         try self.initComputeResources();
         errdefer self.deinitComputeResources();
@@ -347,8 +357,7 @@ pub const LPVSystem = struct {
         const prop_push = PropagatePush{
             .grid_size = self.grid_size,
             ._pad0 = .{ 0, 0, 0 },
-            .propagation_factor = 0.14,
-            ._pad1 = .{ 0, 0, 0 },
+            .propagation = .{ self.propagation_factor, self.center_retention, 0, 0 },
         };
 
         var use_ab = true;
@@ -551,8 +560,12 @@ pub const LPVSystem = struct {
 
     fn destroyLightBuffer(self: *LPVSystem) void {
         if (self.light_buffer.buffer != null) {
+            if (self.light_buffer.memory == null) {
+                std.log.warn("LPV light buffer has VkBuffer but null VkDeviceMemory during teardown", .{});
+            }
             if (self.light_buffer.mapped_ptr != null) {
                 c.vkUnmapMemory(self.vk_ctx.vulkan_device.vk_device, self.light_buffer.memory);
+                self.light_buffer.mapped_ptr = null;
             }
             c.vkDestroyBuffer(self.vk_ctx.vulkan_device.vk_device, self.light_buffer.buffer, null);
             c.vkFreeMemory(self.vk_ctx.vulkan_device.vk_device, self.light_buffer.memory, null);
@@ -697,9 +710,9 @@ pub const LPVSystem = struct {
     fn createComputePipelines(self: *LPVSystem) !void {
         const vk = self.vk_ctx.vulkan_device.vk_device;
 
-        const inject_module = try createShaderModule(vk, "assets/shaders/vulkan/lpv_inject.comp.spv", self.allocator);
+        const inject_module = try createShaderModule(vk, INJECT_SHADER_PATH, self.allocator);
         defer c.vkDestroyShaderModule(vk, inject_module, null);
-        const propagate_module = try createShaderModule(vk, "assets/shaders/vulkan/lpv_propagate.comp.spv", self.allocator);
+        const propagate_module = try createShaderModule(vk, PROPAGATE_SHADER_PATH, self.allocator);
         defer c.vkDestroyShaderModule(vk, propagate_module, null);
 
         var inject_pc = std.mem.zeroes(c.VkPushConstantRange);
@@ -802,4 +815,12 @@ fn createShaderModule(vk: c.VkDevice, path: []const u8, allocator: std.mem.Alloc
     var module: c.VkShaderModule = null;
     try Utils.checkVk(c.vkCreateShaderModule(vk, &info, null, &module));
     return module;
+}
+
+fn ensureShaderFileExists(path: []const u8) !void {
+    std.fs.cwd().access(path, .{}) catch |err| {
+        std.log.err("LPV shader artifact missing: {s} ({})", .{ path, err });
+        std.log.err("Run `nix develop --command zig build` to regenerate Vulkan SPIR-V shaders.", .{});
+        return err;
+    };
 }
