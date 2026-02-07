@@ -22,6 +22,12 @@ pub const PresetConfig = struct {
     volumetric_steps: u32,
     volumetric_scattering: f32,
     ssao_enabled: bool,
+    lpv_quality_preset: u32 = 1,
+    lpv_enabled: bool = true,
+    lpv_intensity: f32 = 0.5,
+    lpv_cell_size: f32 = 2.0,
+    lpv_grid_size: u32 = 32,
+    lpv_propagation_iterations: u32 = 3,
     lod_enabled: bool,
     render_distance: i32,
     fxaa_enabled: bool,
@@ -71,6 +77,26 @@ pub fn initPresets(allocator: std.mem.Allocator) !void {
             std.log.warn("Skipping preset '{s}': invalid bloom_intensity {}", .{ p.name, p.bloom_intensity });
             continue;
         }
+        if (p.lpv_intensity < 0.0 or p.lpv_intensity > 2.0) {
+            std.log.warn("Skipping preset '{s}': invalid lpv_intensity {}", .{ p.name, p.lpv_intensity });
+            continue;
+        }
+        if (p.lpv_quality_preset > 2) {
+            std.log.warn("Skipping preset '{s}': invalid lpv_quality_preset {}", .{ p.name, p.lpv_quality_preset });
+            continue;
+        }
+        if (p.lpv_cell_size < 1.0 or p.lpv_cell_size > 4.0) {
+            std.log.warn("Skipping preset '{s}': invalid lpv_cell_size {}", .{ p.name, p.lpv_cell_size });
+            continue;
+        }
+        if (p.lpv_grid_size != 16 and p.lpv_grid_size != 32 and p.lpv_grid_size != 64) {
+            std.log.warn("Skipping preset '{s}': invalid lpv_grid_size {}", .{ p.name, p.lpv_grid_size });
+            continue;
+        }
+        if (p.lpv_propagation_iterations < 1 or p.lpv_propagation_iterations > 8) {
+            std.log.warn("Skipping preset '{s}': invalid lpv_propagation_iterations {}", .{ p.name, p.lpv_propagation_iterations });
+            continue;
+        }
         // Duplicate name because parsed.deinit() will free strings
         p.name = try allocator.dupe(u8, preset.name);
         errdefer allocator.free(p.name);
@@ -106,6 +132,12 @@ pub fn apply(settings: *Settings, preset_idx: usize) void {
     settings.volumetric_steps = config.volumetric_steps;
     settings.volumetric_scattering = config.volumetric_scattering;
     settings.ssao_enabled = config.ssao_enabled;
+    settings.lpv_quality_preset = config.lpv_quality_preset;
+    settings.lpv_enabled = config.lpv_enabled;
+    settings.lpv_intensity = config.lpv_intensity;
+    settings.lpv_cell_size = config.lpv_cell_size;
+    settings.lpv_grid_size = config.lpv_grid_size;
+    settings.lpv_propagation_iterations = config.lpv_propagation_iterations;
     settings.lod_enabled = config.lod_enabled;
     settings.render_distance = config.render_distance;
     settings.fxaa_enabled = config.fxaa_enabled;
@@ -139,6 +171,12 @@ fn matches(settings: *const Settings, preset: PresetConfig) bool {
         std.math.approxEqAbs(f32, settings.volumetric_density, preset.volumetric_density, epsilon) and
         settings.volumetric_steps == preset.volumetric_steps and
         std.math.approxEqAbs(f32, settings.volumetric_scattering, preset.volumetric_scattering, epsilon) and
+        settings.lpv_quality_preset == preset.lpv_quality_preset and
+        settings.lpv_enabled == preset.lpv_enabled and
+        std.math.approxEqAbs(f32, settings.lpv_intensity, preset.lpv_intensity, epsilon) and
+        std.math.approxEqAbs(f32, settings.lpv_cell_size, preset.lpv_cell_size, epsilon) and
+        settings.lpv_grid_size == preset.lpv_grid_size and
+        settings.lpv_propagation_iterations == preset.lpv_propagation_iterations and
         settings.lod_enabled == preset.lod_enabled and
         settings.fxaa_enabled == preset.fxaa_enabled and
         settings.bloom_enabled == preset.bloom_enabled and

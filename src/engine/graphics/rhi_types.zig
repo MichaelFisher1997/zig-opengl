@@ -199,6 +199,11 @@ pub const CloudParams = struct {
     exposure: f32 = 0.9,
     saturation: f32 = 1.3,
     ssao_enabled: bool = true,
+    lpv_enabled: bool = true,
+    lpv_intensity: f32 = 0.5,
+    lpv_cell_size: f32 = 2.0,
+    lpv_grid_size: u32 = 32,
+    lpv_origin: Vec3 = Vec3.init(0.0, 0.0, 0.0),
 };
 
 pub const Color = struct {
@@ -233,6 +238,7 @@ pub const GpuTimingResults = struct {
     shadow_pass_ms: [SHADOW_CASCADE_COUNT]f32,
     g_pass_ms: f32,
     ssao_pass_ms: f32,
+    lpv_pass_ms: f32,
     sky_pass_ms: f32,
     opaque_pass_ms: f32,
     cloud_pass_ms: f32,

@@ -16,7 +16,7 @@ pub const TimingOverlay = struct {
         const width: f32 = 280;
         const line_height: f32 = 15;
         const scale: f32 = 1.0;
-        const num_lines = 13; // Title + 11 passes + Total
+        const num_lines = 14; // Title + 12 passes + Total
         const padding = 20; // Spacers and margins
 
         // Background
@@ -31,6 +31,7 @@ pub const TimingOverlay = struct {
         drawTimingLine(ui, "SHADOW 2:", results.shadow_pass_ms[2], x + 10, &y, scale, Color.gray);
         drawTimingLine(ui, "G-PASS:", results.g_pass_ms, x + 10, &y, scale, Color.gray);
         drawTimingLine(ui, "SSAO:", results.ssao_pass_ms, x + 10, &y, scale, Color.gray);
+        drawTimingLine(ui, "LPV:", results.lpv_pass_ms, x + 10, &y, scale, Color.gray);
         drawTimingLine(ui, "SKY:", results.sky_pass_ms, x + 10, &y, scale, Color.gray);
         drawTimingLine(ui, "OPAQUE:", results.opaque_pass_ms, x + 10, &y, scale, Color.gray);
         drawTimingLine(ui, "CLOUDS:", results.cloud_pass_ms, x + 10, &y, scale, Color.gray);

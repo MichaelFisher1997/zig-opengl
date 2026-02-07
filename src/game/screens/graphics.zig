@@ -231,6 +231,11 @@ pub const GraphicsScreen = struct {
                 }
             }
 
+            if (std.mem.eql(u8, decl.name, "lpv_quality_preset")) {
+                const legend = getLPVQualityLegend(settings.lpv_quality_preset);
+                Font.drawText(ui, legend, vx - 90.0 * ui_scale, sy + row_height - 10.0 * ui_scale, 1.2 * ui_scale, Color.rgba(0.72, 0.86, 0.98, 1.0));
+            }
+
             sy += row_height;
         }
 
@@ -254,4 +259,12 @@ pub const GraphicsScreen = struct {
 fn getPresetLabel(idx: usize) []const u8 {
     if (idx >= settings_pkg.json_presets.graphics_presets.items.len) return "CUSTOM";
     return settings_pkg.json_presets.graphics_presets.items[idx].name;
+}
+
+fn getLPVQualityLegend(preset: u32) []const u8 {
+    return switch (preset) {
+        0 => "GRID16  ITER2  TICK8",
+        2 => "GRID64  ITER5  TICK3",
+        else => "GRID32  ITER3  TICK6",
+    };
 }

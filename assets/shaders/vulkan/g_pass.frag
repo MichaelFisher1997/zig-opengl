@@ -31,6 +31,8 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
     vec4 pbr_params;
     vec4 volumetric_params;
     vec4 viewport_size;
+    vec4 lpv_params;
+    vec4 lpv_origin;
 } global;
 
 // 4x4 Bayer matrix for dithered LOD transitions

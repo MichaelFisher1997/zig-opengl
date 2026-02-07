@@ -9,3 +9,4 @@ pub const ROUGHNESS_TEXTURE = 7;
 pub const DISPLACEMENT_TEXTURE = 8;
 pub const ENV_TEXTURE = 9;
 pub const SSAO_TEXTURE = 10;
+pub const LPV_TEXTURE = 11;
