@@ -35,6 +35,12 @@ const block_registry = @import("world/block_registry.zig");
 const TextureAtlas = @import("engine/graphics/texture_atlas.zig").TextureAtlas;
 const BiomeId = @import("world/worldgen/biome.zig").BiomeId;
 
+// Meshing stage modules
+const ao_calculator = @import("world/meshing/ao_calculator.zig");
+const lighting_sampler = @import("world/meshing/lighting_sampler.zig");
+const biome_color_sampler = @import("world/meshing/biome_color_sampler.zig");
+const boundary = @import("world/meshing/boundary.zig");
+
 // Worldgen modules
 const Noise = @import("zig-noise").Noise;
 
@@ -1277,6 +1283,105 @@ test "adjacent transparent blocks share face" {
     if (mesh.pending_solid) |v| total_verts += @intCast(v.len);
     if (mesh.pending_fluid) |v| total_verts += @intCast(v.len);
     try testing.expect(total_verts < 72);
+}
+
+// ============================================================================
+// Meshing Stage Module Tests
+// ============================================================================
+
+test "calculateVertexAO both sides occluded returns 0.4" {
+    const ao = ao_calculator.calculateVertexAO(1.0, 1.0, 1.0);
+    try testing.expectApproxEqAbs(@as(f32, 0.4), ao, 0.001);
+}
+
+test "calculateVertexAO no occlusion returns 1.0" {
+    const ao = ao_calculator.calculateVertexAO(0.0, 0.0, 0.0);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), ao, 0.001);
+}
+
+test "calculateVertexAO single side occlusion" {
+    const ao = ao_calculator.calculateVertexAO(1.0, 0.0, 0.0);
+    try testing.expectApproxEqAbs(@as(f32, 0.8), ao, 0.001);
+}
+
+test "calculateVertexAO corner only occlusion" {
+    const ao = ao_calculator.calculateVertexAO(0.0, 0.0, 1.0);
+    try testing.expectApproxEqAbs(@as(f32, 0.8), ao, 0.001);
+}
+
+test "normalizeLightValues zero light" {
+    const light = PackedLight.init(0, 0);
+    const norm = lighting_sampler.normalizeLightValues(light);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), norm.skylight, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), norm.blocklight[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), norm.blocklight[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), norm.blocklight[2], 0.001);
+}
+
+test "normalizeLightValues max light" {
+    const light = PackedLight.init(15, 15);
+    const norm = lighting_sampler.normalizeLightValues(light);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), norm.skylight, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), norm.blocklight[0], 0.001);
+}
+
+test "normalizeLightValues RGB channels" {
+    const light = PackedLight.initRGB(8, 4, 8, 12);
+    const norm = lighting_sampler.normalizeLightValues(light);
+    try testing.expectApproxEqAbs(@as(f32, 8.0 / 15.0), norm.skylight, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 4.0 / 15.0), norm.blocklight[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 8.0 / 15.0), norm.blocklight[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 12.0 / 15.0), norm.blocklight[2], 0.001);
+}
+
+test "getBlockColor returns no tint for stone" {
+    var chunk = Chunk.init(0, 0);
+    const color = biome_color_sampler.getBlockColor(&chunk, .empty, .top, 0, 8, 8, .stone);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[2], 0.001);
+}
+
+test "getBlockColor returns no tint for grass side face" {
+    var chunk = Chunk.init(0, 0);
+    const color = biome_color_sampler.getBlockColor(&chunk, .empty, .east, 0, 8, 8, .grass);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[2], 0.001);
+}
+
+test "getBlockColor returns biome tint for grass top face" {
+    var chunk = Chunk.init(0, 0);
+    const color = biome_color_sampler.getBlockColor(&chunk, .empty, .top, 64, 8, 8, .grass);
+    // Plains biome grass color should not be {1, 1, 1} (it should be tinted)
+    try testing.expect(color[0] != 1.0 or color[1] != 1.0 or color[2] != 1.0);
+}
+
+test "boundary getBlockCross returns air for null neighbors" {
+    var chunk = Chunk.init(0, 0);
+    // Access x = -1 with no west neighbor
+    const block = boundary.getBlockCross(&chunk, .empty, -1, 64, 8);
+    try testing.expectEqual(BlockType.air, block);
+}
+
+test "boundary getBlockCross returns air for out-of-bounds y" {
+    var chunk = Chunk.init(0, 0);
+    chunk.setBlock(8, 64, 8, .stone);
+    // Access within chunk bounds
+    const block = boundary.getBlockCross(&chunk, .empty, 8, 64, 8);
+    try testing.expectEqual(BlockType.stone, block);
+}
+
+test "boundary getBlockCross reads from neighbor chunk" {
+    var chunk = Chunk.init(0, 0);
+    var east_chunk = Chunk.init(1, 0);
+    east_chunk.setBlock(0, 64, 8, .dirt);
+    const neighbors = NeighborChunks{
+        .east = &east_chunk,
+    };
+    // Access x = 16 should read from east neighbor at x=0
+    const block = boundary.getBlockCross(&chunk, neighbors, 16, 64, 8);
+    try testing.expectEqual(BlockType.dirt, block);
 }
 
 // ============================================================================
