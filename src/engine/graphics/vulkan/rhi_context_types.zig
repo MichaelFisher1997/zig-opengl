@@ -99,9 +99,9 @@ const ShadowRuntime = struct {
 };
 
 const PostProcessState = struct {
-    vignette_enabled: bool = true,
+    vignette_enabled: bool = false,
     vignette_intensity: f32 = 0.3,
-    film_grain_enabled: bool = true,
+    film_grain_enabled: bool = false,
     film_grain_intensity: f32 = 0.15,
 };
 

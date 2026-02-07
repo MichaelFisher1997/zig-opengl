@@ -75,9 +75,9 @@ pub const Settings = struct {
     bloom_intensity: f32 = 0.5,
 
     // Post-Processing Settings (Phase 6)
-    vignette_enabled: bool = true,
+    vignette_enabled: bool = false,
     vignette_intensity: f32 = 0.3,
-    film_grain_enabled: bool = true,
+    film_grain_enabled: bool = false,
     film_grain_intensity: f32 = 0.15,
 
     // Texture Settings
