@@ -9,6 +9,7 @@ jobs:
     # Don't run on draft PRs; do run when they become ready_for_review.
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
     permissions:
       id-token: write
       contents: write
@@ -26,67 +27,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Get PR diff
-        id: diff
-        run: |
-          git fetch origin ${{ github.event.pull_request.base.ref }} --depth=100
-          git fetch origin ${{ github.event.pull_request.head.ref }} --depth=100
-          git diff origin/${{ github.event.pull_request.base.ref }}...origin/${{ github.event.pull_request.head.ref }} > /tmp/pr_diff.txt
-          echo "Diff saved to /tmp/pr_diff.txt"
-
-      - name: Fetch previous review comments
-        id: previous-reviews
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const reviews = await github.rest.pulls.listReviews({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number
-            });
-            
-            const comments = await github.rest.pulls.listReviewComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number
-            });
-            
-            const allComments = [];
-            
-            // Get comments from all reviews
-            for (const review of reviews.data) {
-              if (review.body) {
-                allComments.push({
-                  user: review.user.login,
-                  body: review.body,
-                  submitted_at: review.submitted_at
-                });
-              }
-            }
-            
-            // Add inline review comments
-            for (const comment of comments.data) {
-              allComments.push({
-                user: comment.user.login,
-                body: comment.body,
-                file: comment.path,
-                line: comment.line,
-                submitted_at: comment.created_at
-              });
-            }
-            
-            // Sort by date (oldest first)
-            allComments.sort((a, b) => new Date(a.submitted_at) - new Date(b.submitted_at));
-            
-            // Format for output
-            const formattedComments = allComments
-              .filter(c => c.user.includes('bot') || c.user.includes('actions') || c.user.includes('opencode'))
-              .map(c => `Review by ${c.user} at ${c.submitted_at}:\n${c.body}`)
-              .join('\n\n---\n\n');
-            
-            require('fs').writeFileSync('/tmp/previous_reviews.txt', formattedComments || 'No previous automated reviews found.');
-            console.log('Previous reviews saved to /tmp/previous_reviews.txt');
-
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
 
@@ -103,27 +43,12 @@ jobs:
         with:
           model: kimi-for-coding/k2p5
           prompt: |
-            You are reviewing a pull request. The following files are available:
-            - /tmp/pr_diff.txt: The current diff of this PR against the base branch
-            - /tmp/previous_reviews.txt: Previous automated review comments on this PR
-
-            First, read and analyze these files to understand:
-            1. What changed in the current PR (/tmp/pr_diff.txt)
-            2. What feedback was given in previous reviews (/tmp/previous_reviews.txt)
-
-            Then perform your review and output it in the following STRICT STRUCTURE:
+            You are reviewing a pull request. Analyze the code changes and output your review in the following STRICT STRUCTURE:
 
             ---
 
             ## 📋 Summary
             2-3 sentences summarizing the PR purpose, scope, and overall quality.
-
-            ## ✅ Resolved Issues
-            List issues from previous_reviews.txt that have been fixed. Format:
-            - **[RESOLVED]** ~File:Line - Brief description of what was fixed~ (strikethrough)
-            - **[RESOLVED]** ~Another fixed issue~
-            
-            If no previous issues: "No previous issues to verify."
 
             ## 🔴 Critical Issues (Must Fix - Blocks Merge)
             Only issues that could cause crashes, security vulnerabilities, data loss, or major bugs.
@@ -193,10 +118,8 @@ jobs:
             ---
 
             **Review Guidelines:**
-            1. Only report issues that exist in pr_diff.txt (current code)
-            2. Be extremely specific with file paths and line numbers
-            3. For previous review items, mark as RESOLVED if fixed, or report again with current line numbers if still present
-            4. Confidence scores should reflect how certain you are - use "Low" when unsure
-            5. If you have nothing meaningful to add to a section, write "None identified" instead of omitting it
-            6. Always provide actionable fixes, never just complaints
+            1. Be extremely specific with file paths and line numbers
+            2. Confidence scores should reflect how certain you are - use "Low" when unsure
+            3. If you have nothing meaningful to add to a section, write "None identified" instead of omitting it
+            4. Always provide actionable fixes, never just complaints
 
