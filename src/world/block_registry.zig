@@ -274,13 +274,13 @@ pub const BLOCK_REGISTRY = blk: {
 
         // 2. Solid
         def.is_solid = switch (id) {
-            .air, .water, .torch => false,
+            .air, .water, .lava, .torch => false,
             else => true,
         };
 
         // 3. Transparent
         def.is_transparent = switch (id) {
-            .air, .water, .glass, .leaves, .mangrove_leaves, .mangrove_roots, .jungle_leaves, .bamboo, .acacia_leaves, .acacia_sapling, .birch_leaves, .spruce_leaves, .vine, .tall_grass, .flower_red, .flower_yellow, .dead_bush, .cactus, .melon, .torch => true,
+            .air, .water, .lava, .glass, .leaves, .mangrove_leaves, .mangrove_roots, .jungle_leaves, .bamboo, .acacia_leaves, .acacia_sapling, .birch_leaves, .spruce_leaves, .vine, .tall_grass, .flower_red, .flower_yellow, .dead_bush, .cactus, .melon, .torch => true,
             else => false,
         };
 
@@ -292,13 +292,13 @@ pub const BLOCK_REGISTRY = blk: {
 
         // 5. Is Fluid
         def.is_fluid = switch (id) {
-            .water => true,
+            .water, .lava => true,
             else => false,
         };
 
         // 6. Render Pass
         def.render_pass = switch (id) {
-            .water => .fluid,
+            .water, .lava => .fluid,
             .glass => .translucent,
             .leaves, .mangrove_leaves, .jungle_leaves, .acacia_leaves, .birch_leaves, .spruce_leaves, .mangrove_roots, .bamboo, .acacia_sapling, .vine, .tall_grass, .flower_red, .flower_yellow, .dead_bush, .cactus, .melon, .torch => .cutout,
             else => .solid,
