@@ -16,8 +16,10 @@ pub const TextureResource = struct {
     sampler: c.VkSampler,
     width: u32,
     height: u32,
+    depth: u32,
     format: rhi.TextureFormat,
     config: rhi.TextureConfig,
+    is_3d: bool = false,
     is_owned: bool = true,
 };
 
@@ -373,6 +375,10 @@ pub const ResourceManager = struct {
         return resource_texture_ops.createTexture(self, width, height, format, config, data_opt);
     }
 
+    pub fn createTexture3D(self: *ResourceManager, width: u32, height: u32, depth: u32, format: rhi.TextureFormat, config: rhi.TextureConfig, data_opt: ?[]const u8) rhi.RhiError!rhi.TextureHandle {
+        return resource_texture_ops.createTexture3D(self, width, height, depth, format, config, data_opt);
+    }
+
     pub fn destroyTexture(self: *ResourceManager, handle: rhi.TextureHandle) void {
         const tex = self.textures.get(handle) orelse return;
         _ = self.textures.remove(handle);
@@ -398,8 +404,10 @@ pub const ResourceManager = struct {
             .sampler = sampler,
             .width = width,
             .height = height,
+            .depth = 1,
             .format = format,
             .config = .{}, // Default config
+            .is_3d = false,
             .is_owned = false,
         });
 
@@ -419,8 +427,10 @@ pub const ResourceManager = struct {
             .sampler = sampler,
             .width = width,
             .height = height,
+            .depth = 1,
             .format = format,
             .config = .{},
+            .is_3d = false,
             .is_owned = false,
         });
         return handle;
@@ -459,7 +469,7 @@ pub const ResourceManager = struct {
             region.bufferOffset = offset;
             region.imageSubresource.aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT;
             region.imageSubresource.layerCount = 1;
-            region.imageExtent = .{ .width = tex.width, .height = tex.height, .depth = 1 };
+            region.imageExtent = .{ .width = tex.width, .height = tex.height, .depth = tex.depth };
 
             c.vkCmdCopyBufferToImage(transfer_cb, staging.buffer, tex.image.?, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 

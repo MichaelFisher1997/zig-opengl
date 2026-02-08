@@ -1,0 +1,49 @@
+#version 450
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+struct LightData {
+    vec4 pos_radius;
+    vec4 color;
+};
+
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D lpv_out;
+layout(set = 0, binding = 1) readonly buffer Lights {
+    LightData lights[];
+} light_buffer;
+
+layout(push_constant) uniform InjectPush {
+    vec4 grid_origin_cell;
+    vec4 grid_params;
+    uint light_count;
+} push_data;
+
+ivec2 atlasUV(ivec3 cell, int gridSize) {
+    return ivec2(cell.x, cell.y + cell.z * gridSize);
+}
+
+void main() {
+    int gridSize = int(push_data.grid_params.x);
+    ivec3 cell = ivec3(gl_GlobalInvocationID.xyz);
+    if (any(greaterThanEqual(cell, ivec3(gridSize)))) {
+        return;
+    }
+
+    vec3 world_pos = push_data.grid_origin_cell.xyz + vec3(cell) * push_data.grid_origin_cell.w + vec3(0.5 * push_data.grid_origin_cell.w);
+
+    vec3 accum = vec3(0.0);
+    for (uint i = 0; i < push_data.light_count; i++) {
+        vec3 light_pos = light_buffer.lights[i].pos_radius.xyz;
+        float radius = max(light_buffer.lights[i].pos_radius.w, 0.001);
+        vec3 light_color = light_buffer.lights[i].color.rgb;
+
+        float d = length(world_pos - light_pos);
+        if (d < radius) {
+            float att = 1.0 - (d / radius);
+            att *= att;
+            accum += light_color * att;
+        }
+    }
+
+    imageStore(lpv_out, atlasUV(cell, gridSize), vec4(accum, 1.0));
+}

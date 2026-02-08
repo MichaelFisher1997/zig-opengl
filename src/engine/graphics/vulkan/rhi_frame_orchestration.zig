@@ -153,6 +153,7 @@ pub fn prepareFrameState(ctx: anytype) void {
     const cur_rou = ctx.draw.current_roughness_texture;
     const cur_dis = ctx.draw.current_displacement_texture;
     const cur_env = ctx.draw.current_env_texture;
+    const cur_lpv = ctx.draw.current_lpv_texture;
 
     var needs_update = false;
     if (ctx.draw.bound_texture != cur_tex) needs_update = true;
@@ -160,6 +161,7 @@ pub fn prepareFrameState(ctx: anytype) void {
     if (ctx.draw.bound_roughness_texture != cur_rou) needs_update = true;
     if (ctx.draw.bound_displacement_texture != cur_dis) needs_update = true;
     if (ctx.draw.bound_env_texture != cur_env) needs_update = true;
+    if (ctx.draw.bound_lpv_texture != cur_lpv) needs_update = true;
 
     for (0..rhi.SHADOW_CASCADE_COUNT) |si| {
         if (ctx.draw.bound_shadow_views[si] != ctx.shadow_system.shadow_image_views[si]) needs_update = true;
@@ -172,6 +174,7 @@ pub fn prepareFrameState(ctx: anytype) void {
         ctx.draw.bound_roughness_texture = cur_rou;
         ctx.draw.bound_displacement_texture = cur_dis;
         ctx.draw.bound_env_texture = cur_env;
+        ctx.draw.bound_lpv_texture = cur_lpv;
         for (0..rhi.SHADOW_CASCADE_COUNT) |si| ctx.draw.bound_shadow_views[si] = ctx.shadow_system.shadow_image_views[si];
     }
 
@@ -180,9 +183,9 @@ pub fn prepareFrameState(ctx: anytype) void {
             std.log.err("CRITICAL: Descriptor set for frame {} is NULL!", .{ctx.frames.current_frame});
             return;
         }
-        var writes: [10]c.VkWriteDescriptorSet = undefined;
+        var writes: [12]c.VkWriteDescriptorSet = undefined;
         var write_count: u32 = 0;
-        var image_infos: [10]c.VkDescriptorImageInfo = undefined;
+        var image_infos: [12]c.VkDescriptorImageInfo = undefined;
         var info_count: u32 = 0;
 
         const dummy_tex_entry = ctx.resources.textures.get(ctx.draw.dummy_texture);
@@ -193,6 +196,7 @@ pub fn prepareFrameState(ctx: anytype) void {
             .{ .handle = cur_rou, .binding = bindings.ROUGHNESS_TEXTURE },
             .{ .handle = cur_dis, .binding = bindings.DISPLACEMENT_TEXTURE },
             .{ .handle = cur_env, .binding = bindings.ENV_TEXTURE },
+            .{ .handle = cur_lpv, .binding = bindings.LPV_TEXTURE },
         };
 
         for (atlas_slots) |slot| {

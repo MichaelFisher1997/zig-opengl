@@ -32,6 +32,8 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
     vec4 pbr_params; // x = pbr_quality, y = exposure, z = saturation, w = ssao_strength
     vec4 volumetric_params; // x = enabled, y = density, z = steps, w = scattering
     vec4 viewport_size; // xy = width/height
+    vec4 lpv_params; // x = enabled, y = intensity, z = cell_size, w = grid_size
+    vec4 lpv_origin; // xyz = world origin
 } global;
 
 // Constants
@@ -100,6 +102,7 @@ layout(set = 0, binding = 7) uniform sampler2D uRoughnessMap;    // Roughness ma
 layout(set = 0, binding = 8) uniform sampler2D uDisplacementMap; // Displacement map (unused for now)
 layout(set = 0, binding = 9) uniform sampler2D uEnvMap;          // Environment Map (EXR)
 layout(set = 0, binding = 10) uniform sampler2D uSSAOMap;       // SSAO Map
+layout(set = 0, binding = 11) uniform sampler2D uLPVGrid;       // LPV 3D atlas (Z slices packed in Y)
 
 layout(set = 0, binding = 2) uniform ShadowUniforms {
     mat4 light_space_matrices[4];
@@ -277,6 +280,47 @@ vec3 computeIBLAmbient(vec3 N, float roughness) {
     return textureLod(uEnvMap, envUV, envMipLevel).rgb;
 }
 
+vec3 sampleLPVVoxel(vec3 voxel, float gridSize) {
+    float u = (voxel.x + 0.5) / gridSize;
+    float v = (voxel.y + voxel.z * gridSize + 0.5) / (gridSize * gridSize);
+    return texture(uLPVGrid, vec2(u, v)).rgb;
+}
+
+vec3 sampleLPVAtlas(vec3 worldPos) {
+    if (global.lpv_params.x < 0.5) return vec3(0.0);
+
+    float gridSize = max(global.lpv_params.w, 1.0);
+    float cellSize = max(global.lpv_params.z, 0.001);
+    vec3 local = (worldPos - global.lpv_origin.xyz) / cellSize;
+
+    if (any(lessThan(local, vec3(0.0))) || any(greaterThanEqual(local, vec3(gridSize)))) {
+        return vec3(0.0);
+    }
+
+    vec3 base = floor(local);
+    vec3 frac = fract(local);
+
+    vec3 p0 = clamp(base, vec3(0.0), vec3(gridSize - 1.0));
+    vec3 p1 = clamp(base + vec3(1.0), vec3(0.0), vec3(gridSize - 1.0));
+
+    vec3 c000 = sampleLPVVoxel(vec3(p0.x, p0.y, p0.z), gridSize);
+    vec3 c100 = sampleLPVVoxel(vec3(p1.x, p0.y, p0.z), gridSize);
+    vec3 c010 = sampleLPVVoxel(vec3(p0.x, p1.y, p0.z), gridSize);
+    vec3 c110 = sampleLPVVoxel(vec3(p1.x, p1.y, p0.z), gridSize);
+    vec3 c001 = sampleLPVVoxel(vec3(p0.x, p0.y, p1.z), gridSize);
+    vec3 c101 = sampleLPVVoxel(vec3(p1.x, p0.y, p1.z), gridSize);
+    vec3 c011 = sampleLPVVoxel(vec3(p0.x, p1.y, p1.z), gridSize);
+    vec3 c111 = sampleLPVVoxel(vec3(p1.x, p1.y, p1.z), gridSize);
+
+    vec3 c00 = mix(c000, c100, frac.x);
+    vec3 c10 = mix(c010, c110, frac.x);
+    vec3 c01 = mix(c001, c101, frac.x);
+    vec3 c11 = mix(c011, c111, frac.x);
+    vec3 c0 = mix(c00, c10, frac.y);
+    vec3 c1 = mix(c01, c11, frac.y);
+    return mix(c0, c1, frac.z) * global.lpv_params.y;
+}
+
 vec3 computeBRDF(vec3 albedo, vec3 N, vec3 V, vec3 L, float roughness) {
     vec3 H = normalize(V + L);
     vec3 F0 = mix(vec3(DIELECTRIC_F0), albedo, 0.0);
@@ -307,14 +351,16 @@ vec3 computePBR(vec3 albedo, vec3 N, vec3 V, vec3 L, float roughness, float tota
     vec3 Lo = brdf * sunColor * NdotL_final * (1.0 - totalShadow);
     vec3 envColor = computeIBLAmbient(N, roughness);
     float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
-    vec3 ambientColor = albedo * (max(min(envColor, IBL_CLAMP) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao * shadowAmbientFactor;
+    vec3 indirect = sampleLPVAtlas(vFragPosWorld);
+    vec3 ambientColor = albedo * (max(min(envColor, IBL_CLAMP) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight + indirect) * ao * ssao * shadowAmbientFactor;
     return ambientColor + Lo;
 }
 
 vec3 computeNonPBR(vec3 albedo, vec3 N, float nDotL, float totalShadow, float skyLight, vec3 blockLight, float ao, float ssao) {
     vec3 envColor = computeIBLAmbient(N, NON_PBR_ROUGHNESS);
     float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
-    vec3 ambientColor = albedo * (max(min(envColor, IBL_CLAMP) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao * shadowAmbientFactor;
+    vec3 indirect = sampleLPVAtlas(vFragPosWorld);
+    vec3 ambientColor = albedo * (max(min(envColor, IBL_CLAMP) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight + indirect) * ao * ssao * shadowAmbientFactor;
     vec3 sunColor = global.sun_color.rgb * global.params.w * SUN_RADIANCE_TO_IRRADIANCE / PI;
     vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
     return ambientColor + directColor;
@@ -322,7 +368,8 @@ vec3 computeNonPBR(vec3 albedo, vec3 N, float nDotL, float totalShadow, float sk
 
 vec3 computeLOD(vec3 albedo, float nDotL, float totalShadow, float skyLightVal, vec3 blockLight, float ao, float ssao) {
     float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
-    vec3 ambientColor = albedo * (max(vec3(skyLightVal * 0.8), vec3(global.lighting.x * 0.4)) + blockLight) * ao * ssao * shadowAmbientFactor;
+    vec3 indirect = sampleLPVAtlas(vFragPosWorld);
+    vec3 ambientColor = albedo * (max(vec3(skyLightVal * 0.8), vec3(global.lighting.x * 0.4)) + blockLight + indirect) * ao * ssao * shadowAmbientFactor;
     vec3 sunColor = global.sun_color.rgb * global.params.w * SUN_VOLUMETRIC_INTENSITY / PI;
     vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
     return ambientColor + directColor;

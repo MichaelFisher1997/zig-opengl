@@ -52,6 +52,7 @@ pub const IResourceFactory = struct {
         updateBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle, offset: usize, data: []const u8) RhiError!void,
         destroyBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle) void,
         createTexture: *const fn (ptr: *anyopaque, width: u32, height: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) RhiError!TextureHandle,
+        createTexture3D: *const fn (ptr: *anyopaque, width: u32, height: u32, depth: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) RhiError!TextureHandle,
         destroyTexture: *const fn (ptr: *anyopaque, handle: TextureHandle) void,
         updateTexture: *const fn (ptr: *anyopaque, handle: TextureHandle, data: []const u8) RhiError!void,
         createShader: *const fn (ptr: *anyopaque, vertex_src: [*c]const u8, fragment_src: [*c]const u8) RhiError!ShaderHandle,
@@ -74,6 +75,9 @@ pub const IResourceFactory = struct {
     }
     pub fn createTexture(self: IResourceFactory, width: u32, height: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) RhiError!TextureHandle {
         return self.vtable.createTexture(self.ptr, width, height, format, config, data);
+    }
+    pub fn createTexture3D(self: IResourceFactory, width: u32, height: u32, depth: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) RhiError!TextureHandle {
+        return self.vtable.createTexture3D(self.ptr, width, height, depth, format, config, data);
     }
     pub fn destroyTexture(self: IResourceFactory, handle: TextureHandle) void {
         self.vtable.destroyTexture(self.ptr, handle);

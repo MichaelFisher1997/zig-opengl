@@ -20,6 +20,7 @@ const render_graph_pkg = @import("../engine/graphics/render_graph.zig");
 const RenderGraph = render_graph_pkg.RenderGraph;
 const AtmosphereSystem = @import("../engine/graphics/atmosphere_system.zig").AtmosphereSystem;
 const MaterialSystem = @import("../engine/graphics/material_system.zig").MaterialSystem;
+const LPVSystem = @import("../engine/graphics/lpv_system.zig").LPVSystem;
 const ResourcePackManager = @import("../engine/graphics/resource_pack.zig").ResourcePackManager;
 const AudioSystem = @import("../engine/audio/system.zig").AudioSystem;
 const TimingOverlay = @import("../engine/ui/timing_overlay.zig").TimingOverlay;
@@ -46,6 +47,7 @@ pub const App = struct {
     render_graph: RenderGraph,
     atmosphere_system: *AtmosphereSystem,
     material_system: *MaterialSystem,
+    lpv_system: *LPVSystem,
     audio_system: *AudioSystem,
     shadow_passes: [4]render_graph_pkg.ShadowPass,
     g_pass: render_graph_pkg.GPass,
@@ -233,6 +235,7 @@ pub const App = struct {
             .render_graph = RenderGraph.init(allocator),
             .atmosphere_system = atmosphere_system,
             .material_system = undefined,
+            .lpv_system = undefined,
             .audio_system = audio_system,
             .shadow_passes = .{
                 render_graph_pkg.ShadowPass.init(0),
@@ -272,6 +275,16 @@ pub const App = struct {
 
         app.material_system = try MaterialSystem.init(allocator, rhi, &app.atlas);
         errdefer app.material_system.deinit();
+        app.lpv_system = try LPVSystem.init(
+            allocator,
+            rhi,
+            settings.lpv_grid_size,
+            settings.lpv_cell_size,
+            settings.lpv_intensity,
+            settings.lpv_propagation_iterations,
+            settings.lpv_enabled,
+        );
+        errdefer app.lpv_system.deinit();
 
         // Sync FXAA and Bloom settings to RHI after initialization
         app.rhi.setFXAA(settings.fxaa_enabled);
@@ -327,6 +340,7 @@ pub const App = struct {
         self.render_graph.deinit();
         self.atmosphere_system.deinit();
         self.material_system.deinit();
+        self.lpv_system.deinit();
         self.audio_system.deinit();
         self.atlas.deinit();
         if (self.env_map) |*t| t.deinit();
@@ -352,6 +366,7 @@ pub const App = struct {
             .render_graph = &self.render_graph,
             .atmosphere_system = self.atmosphere_system,
             .material_system = self.material_system,
+            .lpv_system = self.lpv_system,
             .audio_system = self.audio_system,
             .env_map_ptr = &self.env_map,
             .shader = self.shader,
@@ -427,6 +442,11 @@ pub const App = struct {
             .volumetric_steps = 0,
             .volumetric_scattering = 0,
             .ssao_enabled = false,
+            .lpv_enabled = false,
+            .lpv_intensity = 0,
+            .lpv_cell_size = 2.0,
+            .lpv_grid_size = 32,
+            .lpv_origin = Vec3.zero,
         });
 
         // Update current screen. Transitions happen here.
