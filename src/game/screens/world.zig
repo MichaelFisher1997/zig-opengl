@@ -168,7 +168,7 @@ pub const WorldScreen = struct {
             lpv_quality.update_interval_frames,
         );
         ctx.rhi.timing().beginPassTiming("LPVPass");
-        try ctx.lpv_system.update(self.session.world, camera.position);
+        try ctx.lpv_system.update(self.session.world, camera.position, ctx.settings.debug_lpv_overlay_active);
         ctx.rhi.timing().endPassTiming("LPVPass");
 
         const lpv_origin = ctx.lpv_system.getOrigin();
