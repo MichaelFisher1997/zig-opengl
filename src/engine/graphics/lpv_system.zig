@@ -67,6 +67,7 @@ pub const LPVSystem = struct {
     origin: Vec3 = Vec3.zero,
     current_frame: u32 = 0,
     was_enabled_last_frame: bool = true,
+    debug_overlay_was_enabled: bool = false,
 
     image_layout_a: c.VkImageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     image_layout_b: c.VkImageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -194,7 +195,7 @@ pub const LPVSystem = struct {
         return self.cell_size;
     }
 
-    pub fn update(self: *LPVSystem, world: *World, camera_pos: Vec3) !void {
+    pub fn update(self: *LPVSystem, world: *World, camera_pos: Vec3, debug_overlay_enabled: bool) !void {
         self.current_frame +%= 1;
         var timer = std.time.Timer.start() catch unreachable;
         self.stats.updated_this_frame = false;
@@ -204,11 +205,12 @@ pub const LPVSystem = struct {
 
         if (!self.enabled) {
             self.active_grid_texture = self.grid_texture_a;
-            if (self.was_enabled_last_frame) {
+            if (self.was_enabled_last_frame and debug_overlay_enabled) {
                 self.buildDebugOverlay(&.{}, 0);
                 try self.uploadDebugOverlay();
             }
             self.was_enabled_last_frame = false;
+            self.debug_overlay_was_enabled = debug_overlay_enabled;
             self.stats.light_count = 0;
             self.stats.cpu_update_ms = 0.0;
             return;
@@ -226,7 +228,10 @@ pub const LPVSystem = struct {
             @abs(next_origin.z - self.origin.z) >= self.cell_size;
 
         const tick_update = (self.current_frame % self.update_interval_frames) == 0;
-        if (!moved and !tick_update and self.was_enabled_last_frame) {
+        const debug_toggle_on = debug_overlay_enabled and !self.debug_overlay_was_enabled;
+        self.debug_overlay_was_enabled = debug_overlay_enabled;
+
+        if (!moved and !tick_update and !debug_toggle_on and self.was_enabled_last_frame) {
             self.stats.cpu_update_ms = 0.0;
             return;
         }
@@ -241,9 +246,11 @@ pub const LPVSystem = struct {
             @memcpy(@as([*]u8, @ptrCast(ptr))[0..bytes.len], bytes);
         }
 
-        // Keep debug overlay generation on LPV update ticks only (not every frame).
-        self.buildDebugOverlay(lights[0..], light_count);
-        try self.uploadDebugOverlay();
+        if (debug_overlay_enabled) {
+            // Keep debug overlay generation only when overlay is active.
+            self.buildDebugOverlay(lights[0..], light_count);
+            try self.uploadDebugOverlay();
+        }
 
         try self.dispatchCompute(light_count);
 
