@@ -389,7 +389,54 @@ pub fn createPostProcessResources(ctx: anytype) !void {
         global_uniform_size,
     );
 
+    // Create neutral (identity) 3D LUT for color grading and bind it
+    if (ctx.post_process.lut_texture == 0) {
+        ctx.post_process.lut_texture = try createNeutralLUT3D(ctx);
+    }
+    updatePostProcessLUTDescriptor(ctx);
+
     try ctx.render_pass_manager.createPostProcessFramebuffers(vk, ctx.allocator, ctx.swapchain.getExtent(), ctx.swapchain.getImageViews());
+}
+
+/// Generate a 32x32x32 identity LUT where each texel maps to itself: color(r,g,b) = (r,g,b).
+fn createNeutralLUT3D(ctx: anytype) !rhi.TextureHandle {
+    const LUT_SIZE: u32 = 32;
+    const total = LUT_SIZE * LUT_SIZE * LUT_SIZE;
+    var data = try ctx.allocator.alloc(u8, total * 4);
+    defer ctx.allocator.free(data);
+
+    var i: u32 = 0;
+    var z: u32 = 0;
+    while (z < LUT_SIZE) : (z += 1) {
+        var y: u32 = 0;
+        while (y < LUT_SIZE) : (y += 1) {
+            var x: u32 = 0;
+            while (x < LUT_SIZE) : (x += 1) {
+                data[i + 0] = @intCast((x * 255 + (LUT_SIZE - 1) / 2) / (LUT_SIZE - 1));
+                data[i + 1] = @intCast((y * 255 + (LUT_SIZE - 1) / 2) / (LUT_SIZE - 1));
+                data[i + 2] = @intCast((z * 255 + (LUT_SIZE - 1) / 2) / (LUT_SIZE - 1));
+                data[i + 3] = 255;
+                i += 4;
+            }
+        }
+    }
+
+    const handle = try ctx.resources.createTexture3D(LUT_SIZE, LUT_SIZE, LUT_SIZE, .rgba, .{
+        .min_filter = .linear,
+        .mag_filter = .linear,
+        .wrap_s = .clamp_to_edge,
+        .wrap_t = .clamp_to_edge,
+        .generate_mipmaps = false,
+        .is_render_target = false,
+    }, data);
+    return handle;
+}
+
+fn updatePostProcessLUTDescriptor(ctx: anytype) void {
+    const vk = ctx.vulkan_device.vk_device;
+    if (ctx.post_process.lut_texture == 0) return;
+    const tex = ctx.resources.textures.get(ctx.post_process.lut_texture) orelse return;
+    ctx.post_process.updateLUTDescriptor(vk, tex.view, tex.sampler);
 }
 
 pub fn updatePostProcessDescriptorsWithBloom(ctx: anytype) void {

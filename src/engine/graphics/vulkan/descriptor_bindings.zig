@@ -9,4 +9,6 @@ pub const ROUGHNESS_TEXTURE = 7;
 pub const DISPLACEMENT_TEXTURE = 8;
 pub const ENV_TEXTURE = 9;
 pub const SSAO_TEXTURE = 10;
-pub const LPV_TEXTURE = 11;
+pub const LPV_TEXTURE = 11; // LPV SH Red channel (rgba32f = 4 SH coefficients)
+pub const LPV_TEXTURE_G = 12; // LPV SH Green channel
+pub const LPV_TEXTURE_B = 13; // LPV SH Blue channel

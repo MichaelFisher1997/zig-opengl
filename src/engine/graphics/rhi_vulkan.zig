@@ -218,6 +218,16 @@ fn setFilmGrainIntensity(ctx_ptr: *anyopaque, intensity: f32) void {
     ctx.post_process_state.film_grain_intensity = intensity;
 }
 
+fn setColorGradingEnabled(ctx_ptr: *anyopaque, enabled: bool) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.post_process_state.color_grading_enabled = enabled;
+}
+
+fn setColorGradingIntensity(ctx_ptr: *anyopaque, intensity: f32) void {
+    const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.post_process_state.color_grading_intensity = intensity;
+}
+
 fn endFrame(ctx_ptr: *anyopaque) void {
     const ctx: *VulkanContext = @ptrCast(@alignCast(ctx_ptr));
     ctx.mutex.lock();
@@ -347,6 +357,8 @@ fn bindTexture(ctx_ptr: *anyopaque, handle: rhi.TextureHandle, slot: u32) void {
         8 => ctx.draw.current_displacement_texture = resolved,
         9 => ctx.draw.current_env_texture = resolved,
         11 => ctx.draw.current_lpv_texture = resolved,
+        12 => ctx.draw.current_lpv_texture_g = resolved,
+        13 => ctx.draw.current_lpv_texture_b = resolved,
         else => ctx.draw.current_texture = resolved,
     }
 }
@@ -739,6 +751,8 @@ const VULKAN_RHI_VTABLE = rhi.RHI.VTable{
     .setVignetteIntensity = setVignetteIntensity,
     .setFilmGrainEnabled = setFilmGrainEnabled,
     .setFilmGrainIntensity = setFilmGrainIntensity,
+    .setColorGradingEnabled = setColorGradingEnabled,
+    .setColorGradingIntensity = setColorGradingIntensity,
 };
 
 fn beginPassTiming(ctx_ptr: *anyopaque, pass_name: []const u8) void {

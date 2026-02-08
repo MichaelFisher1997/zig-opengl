@@ -36,6 +36,8 @@ pub const SceneContext = struct {
     overlay_renderer: ?*const fn (ctx: SceneContext) void = null,
     overlay_ctx: ?*anyopaque = null,
     lpv_texture_handle: rhi_pkg.TextureHandle = 0,
+    lpv_texture_handle_g: rhi_pkg.TextureHandle = 0,
+    lpv_texture_handle_b: rhi_pkg.TextureHandle = 0,
     // Pointer to frame-local cascade storage, computed once per frame by the first
     // ShadowPass and reused by subsequent cascade passes to guarantee consistency.
     cached_cascades: *?CSM.ShadowCascades,
@@ -284,6 +286,8 @@ pub const OpaquePass = struct {
         rhi.bindShader(ctx.main_shader);
         ctx.material_system.bindTerrainMaterial(ctx.env_map_handle);
         rhi.bindTexture(ctx.lpv_texture_handle, 11);
+        rhi.bindTexture(ctx.lpv_texture_handle_g, 12);
+        rhi.bindTexture(ctx.lpv_texture_handle_b, 13);
         const view_proj = Mat4.perspectiveReverseZ(ctx.camera.fov, ctx.aspect, ctx.camera.near, ctx.camera.far).multiply(ctx.camera.getViewMatrixOriginCentered());
         ctx.world.render(view_proj, ctx.camera.position, true);
     }

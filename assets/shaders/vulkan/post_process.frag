@@ -5,12 +5,15 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D uHDRBuffer;
 layout(set = 0, binding = 2) uniform sampler2D uBloomTexture;
+layout(set = 0, binding = 3) uniform sampler3D uColorLUT;
 
 layout(push_constant) uniform PostProcessParams {
-    float bloomEnabled;      // 0.0 = disabled, 1.0 = enabled
-    float bloomIntensity;    // Final bloom blend intensity
-    float vignetteIntensity; // 0.0 = none, 1.0 = full vignette
-    float filmGrainIntensity;// 0.0 = none, 1.0 = heavy grain
+    float bloomEnabled;           // 0.0 = disabled, 1.0 = enabled
+    float bloomIntensity;         // Final bloom blend intensity
+    float vignetteIntensity;      // 0.0 = none, 1.0 = full vignette
+    float filmGrainIntensity;     // 0.0 = none, 1.0 = heavy grain
+    float colorGradingEnabled;    // 0.0 = disabled, 1.0 = enabled
+    float colorGradingIntensity;  // LUT blend intensity (0.0 = original, 1.0 = full LUT)
 } postParams;
 
 layout(set = 0, binding = 1) uniform GlobalUniforms {
@@ -131,6 +134,22 @@ float random(vec2 uv) {
     return fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
+// LUT-based color grading using a 3D lookup texture.
+// Input color should be in [0,1] range (post-tonemapping).
+vec3 applyColorGrading(vec3 color, float intensity) {
+    if (intensity <= 0.0) return color;
+    
+    // Clamp to valid LUT range and apply half-texel offset for correct sampling
+    vec3 lutCoord = clamp(color, 0.0, 1.0);
+    
+    // Scale and bias for correct 3D LUT sampling (avoid edge texels)
+    const float LUT_SIZE = 32.0;
+    lutCoord = lutCoord * ((LUT_SIZE - 1.0) / LUT_SIZE) + 0.5 / LUT_SIZE;
+    
+    vec3 graded = texture(uColorLUT, lutCoord).rgb;
+    return mix(color, graded, intensity);
+}
+
 // Film grain effect - adds animated noise
 vec3 applyFilmGrain(vec3 color, vec2 uv, float intensity, float time) {
     if (intensity <= 0.0) return color;
@@ -163,6 +182,11 @@ void main() {
         color = ACESFilm(hdrColor * global.pbr_params.y);
     }
     
+    // Apply LUT-based color grading (after tone mapping, in [0,1] range)
+    if (postParams.colorGradingEnabled > 0.5) {
+        color = applyColorGrading(color, postParams.colorGradingIntensity);
+    }
+
     // Apply vignette effect
     color = applyVignette(color, inUV, postParams.vignetteIntensity);
     
