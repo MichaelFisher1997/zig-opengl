@@ -45,31 +45,28 @@ jobs:
             --jq '.[] | select(.user.login == "opencode-agent[bot]") | {body: .body, path: .path, line: .line, created_at: .created_at}' > /tmp/opencode_comments.json 2>/dev/null || echo "[]" > /tmp/opencode_comments.json
           
           # Format the previous reviews for the prompt
-          echo "PREVIOUS_REVIEWS<<'ENDOFREVIEWS'" >> $GITHUB_ENV
-          
-          echo "## Previous Automated Reviews from opencode-agent:" >> $GITHUB_ENV
-          echo "" >> $GITHUB_ENV
+          # Use a simpler approach without heredoc to avoid delimiter issues
+          REVIEW_CONTENT="## Previous Automated Reviews from opencode-agent:\n\n"
           
           # Process reviews
           if [ -s /tmp/opencode_reviews.json ] && [ "$(cat /tmp/opencode_reviews.json)" != "[]" ]; then
-            cat /tmp/opencode_reviews.json | while read -r review; do
+            while IFS= read -r review; do
               if [ -n "$review" ] && [ "$review" != "null" ]; then
                 body=$(echo "$review" | jq -r '.body // empty')
                 date=$(echo "$review" | jq -r '.submitted_at // empty')
                 if [ -n "$body" ] && [ "$body" != "null" ]; then
-                  echo "### Review from $date" >> $GITHUB_ENV
-                  echo "$body" >> $GITHUB_ENV
-                  echo "" >> $GITHUB_ENV
-                  echo "---" >> $GITHUB_ENV
-                  echo "" >> $GITHUB_ENV
+                  REVIEW_CONTENT="${REVIEW_CONTENT}### Review from ${date}\n${body}\n\n---\n\n"
                 fi
               fi
-            done
+            done < /tmp/opencode_reviews.json
           else
-            echo "No previous automated reviews found." >> $GITHUB_ENV
+            REVIEW_CONTENT="${REVIEW_CONTENT}No previous automated reviews found.\n"
           fi
           
-          echo "ENDOFREVIEWS" >> $GITHUB_ENV
+          # Write to environment file using proper escaping
+          echo "PREVIOUS_REVIEWS<<EOF" >> $GITHUB_ENV
+          printf '%s\n' "$REVIEW_CONTENT" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
           
           echo "Previous reviews fetched and formatted for context"
         env:
