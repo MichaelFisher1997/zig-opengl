@@ -455,6 +455,15 @@ pub const LPVSystem = struct {
         self.image_layout_a = c.VK_IMAGE_LAYOUT_GENERAL;
         self.image_layout_b = c.VK_IMAGE_LAYOUT_GENERAL;
 
+        // Ensure host writes to light buffer and occlusion grid are visible to compute shaders.
+        // Both buffers use HOST_COHERENT, but we still need an execution dependency to guarantee
+        // the memcpy completes before the GPU reads the SSBOs.
+        var host_barrier = std.mem.zeroes(c.VkMemoryBarrier);
+        host_barrier.sType = c.VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        host_barrier.srcAccessMask = c.VK_ACCESS_HOST_WRITE_BIT;
+        host_barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+        c.vkCmdPipelineBarrier(cmd, c.VK_PIPELINE_STAGE_HOST_BIT, c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &host_barrier, 0, null, 0, null);
+
         const groups = divCeil(self.grid_size, 4);
 
         const inject_push = InjectPush{

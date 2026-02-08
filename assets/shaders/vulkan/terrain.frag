@@ -339,7 +339,8 @@ vec3 sampleLPVAtlas(vec3 worldPos, vec3 normal) {
     float irr_g = evaluateLPVSH(sh_g, normal);
     float irr_b = evaluateLPVSH(sh_b, normal);
 
-    return vec3(irr_r, irr_g, irr_b) * global.lpv_params.y;
+    // Clamp to prevent overexposure from accumulated SH values
+    return clamp(vec3(irr_r, irr_g, irr_b) * global.lpv_params.y, vec3(0.0), vec3(2.0));
 }
 
 vec3 computeBRDF(vec3 albedo, vec3 N, vec3 V, vec3 L, float roughness) {

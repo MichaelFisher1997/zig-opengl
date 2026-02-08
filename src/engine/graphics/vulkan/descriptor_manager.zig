@@ -110,8 +110,10 @@ pub const DescriptorManager = struct {
             return err;
         };
 
-        // 1x1x1 3D dummy texture for sampler3D bindings (LPV)
-        self.dummy_texture_3d = resource_manager.createTexture3D(1, 1, 1, .rgba, .{}, &white_pixel) catch |err| {
+        // 1x1x1 3D dummy texture for sampler3D bindings (LPV).
+        // Uses rgba32f to match LPV texture format, with zero data (no SH contribution).
+        const zero_pixel = [_]u8{0} ** 16; // 4 x f32 = 16 bytes, all zero
+        self.dummy_texture_3d = resource_manager.createTexture3D(1, 1, 1, .rgba32f, .{}, &zero_pixel) catch |err| {
             self.deinit();
             return err;
         };
