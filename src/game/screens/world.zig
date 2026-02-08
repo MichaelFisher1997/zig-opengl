@@ -244,6 +244,8 @@ pub const WorldScreen = struct {
                 .overlay_ctx = self,
                 .cached_cascades = &frame_cascades,
                 .lpv_texture_handle = ctx.lpv_system.getTextureHandle(),
+                .lpv_texture_handle_g = ctx.lpv_system.getTextureHandleG(),
+                .lpv_texture_handle_b = ctx.lpv_system.getTextureHandleB(),
             };
             try ctx.render_graph.execute(render_ctx);
         }

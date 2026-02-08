@@ -102,6 +102,7 @@ pub fn initContext(ctx: anytype, allocator: std.mem.Allocator, render_device: ?*
     setup.updatePostProcessDescriptorsWithBloom(ctx);
 
     ctx.draw.dummy_texture = ctx.descriptors.dummy_texture;
+    ctx.draw.dummy_texture_3d = ctx.descriptors.dummy_texture_3d;
     ctx.draw.dummy_normal_texture = ctx.descriptors.dummy_normal_texture;
     ctx.draw.dummy_roughness_texture = ctx.descriptors.dummy_roughness_texture;
     ctx.draw.current_texture = ctx.draw.dummy_texture;
@@ -109,7 +110,9 @@ pub fn initContext(ctx: anytype, allocator: std.mem.Allocator, render_device: ?*
     ctx.draw.current_roughness_texture = ctx.draw.dummy_roughness_texture;
     ctx.draw.current_displacement_texture = ctx.draw.dummy_roughness_texture;
     ctx.draw.current_env_texture = ctx.draw.dummy_texture;
-    ctx.draw.current_lpv_texture = ctx.draw.dummy_texture;
+    ctx.draw.current_lpv_texture = ctx.draw.dummy_texture_3d;
+    ctx.draw.current_lpv_texture_g = ctx.draw.dummy_texture_3d;
+    ctx.draw.current_lpv_texture_b = ctx.draw.dummy_texture_3d;
 
     const cloud_vbo_handle = try ctx.resources.createBuffer(8 * @sizeOf(f32), .vertex);
     std.log.info("Cloud VBO handle: {}, map count: {}", .{ cloud_vbo_handle, ctx.resources.buffers.count() });
@@ -228,6 +231,7 @@ pub fn deinit(ctx: anytype) void {
         }
 
         ctx.resources.destroyTexture(ctx.draw.dummy_texture);
+        ctx.resources.destroyTexture(ctx.draw.dummy_texture_3d);
         ctx.resources.destroyTexture(ctx.draw.dummy_normal_texture);
         ctx.resources.destroyTexture(ctx.draw.dummy_roughness_texture);
         if (ctx.legacy.dummy_shadow_view != null) c.vkDestroyImageView(ctx.vulkan_device.vk_device, ctx.legacy.dummy_shadow_view, null);

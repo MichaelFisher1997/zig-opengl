@@ -5,6 +5,7 @@ const ShadowUniforms = extern struct {
     light_space_matrices: [rhi.SHADOW_CASCADE_COUNT]Mat4,
     cascade_splits: [4]f32,
     shadow_texel_sizes: [4]f32,
+    shadow_params: [4]f32, // x = light_size (PCSS), y/z/w reserved
 };
 
 pub fn beginShadowPassInternal(ctx: anytype, cascade_index: u32, light_space_matrix: Mat4) void {
@@ -35,6 +36,7 @@ pub fn updateShadowUniforms(ctx: anytype, params: rhi.ShadowParams) !void {
         .light_space_matrices = params.light_space_matrices,
         .cascade_splits = splits,
         .shadow_texel_sizes = sizes,
+        .shadow_params = .{ params.light_size, 0.0, 0.0, 0.0 },
     };
 
     try ctx.descriptors.updateShadowUniforms(ctx.frames.current_frame, &shadow_uniforms);

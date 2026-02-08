@@ -480,6 +480,8 @@ pub const RHI = struct {
         setVignetteIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
         setFilmGrainEnabled: *const fn (ctx: *anyopaque, enabled: bool) void,
         setFilmGrainIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
+        setColorGradingEnabled: *const fn (ctx: *anyopaque, enabled: bool) void,
+        setColorGradingIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
     };
 
     pub fn factory(self: RHI) IResourceFactory {
@@ -725,5 +727,11 @@ pub const RHI = struct {
     }
     pub fn setFilmGrainIntensity(self: RHI, intensity: f32) void {
         self.vtable.setFilmGrainIntensity(self.ptr, intensity);
+    }
+    pub fn setColorGradingEnabled(self: RHI, enabled: bool) void {
+        self.vtable.setColorGradingEnabled(self.ptr, enabled);
+    }
+    pub fn setColorGradingIntensity(self: RHI, intensity: f32) void {
+        self.vtable.setColorGradingIntensity(self.ptr, intensity);
     }
 };

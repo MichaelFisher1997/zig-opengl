@@ -103,6 +103,8 @@ const PostProcessState = struct {
     vignette_intensity: f32 = 0.3,
     film_grain_enabled: bool = false,
     film_grain_intensity: f32 = 0.15,
+    color_grading_enabled: bool = false,
+    color_grading_intensity: f32 = 1.0,
 };
 
 const RenderOptions = struct {
@@ -123,7 +125,10 @@ const DrawState = struct {
     current_displacement_texture: rhi.TextureHandle,
     current_env_texture: rhi.TextureHandle,
     current_lpv_texture: rhi.TextureHandle,
+    current_lpv_texture_g: rhi.TextureHandle,
+    current_lpv_texture_b: rhi.TextureHandle,
     dummy_texture: rhi.TextureHandle,
+    dummy_texture_3d: rhi.TextureHandle,
     dummy_normal_texture: rhi.TextureHandle,
     dummy_roughness_texture: rhi.TextureHandle,
     bound_texture: rhi.TextureHandle,
@@ -132,6 +137,8 @@ const DrawState = struct {
     bound_displacement_texture: rhi.TextureHandle,
     bound_env_texture: rhi.TextureHandle,
     bound_lpv_texture: rhi.TextureHandle,
+    bound_lpv_texture_g: rhi.TextureHandle = 0,
+    bound_lpv_texture_b: rhi.TextureHandle = 0,
     bound_ssao_handle: rhi.TextureHandle = 0,
     bound_shadow_views: [rhi.SHADOW_CASCADE_COUNT]c.VkImageView,
     descriptors_dirty: [MAX_FRAMES_IN_FLIGHT]bool,

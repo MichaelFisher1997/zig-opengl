@@ -326,6 +326,8 @@ pub fn beginPostProcessPassInternal(ctx: anytype) void {
             .bloom_intensity = ctx.bloom.intensity,
             .vignette_intensity = if (ctx.post_process_state.vignette_enabled) ctx.post_process_state.vignette_intensity else 0.0,
             .film_grain_intensity = if (ctx.post_process_state.film_grain_enabled) ctx.post_process_state.film_grain_intensity else 0.0,
+            .color_grading_enabled = if (ctx.post_process_state.color_grading_enabled) 1.0 else 0.0,
+            .color_grading_intensity = ctx.post_process_state.color_grading_intensity,
         };
         c.vkCmdPushConstants(command_buffer, ctx.post_process.pipeline_layout, c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PostProcessPushConstants), &push);
 

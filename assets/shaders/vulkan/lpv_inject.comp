@@ -7,8 +7,12 @@ struct LightData {
     vec4 color;
 };
 
-layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D lpv_out;
-layout(set = 0, binding = 1) readonly buffer Lights {
+// SH L1: 3 output images (R, G, B), each storing 4 SH coefficients (L0, L1x, L1y, L1z)
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image3D lpv_out_r;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image3D lpv_out_g;
+layout(set = 0, binding = 2, rgba32f) uniform writeonly image3D lpv_out_b;
+
+layout(set = 0, binding = 3) readonly buffer Lights {
     LightData lights[];
 } light_buffer;
 
@@ -18,9 +22,11 @@ layout(push_constant) uniform InjectPush {
     uint light_count;
 } push_data;
 
-ivec2 atlasUV(ivec3 cell, int gridSize) {
-    return ivec2(cell.x, cell.y + cell.z * gridSize);
-}
+// SH L1 basis functions (unnormalized for compact storage)
+// Y_00 = 0.282095 (DC)
+// Y_1m = 0.488603 * {x, y, z} (directional)
+const float SH_C0 = 0.282095;
+const float SH_C1 = 0.488603;
 
 void main() {
     int gridSize = int(push_data.grid_params.x);
@@ -31,19 +37,35 @@ void main() {
 
     vec3 world_pos = push_data.grid_origin_cell.xyz + vec3(cell) * push_data.grid_origin_cell.w + vec3(0.5 * push_data.grid_origin_cell.w);
 
-    vec3 accum = vec3(0.0);
+    // Accumulate SH coefficients per color channel
+    vec4 sh_r = vec4(0.0); // (L0, L1x, L1y, L1z) for red
+    vec4 sh_g = vec4(0.0); // for green
+    vec4 sh_b = vec4(0.0); // for blue
+
     for (uint i = 0; i < push_data.light_count; i++) {
         vec3 light_pos = light_buffer.lights[i].pos_radius.xyz;
         float radius = max(light_buffer.lights[i].pos_radius.w, 0.001);
         vec3 light_color = light_buffer.lights[i].color.rgb;
 
-        float d = length(world_pos - light_pos);
+        vec3 diff = world_pos - light_pos;
+        float d = length(diff);
         if (d < radius) {
             float att = 1.0 - (d / radius);
             att *= att;
-            accum += light_color * att;
+
+            // Direction from light to cell (normalized), used for SH L1 directional encoding
+            vec3 dir = (d > 0.001) ? normalize(diff) : vec3(0.0, 1.0, 0.0);
+
+            // SH L1 projection: project the incoming radiance along direction
+            vec4 sh_coeffs = vec4(SH_C0, SH_C1 * dir.x, SH_C1 * dir.y, SH_C1 * dir.z);
+
+            sh_r += sh_coeffs * light_color.r * att;
+            sh_g += sh_coeffs * light_color.g * att;
+            sh_b += sh_coeffs * light_color.b * att;
         }
     }
 
-    imageStore(lpv_out, atlasUV(cell, gridSize), vec4(accum, 1.0));
+    imageStore(lpv_out_r, cell, sh_r);
+    imageStore(lpv_out_g, cell, sh_g);
+    imageStore(lpv_out_b, cell, sh_b);
 }
