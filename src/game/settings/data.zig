@@ -41,6 +41,7 @@ pub const Settings = struct {
     shadow_distance: f32 = 250.0,
     anisotropic_filtering: u8 = 16,
     msaa_samples: u8 = 4,
+    taa_enabled: bool = false,
     ui_scale: f32 = 1.0, // Manual UI scale multiplier (0.5 to 2.0)
     window_width: u32 = 1920,
     window_height: u32 = 1080,
@@ -172,6 +173,11 @@ pub const Settings = struct {
                 .labels = &[_][]const u8{ "OFF", "2X", "4X", "8X" },
                 .values = &[_]u32{ 1, 2, 4, 8 },
             } },
+        };
+        pub const taa_enabled = SettingMetadata{
+            .label = "TEMPORAL AA (TAA)",
+            .description = "Experimental temporal anti-aliasing pipeline",
+            .kind = .toggle,
         };
         pub const max_texture_resolution = SettingMetadata{
             .label = "MAX TEXTURE RES",

@@ -9,6 +9,7 @@ const RHI = @import("../../engine/graphics/rhi.zig").RHI;
 /// - `textures_enabled` - Texture sampling toggle
 /// - `anisotropic_filtering` - Sampler anisotropy level
 /// - `msaa_samples` - Multisample anti-aliasing sample count
+/// - `taa_enabled` - Reserved for temporal AA pipeline (no-op until TAA pass lands)
 ///
 /// ## Settings NOT Applied Here (consumed elsewhere):
 /// These settings take effect without requiring this function because they are
@@ -27,6 +28,7 @@ const RHI = @import("../../engine/graphics/rhi.zig").RHI;
 /// | `max_texture_resolution`    | TextureLoader on texture load        | On asset reload        |
 /// | `fov`, `mouse_sensitivity`  | Camera / InputMapper                 | Next frame             |
 /// | `window_*`, `fullscreen`    | WindowManager                        | On explicit apply      |
+/// | `taa_enabled`               | TAA render pass (planned)            | Next frame             |
 ///
 /// This separation exists because RHI exposes setters only for GPU pipeline state,
 /// while other settings are architectural concerns handled by their respective systems.
