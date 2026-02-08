@@ -10,6 +10,10 @@ pub const PostProcessPushConstants = extern struct {
     bloom_intensity: f32,
     vignette_intensity: f32,
     film_grain_intensity: f32,
+    color_grading_enabled: f32, // 0.0 = disabled, 1.0 = enabled
+    color_grading_intensity: f32, // LUT blend intensity (0.0 = original, 1.0 = full LUT)
+    _pad0: f32 = 0.0,
+    _pad1: f32 = 0.0,
 };
 
 pub const PostProcessSystem = struct {
@@ -19,6 +23,7 @@ pub const PostProcessSystem = struct {
     descriptor_sets: [rhi.MAX_FRAMES_IN_FLIGHT]c.VkDescriptorSet = .{null} ** rhi.MAX_FRAMES_IN_FLIGHT,
     sampler: c.VkSampler = null,
     pass_active: bool = false,
+    lut_texture: rhi.TextureHandle = 0,
 
     pub fn init(
         self: *PostProcessSystem,
@@ -37,6 +42,7 @@ pub const PostProcessSystem = struct {
                 .{ .binding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
                 .{ .binding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
                 .{ .binding = 2, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+                .{ .binding = 3, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
             };
             var layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
             layout_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -165,6 +171,7 @@ pub const PostProcessSystem = struct {
                 .{ .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = self.descriptor_sets[i], .dstBinding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .pImageInfo = &image_info },
                 .{ .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = self.descriptor_sets[i], .dstBinding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1, .pBufferInfo = &buffer_info },
                 .{ .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = self.descriptor_sets[i], .dstBinding = 2, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .pImageInfo = &image_info },
+                .{ .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = self.descriptor_sets[i], .dstBinding = 3, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .pImageInfo = &image_info }, // placeholder for LUT, updated later
             };
             c.vkUpdateDescriptorSets(vk, writes.len, &writes[0], 0, null);
         }
@@ -186,6 +193,27 @@ pub const PostProcessSystem = struct {
             write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             write.descriptorCount = 1;
             write.pImageInfo = &bloom_image_info;
+
+            c.vkUpdateDescriptorSets(vk, 1, &write, 0, null);
+        }
+    }
+
+    pub fn updateLUTDescriptor(self: *PostProcessSystem, vk: c.VkDevice, lut_view: c.VkImageView, lut_sampler: c.VkSampler) void {
+        for (0..rhi.MAX_FRAMES_IN_FLIGHT) |i| {
+            if (self.descriptor_sets[i] == null) continue;
+
+            var lut_image_info = std.mem.zeroes(c.VkDescriptorImageInfo);
+            lut_image_info.imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            lut_image_info.imageView = lut_view;
+            lut_image_info.sampler = lut_sampler;
+
+            var write = std.mem.zeroes(c.VkWriteDescriptorSet);
+            write.sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = self.descriptor_sets[i];
+            write.dstBinding = 3;
+            write.descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &lut_image_info;
 
             c.vkUpdateDescriptorSets(vk, 1, &write, 0, null);
         }

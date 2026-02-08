@@ -167,12 +167,14 @@ pub const ShadowConfig = struct {
     pcf_samples: u8 = 12,
     cascade_blend: bool = true,
     strength: f32 = 0.35, // Cloud shadow intensity (0-1)
+    light_size: f32 = 3.0, // PCSS light source size (world units) - controls penumbra softness
 };
 
 pub const ShadowParams = struct {
     light_space_matrices: [SHADOW_CASCADE_COUNT]Mat4,
     cascade_splits: [SHADOW_CASCADE_COUNT]f32,
     shadow_texel_sizes: [SHADOW_CASCADE_COUNT]f32,
+    light_size: f32 = 3.0, // PCSS light source size for penumbra estimation
 };
 
 pub const CloudParams = struct {

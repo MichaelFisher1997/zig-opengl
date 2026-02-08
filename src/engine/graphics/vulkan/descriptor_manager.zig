@@ -30,6 +30,7 @@ const ShadowUniforms = extern struct {
     light_space_matrices: [rhi.SHADOW_CASCADE_COUNT]Mat4,
     cascade_splits: [4]f32,
     shadow_texel_sizes: [4]f32,
+    shadow_params: [4]f32, // x = light_size (PCSS), y/z/w reserved
 };
 
 pub const DescriptorManager = struct {
@@ -50,6 +51,7 @@ pub const DescriptorManager = struct {
 
     // Dummy textures
     dummy_texture: rhi.TextureHandle,
+    dummy_texture_3d: rhi.TextureHandle,
     dummy_normal_texture: rhi.TextureHandle,
     dummy_roughness_texture: rhi.TextureHandle,
 
@@ -67,6 +69,7 @@ pub const DescriptorManager = struct {
             .shadow_ubos = std.mem.zeroes([rhi.MAX_FRAMES_IN_FLIGHT]VulkanBuffer),
             .shadow_ubos_mapped = std.mem.zeroes([rhi.MAX_FRAMES_IN_FLIGHT]?*anyopaque),
             .dummy_texture = 0,
+            .dummy_texture_3d = 0,
             .dummy_normal_texture = 0,
             .dummy_roughness_texture = 0,
         };
@@ -103,6 +106,12 @@ pub const DescriptorManager = struct {
 
         const roughness_neutral = [_]u8{ 255, 0, 0, 255 };
         self.dummy_roughness_texture = resource_manager.createTexture(1, 1, .rgba, .{}, &roughness_neutral) catch |err| {
+            self.deinit();
+            return err;
+        };
+
+        // 1x1x1 3D dummy texture for sampler3D bindings (LPV)
+        self.dummy_texture_3d = resource_manager.createTexture3D(1, 1, 1, .rgba, .{}, &white_pixel) catch |err| {
             self.deinit();
             return err;
         };
@@ -156,8 +165,12 @@ pub const DescriptorManager = struct {
             .{ .binding = 9, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
             // 10: SSAO Map
             .{ .binding = 10, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
-            // 11: LPV Grid Atlas
+            // 11: LPV SH Red channel (or scalar RGB when SH disabled)
             .{ .binding = 11, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+            // 12: LPV SH Green channel
+            .{ .binding = 12, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+            // 13: LPV SH Blue channel
+            .{ .binding = 13, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
         };
 
         var layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);

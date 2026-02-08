@@ -51,7 +51,10 @@ pub fn createRHI(
     ctx.draw.current_displacement_texture = 0;
     ctx.draw.current_env_texture = 0;
     ctx.draw.current_lpv_texture = 0;
+    ctx.draw.current_lpv_texture_g = 0;
+    ctx.draw.current_lpv_texture_b = 0;
     ctx.draw.dummy_texture = 0;
+    ctx.draw.dummy_texture_3d = 0;
     ctx.draw.dummy_normal_texture = 0;
     ctx.draw.dummy_roughness_texture = 0;
     ctx.mutex = .{};

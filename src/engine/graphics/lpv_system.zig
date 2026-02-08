@@ -51,9 +51,10 @@ pub const LPVSystem = struct {
     rhi: rhi_pkg.RHI,
     vk_ctx: *VulkanContext,
 
-    grid_texture_a: rhi_pkg.TextureHandle = 0,
-    grid_texture_b: rhi_pkg.TextureHandle = 0,
-    active_grid_texture: rhi_pkg.TextureHandle = 0,
+    // SH L1: 3 textures per grid (R, G, B channels), each storing 4 SH coefficients as rgba32f
+    grid_textures_a: [3]rhi_pkg.TextureHandle = .{ 0, 0, 0 },
+    grid_textures_b: [3]rhi_pkg.TextureHandle = .{ 0, 0, 0 },
+    active_grid_textures: [3]rhi_pkg.TextureHandle = .{ 0, 0, 0 },
     debug_overlay_texture: rhi_pkg.TextureHandle = 0,
     grid_size: u32,
     cell_size: f32,
@@ -76,6 +77,8 @@ pub const LPVSystem = struct {
     stats: Stats,
 
     light_buffer: Utils.VulkanBuffer = .{},
+    occlusion_buffer: Utils.VulkanBuffer = .{},
+    occlusion_grid: []u32 = &.{},
 
     descriptor_pool: c.VkDescriptorPool = null,
     inject_set_layout: c.VkDescriptorSetLayout = null,
@@ -135,6 +138,16 @@ pub const LPVSystem = struct {
         );
         errdefer self.destroyLightBuffer();
 
+        // Occlusion grid buffer: one u32 per cell (1 = opaque, 0 = transparent)
+        const occlusion_buffer_size = @as(usize, clamped_grid) * @as(usize, clamped_grid) * @as(usize, clamped_grid) * @sizeOf(u32);
+        self.occlusion_buffer = try Utils.createVulkanBuffer(
+            &vk_ctx.vulkan_device,
+            occlusion_buffer_size,
+            c.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
+        errdefer self.destroyOcclusionBuffer();
+
         try ensureShaderFileExists(INJECT_SHADER_PATH);
         try ensureShaderFileExists(PROPAGATE_SHADER_PATH);
 
@@ -146,6 +159,7 @@ pub const LPVSystem = struct {
 
     pub fn deinit(self: *LPVSystem) void {
         self.deinitComputeResources();
+        self.destroyOcclusionBuffer();
         self.destroyLightBuffer();
         self.destroyGridTextures();
         self.allocator.destroy(self);
@@ -172,7 +186,15 @@ pub const LPVSystem = struct {
     }
 
     pub fn getTextureHandle(self: *const LPVSystem) rhi_pkg.TextureHandle {
-        return self.active_grid_texture;
+        return self.active_grid_textures[0]; // R channel (binding 11)
+    }
+
+    pub fn getTextureHandleG(self: *const LPVSystem) rhi_pkg.TextureHandle {
+        return self.active_grid_textures[1]; // G channel (binding 12)
+    }
+
+    pub fn getTextureHandleB(self: *const LPVSystem) rhi_pkg.TextureHandle {
+        return self.active_grid_textures[2]; // B channel (binding 13)
     }
 
     pub fn getDebugOverlayTextureHandle(self: *const LPVSystem) rhi_pkg.TextureHandle {
@@ -204,7 +226,7 @@ pub const LPVSystem = struct {
         self.stats.update_interval_frames = self.update_interval_frames;
 
         if (!self.enabled) {
-            self.active_grid_texture = self.grid_texture_a;
+            self.active_grid_textures = self.grid_textures_a;
             if (self.was_enabled_last_frame and debug_overlay_enabled) {
                 self.buildDebugOverlay(&.{}, 0);
                 try self.uploadDebugOverlay();
@@ -245,6 +267,9 @@ pub const LPVSystem = struct {
             const bytes = std.mem.sliceAsBytes(lights[0..light_count]);
             @memcpy(@as([*]u8, @ptrCast(ptr))[0..bytes.len], bytes);
         }
+
+        // Build occlusion grid for opaque block awareness during propagation
+        self.buildOcclusionGrid(world);
 
         if (debug_overlay_enabled) {
             // Keep debug overlay generation only when overlay is active.
@@ -332,16 +357,102 @@ pub const LPVSystem = struct {
         return emitted_lights;
     }
 
+    /// Build a per-cell occlusion grid (1 = opaque, 0 = transparent) for the current LPV volume.
+    /// Stored as packed u32 array where each u32 holds the opacity for one cell.
+    fn buildOcclusionGrid(self: *LPVSystem, world: *World) void {
+        const gs = @as(usize, self.grid_size);
+        const total_cells = gs * gs * gs;
+
+        // Ensure CPU buffer is allocated
+        if (self.occlusion_grid.len != total_cells) {
+            if (self.occlusion_grid.len > 0) self.allocator.free(self.occlusion_grid);
+            self.occlusion_grid = self.allocator.alloc(u32, total_cells) catch {
+                self.occlusion_grid = &.{};
+                return;
+            };
+        }
+
+        @memset(self.occlusion_grid, 0);
+
+        world.storage.chunks_mutex.lockShared();
+        defer world.storage.chunks_mutex.unlockShared();
+
+        const grid_world_size = @as(f32, @floatFromInt(self.grid_size)) * self.cell_size;
+        const min_x = self.origin.x;
+        const min_y = self.origin.y;
+        const min_z = self.origin.z;
+        const max_x = min_x + grid_world_size;
+        const max_z = min_z + grid_world_size;
+
+        var iter = world.storage.iteratorUnsafe();
+        while (iter.next()) |entry| {
+            const chunk_data = entry.value_ptr.*;
+            const chunk = &chunk_data.chunk;
+
+            const chunk_min_x = @as(f32, @floatFromInt(chunk.chunk_x * CHUNK_SIZE_X));
+            const chunk_min_z = @as(f32, @floatFromInt(chunk.chunk_z * CHUNK_SIZE_Z));
+            const chunk_max_x = chunk_min_x + @as(f32, @floatFromInt(CHUNK_SIZE_X));
+            const chunk_max_z = chunk_min_z + @as(f32, @floatFromInt(CHUNK_SIZE_Z));
+
+            if (chunk_max_x < min_x or chunk_min_x > max_x or chunk_max_z < min_z or chunk_min_z > max_z) {
+                continue;
+            }
+
+            var y: u32 = 0;
+            while (y < CHUNK_SIZE_Y) : (y += 1) {
+                const world_y = @as(f32, @floatFromInt(y)) + 0.5;
+                if (world_y < min_y or world_y >= min_y + grid_world_size) continue;
+
+                var z: u32 = 0;
+                while (z < CHUNK_SIZE_Z) : (z += 1) {
+                    var x: u32 = 0;
+                    while (x < CHUNK_SIZE_X) : (x += 1) {
+                        const block = chunk.getBlock(x, y, z);
+                        if (block == .air) continue;
+
+                        const def = block_registry.getBlockDefinition(block);
+                        if (!def.isOpaque()) continue;
+
+                        const world_x = chunk_min_x + @as(f32, @floatFromInt(x)) + 0.5;
+                        const world_z = chunk_min_z + @as(f32, @floatFromInt(z)) + 0.5;
+
+                        // Map world position to grid cell
+                        const gx = @as(i32, @intFromFloat(@floor((world_x - self.origin.x) / self.cell_size)));
+                        const gy = @as(i32, @intFromFloat(@floor((world_y - self.origin.y) / self.cell_size)));
+                        const gz = @as(i32, @intFromFloat(@floor((world_z - self.origin.z) / self.cell_size)));
+
+                        if (gx < 0 or gy < 0 or gz < 0) continue;
+                        const ugx = @as(usize, @intCast(gx));
+                        const ugy = @as(usize, @intCast(gy));
+                        const ugz = @as(usize, @intCast(gz));
+                        if (ugx >= gs or ugy >= gs or ugz >= gs) continue;
+
+                        const idx = ugx + ugy * gs + ugz * gs * gs;
+                        self.occlusion_grid[idx] = 1;
+                    }
+                }
+            }
+        }
+
+        // Upload to GPU
+        if (self.occlusion_buffer.mapped_ptr) |ptr| {
+            const bytes = std.mem.sliceAsBytes(self.occlusion_grid);
+            @memcpy(@as([*]u8, @ptrCast(ptr))[0..bytes.len], bytes);
+        }
+    }
+
     fn dispatchCompute(self: *LPVSystem, light_count: usize) !void {
         const cmd = self.vk_ctx.frames.command_buffers[self.vk_ctx.frames.current_frame];
         if (cmd == null) return;
 
-        const tex_a = self.vk_ctx.resources.textures.get(self.grid_texture_a) orelse return;
-        const tex_b = self.vk_ctx.resources.textures.get(self.grid_texture_b) orelse return;
-
-        try self.transitionImage(cmd, tex_a.image.?, self.image_layout_a, c.VK_IMAGE_LAYOUT_GENERAL, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, c.VK_ACCESS_SHADER_READ_BIT, c.VK_ACCESS_SHADER_READ_BIT | c.VK_ACCESS_SHADER_WRITE_BIT);
+        // Transition all 6 SH channel textures (3 per grid) to GENERAL for compute access
+        for (0..3) |ch| {
+            const tex_a = self.vk_ctx.resources.textures.get(self.grid_textures_a[ch]) orelse return;
+            const tex_b = self.vk_ctx.resources.textures.get(self.grid_textures_b[ch]) orelse return;
+            try self.transitionImage(cmd, tex_a.image.?, self.image_layout_a, c.VK_IMAGE_LAYOUT_GENERAL, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, c.VK_ACCESS_SHADER_READ_BIT, c.VK_ACCESS_SHADER_READ_BIT | c.VK_ACCESS_SHADER_WRITE_BIT);
+            try self.transitionImage(cmd, tex_b.image.?, self.image_layout_b, c.VK_IMAGE_LAYOUT_GENERAL, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, c.VK_ACCESS_SHADER_READ_BIT, c.VK_ACCESS_SHADER_READ_BIT | c.VK_ACCESS_SHADER_WRITE_BIT);
+        }
         self.image_layout_a = c.VK_IMAGE_LAYOUT_GENERAL;
-        try self.transitionImage(cmd, tex_b.image.?, self.image_layout_b, c.VK_IMAGE_LAYOUT_GENERAL, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, c.VK_ACCESS_SHADER_READ_BIT, c.VK_ACCESS_SHADER_READ_BIT | c.VK_ACCESS_SHADER_WRITE_BIT);
         self.image_layout_b = c.VK_IMAGE_LAYOUT_GENERAL;
 
         const groups = divCeil(self.grid_size, 4);
@@ -383,18 +494,21 @@ pub const LPVSystem = struct {
             use_ab = !use_ab;
         }
 
+        // Transition final textures to SHADER_READ_ONLY for fragment shader sampling
         const final_is_a = (self.propagation_iterations % 2) == 0;
-        const final_tex = if (final_is_a) tex_a else tex_b;
-        const final_image = final_tex.image.?;
+        const final_textures = if (final_is_a) &self.grid_textures_a else &self.grid_textures_b;
 
-        try self.transitionImage(cmd, final_image, c.VK_IMAGE_LAYOUT_GENERAL, c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, c.VK_ACCESS_SHADER_WRITE_BIT, c.VK_ACCESS_SHADER_READ_BIT);
+        for (0..3) |ch| {
+            const final_tex = self.vk_ctx.resources.textures.get(final_textures[ch]) orelse return;
+            try self.transitionImage(cmd, final_tex.image.?, c.VK_IMAGE_LAYOUT_GENERAL, c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, c.VK_ACCESS_SHADER_WRITE_BIT, c.VK_ACCESS_SHADER_READ_BIT);
+        }
 
         if (final_is_a) {
             self.image_layout_a = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            self.active_grid_texture = self.grid_texture_a;
+            self.active_grid_textures = self.grid_textures_a;
         } else {
             self.image_layout_b = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            self.active_grid_texture = self.grid_texture_b;
+            self.active_grid_textures = self.grid_textures_b;
         }
     }
 
@@ -435,38 +549,36 @@ pub const LPVSystem = struct {
         @memset(empty, 0.0);
         const bytes = std.mem.sliceAsBytes(empty);
 
-        // Atlas fallback: store Z slices stacked in Y (height = grid_size * grid_size).
-        // This stays until terrain/material sampling fully migrates to native 3D textures.
+        // Native 3D textures for SH L1 LPV: 3 channel textures per grid (R, G, B),
+        // each storing 4 SH coefficients (L0, L1x, L1y, L1z) as rgba32f.
+        const tex_config = rhi_pkg.TextureConfig{
+            .min_filter = .linear,
+            .mag_filter = .linear,
+            .wrap_s = .clamp_to_edge,
+            .wrap_t = .clamp_to_edge,
+            .generate_mipmaps = false,
+            .is_render_target = false,
+        };
 
-        self.grid_texture_a = try self.rhi.createTexture(
-            self.grid_size,
-            self.grid_size * self.grid_size,
-            .rgba32f,
-            .{
-                .min_filter = .linear,
-                .mag_filter = .linear,
-                .wrap_s = .clamp_to_edge,
-                .wrap_t = .clamp_to_edge,
-                .generate_mipmaps = false,
-                .is_render_target = false,
-            },
-            bytes,
-        );
+        for (0..3) |ch| {
+            self.grid_textures_a[ch] = try self.rhi.factory().createTexture3D(
+                self.grid_size,
+                self.grid_size,
+                self.grid_size,
+                .rgba32f,
+                tex_config,
+                bytes,
+            );
 
-        self.grid_texture_b = try self.rhi.createTexture(
-            self.grid_size,
-            self.grid_size * self.grid_size,
-            .rgba32f,
-            .{
-                .min_filter = .linear,
-                .mag_filter = .linear,
-                .wrap_s = .clamp_to_edge,
-                .wrap_t = .clamp_to_edge,
-                .generate_mipmaps = false,
-                .is_render_target = false,
-            },
-            bytes,
-        );
+            self.grid_textures_b[ch] = try self.rhi.factory().createTexture3D(
+                self.grid_size,
+                self.grid_size,
+                self.grid_size,
+                .rgba32f,
+                tex_config,
+                bytes,
+            );
+        }
 
         const debug_size = @as(usize, self.grid_size) * @as(usize, self.grid_size) * 4;
         self.debug_overlay_pixels = try self.allocator.alloc(f32, debug_size);
@@ -490,19 +602,21 @@ pub const LPVSystem = struct {
         self.buildDebugOverlay(&.{}, 0);
         try self.uploadDebugOverlay();
 
-        self.active_grid_texture = self.grid_texture_a;
+        self.active_grid_textures = self.grid_textures_a;
         self.image_layout_a = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         self.image_layout_b = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
 
     fn destroyGridTextures(self: *LPVSystem) void {
-        if (self.grid_texture_a != 0) {
-            self.rhi.destroyTexture(self.grid_texture_a);
-            self.grid_texture_a = 0;
-        }
-        if (self.grid_texture_b != 0) {
-            self.rhi.destroyTexture(self.grid_texture_b);
-            self.grid_texture_b = 0;
+        for (0..3) |ch| {
+            if (self.grid_textures_a[ch] != 0) {
+                self.rhi.destroyTexture(self.grid_textures_a[ch]);
+                self.grid_textures_a[ch] = 0;
+            }
+            if (self.grid_textures_b[ch] != 0) {
+                self.rhi.destroyTexture(self.grid_textures_b[ch]);
+                self.grid_textures_b[ch] = 0;
+            }
         }
         if (self.debug_overlay_texture != 0) {
             self.rhi.destroyTexture(self.debug_overlay_texture);
@@ -512,7 +626,7 @@ pub const LPVSystem = struct {
             self.allocator.free(self.debug_overlay_pixels);
             self.debug_overlay_pixels = &.{};
         }
-        self.active_grid_texture = 0;
+        self.active_grid_textures = .{ 0, 0, 0 };
     }
 
     fn buildDebugOverlay(self: *LPVSystem, lights: []const GpuLight, light_count: usize) void {
@@ -587,12 +701,34 @@ pub const LPVSystem = struct {
         }
     }
 
+    fn destroyOcclusionBuffer(self: *LPVSystem) void {
+        if (self.occlusion_buffer.buffer != null) {
+            if (self.occlusion_buffer.mapped_ptr != null) {
+                c.vkUnmapMemory(self.vk_ctx.vulkan_device.vk_device, self.occlusion_buffer.memory);
+                self.occlusion_buffer.mapped_ptr = null;
+            }
+            c.vkDestroyBuffer(self.vk_ctx.vulkan_device.vk_device, self.occlusion_buffer.buffer, null);
+            if (self.occlusion_buffer.memory != null) {
+                c.vkFreeMemory(self.vk_ctx.vulkan_device.vk_device, self.occlusion_buffer.memory, null);
+            }
+            self.occlusion_buffer = .{};
+        }
+        if (self.occlusion_grid.len > 0) {
+            self.allocator.free(self.occlusion_grid);
+            self.occlusion_grid = &.{};
+        }
+    }
+
     fn initComputeResources(self: *LPVSystem) !void {
         const vk = self.vk_ctx.vulkan_device.vk_device;
 
+        // SH L1: inject needs 3 output images + 1 SSBO = 4 bindings
+        // propagate needs 3 src + 3 dst images + 1 occlusion SSBO = 7 bindings
+        // Total images: inject(3) + prop_ab(6) + prop_ba(6) = 15
+        // Total buffers: inject(1) + prop_ab(1) + prop_ba(1) = 3
         var pool_sizes = [_]c.VkDescriptorPoolSize{
-            .{ .type = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 8 },
-            .{ .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 2 },
+            .{ .type = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 16 },
+            .{ .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 4 },
         };
 
         var pool_info = std.mem.zeroes(c.VkDescriptorPoolCreateInfo);
@@ -602,9 +738,12 @@ pub const LPVSystem = struct {
         pool_info.pPoolSizes = &pool_sizes;
         try Utils.checkVk(c.vkCreateDescriptorPool(vk, &pool_info, null, &self.descriptor_pool));
 
+        // Inject: binding 0,1,2 = output images (R,G,B SH channels), binding 3 = light buffer
         const inject_bindings = [_]c.VkDescriptorSetLayoutBinding{
             .{ .binding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
-            .{ .binding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
+            .{ .binding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
+            .{ .binding = 2, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
+            .{ .binding = 3, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
         };
         var inject_layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
         inject_layout_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -612,9 +751,15 @@ pub const LPVSystem = struct {
         inject_layout_info.pBindings = &inject_bindings;
         try Utils.checkVk(c.vkCreateDescriptorSetLayout(vk, &inject_layout_info, null, &self.inject_set_layout));
 
+        // Propagate: binding 0-2 = src (R,G,B), binding 3-5 = dst (R,G,B), binding 6 = occlusion
         const prop_bindings = [_]c.VkDescriptorSetLayoutBinding{
             .{ .binding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
             .{ .binding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
+            .{ .binding = 2, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
+            .{ .binding = 3, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
+            .{ .binding = 4, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
+            .{ .binding = 5, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
+            .{ .binding = 6, .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_COMPUTE_BIT, .pImmutableSamplers = null },
         };
         var prop_layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);
         prop_layout_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -651,71 +796,104 @@ pub const LPVSystem = struct {
     }
 
     fn updateDescriptorSets(self: *LPVSystem) !void {
-        const vk = self.vk_ctx.vulkan_device.vk_device;
-        _ = vk;
-
-        const tex_a = self.vk_ctx.resources.textures.get(self.grid_texture_a) orelse return error.ResourceNotFound;
-        const tex_b = self.vk_ctx.resources.textures.get(self.grid_texture_b) orelse return error.ResourceNotFound;
-
-        var img_a = c.VkDescriptorImageInfo{ .sampler = null, .imageView = tex_a.view, .imageLayout = c.VK_IMAGE_LAYOUT_GENERAL };
-        var img_b = c.VkDescriptorImageInfo{ .sampler = null, .imageView = tex_b.view, .imageLayout = c.VK_IMAGE_LAYOUT_GENERAL };
+        // Resolve all 6 texture resources (3 channels x 2 grids)
+        var imgs_a: [3]c.VkDescriptorImageInfo = undefined;
+        var imgs_b: [3]c.VkDescriptorImageInfo = undefined;
+        for (0..3) |ch| {
+            const tex_a = self.vk_ctx.resources.textures.get(self.grid_textures_a[ch]) orelse return error.ResourceNotFound;
+            const tex_b = self.vk_ctx.resources.textures.get(self.grid_textures_b[ch]) orelse return error.ResourceNotFound;
+            imgs_a[ch] = c.VkDescriptorImageInfo{ .sampler = null, .imageView = tex_a.view, .imageLayout = c.VK_IMAGE_LAYOUT_GENERAL };
+            imgs_b[ch] = c.VkDescriptorImageInfo{ .sampler = null, .imageView = tex_b.view, .imageLayout = c.VK_IMAGE_LAYOUT_GENERAL };
+        }
         var light_info = c.VkDescriptorBufferInfo{ .buffer = self.light_buffer.buffer, .offset = 0, .range = @sizeOf(GpuLight) * MAX_LIGHTS_PER_UPDATE };
+        const occlusion_size = @as(usize, self.grid_size) * @as(usize, self.grid_size) * @as(usize, self.grid_size) * @sizeOf(u32);
+        var occlusion_info = c.VkDescriptorBufferInfo{ .buffer = self.occlusion_buffer.buffer, .offset = 0, .range = @intCast(occlusion_size) };
 
-        var writes: [6]c.VkWriteDescriptorSet = undefined;
+        // Inject: bindings 0,1,2 = output R,G,B images (grid A), binding 3 = light buffer
+        // Propagate A->B: bindings 0-2 = src (A), bindings 3-5 = dst (B), binding 6 = occlusion
+        // Propagate B->A: bindings 0-2 = src (B), bindings 3-5 = dst (A), binding 6 = occlusion
+        // Total writes: 4 (inject) + 7 (prop_ab) + 7 (prop_ba) = 18
+        var writes: [18]c.VkWriteDescriptorSet = undefined;
         var n: usize = 0;
 
+        // --- Inject set ---
+        for (0..3) |ch| {
+            writes[n] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[n].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[n].dstSet = self.inject_descriptor_set;
+            writes[n].dstBinding = @intCast(ch);
+            writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[n].descriptorCount = 1;
+            writes[n].pImageInfo = &imgs_a[ch];
+            n += 1;
+        }
         writes[n] = std.mem.zeroes(c.VkWriteDescriptorSet);
         writes[n].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[n].dstSet = self.inject_descriptor_set;
-        writes[n].dstBinding = 0;
-        writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        writes[n].descriptorCount = 1;
-        writes[n].pImageInfo = &img_a;
-        n += 1;
-
-        writes[n] = std.mem.zeroes(c.VkWriteDescriptorSet);
-        writes[n].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[n].dstSet = self.inject_descriptor_set;
-        writes[n].dstBinding = 1;
+        writes[n].dstBinding = 3;
         writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[n].descriptorCount = 1;
         writes[n].pBufferInfo = &light_info;
         n += 1;
 
+        // --- Propagate A->B set ---
+        for (0..3) |ch| {
+            writes[n] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[n].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[n].dstSet = self.propagate_ab_descriptor_set;
+            writes[n].dstBinding = @intCast(ch);
+            writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[n].descriptorCount = 1;
+            writes[n].pImageInfo = &imgs_a[ch];
+            n += 1;
+        }
+        for (0..3) |ch| {
+            writes[n] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[n].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[n].dstSet = self.propagate_ab_descriptor_set;
+            writes[n].dstBinding = @intCast(ch + 3);
+            writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[n].descriptorCount = 1;
+            writes[n].pImageInfo = &imgs_b[ch];
+            n += 1;
+        }
         writes[n] = std.mem.zeroes(c.VkWriteDescriptorSet);
         writes[n].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[n].dstSet = self.propagate_ab_descriptor_set;
-        writes[n].dstBinding = 0;
-        writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[n].dstBinding = 6;
+        writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[n].descriptorCount = 1;
-        writes[n].pImageInfo = &img_a;
+        writes[n].pBufferInfo = &occlusion_info;
         n += 1;
 
-        writes[n] = std.mem.zeroes(c.VkWriteDescriptorSet);
-        writes[n].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[n].dstSet = self.propagate_ab_descriptor_set;
-        writes[n].dstBinding = 1;
-        writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        writes[n].descriptorCount = 1;
-        writes[n].pImageInfo = &img_b;
-        n += 1;
-
+        // --- Propagate B->A set ---
+        for (0..3) |ch| {
+            writes[n] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[n].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[n].dstSet = self.propagate_ba_descriptor_set;
+            writes[n].dstBinding = @intCast(ch);
+            writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[n].descriptorCount = 1;
+            writes[n].pImageInfo = &imgs_b[ch];
+            n += 1;
+        }
+        for (0..3) |ch| {
+            writes[n] = std.mem.zeroes(c.VkWriteDescriptorSet);
+            writes[n].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[n].dstSet = self.propagate_ba_descriptor_set;
+            writes[n].dstBinding = @intCast(ch + 3);
+            writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[n].descriptorCount = 1;
+            writes[n].pImageInfo = &imgs_a[ch];
+            n += 1;
+        }
         writes[n] = std.mem.zeroes(c.VkWriteDescriptorSet);
         writes[n].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[n].dstSet = self.propagate_ba_descriptor_set;
-        writes[n].dstBinding = 0;
-        writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[n].dstBinding = 6;
+        writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[n].descriptorCount = 1;
-        writes[n].pImageInfo = &img_b;
-        n += 1;
-
-        writes[n] = std.mem.zeroes(c.VkWriteDescriptorSet);
-        writes[n].sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[n].dstSet = self.propagate_ba_descriptor_set;
-        writes[n].dstBinding = 1;
-        writes[n].descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        writes[n].descriptorCount = 1;
-        writes[n].pImageInfo = &img_a;
+        writes[n].pBufferInfo = &occlusion_info;
         n += 1;
 
         c.vkUpdateDescriptorSets(self.vk_ctx.vulkan_device.vk_device, @intCast(n), &writes[0], 0, null);

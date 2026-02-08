@@ -338,6 +338,8 @@ const MockContext = struct {
         .setVignetteIntensity = undefined,
         .setFilmGrainEnabled = undefined,
         .setFilmGrainIntensity = undefined,
+        .setColorGradingEnabled = undefined,
+        .setColorGradingIntensity = undefined,
     };
 
     const MOCK_ENCODER_VTABLE = rhi.IGraphicsCommandEncoder.VTable{
