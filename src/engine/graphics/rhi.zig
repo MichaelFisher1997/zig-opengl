@@ -52,6 +52,7 @@ pub const IResourceFactory = struct {
         updateBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle, offset: usize, data: []const u8) RhiError!void,
         destroyBuffer: *const fn (ptr: *anyopaque, handle: BufferHandle) void,
         createTexture: *const fn (ptr: *anyopaque, width: u32, height: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) RhiError!TextureHandle,
+        createTexture3D: *const fn (ptr: *anyopaque, width: u32, height: u32, depth: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) RhiError!TextureHandle,
         destroyTexture: *const fn (ptr: *anyopaque, handle: TextureHandle) void,
         updateTexture: *const fn (ptr: *anyopaque, handle: TextureHandle, data: []const u8) RhiError!void,
         createShader: *const fn (ptr: *anyopaque, vertex_src: [*c]const u8, fragment_src: [*c]const u8) RhiError!ShaderHandle,
@@ -74,6 +75,9 @@ pub const IResourceFactory = struct {
     }
     pub fn createTexture(self: IResourceFactory, width: u32, height: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) RhiError!TextureHandle {
         return self.vtable.createTexture(self.ptr, width, height, format, config, data);
+    }
+    pub fn createTexture3D(self: IResourceFactory, width: u32, height: u32, depth: u32, format: TextureFormat, config: TextureConfig, data: ?[]const u8) RhiError!TextureHandle {
+        return self.vtable.createTexture3D(self.ptr, width, height, depth, format, config, data);
     }
     pub fn destroyTexture(self: IResourceFactory, handle: TextureHandle) void {
         self.vtable.destroyTexture(self.ptr, handle);
@@ -277,10 +281,10 @@ pub const IRenderContext = struct {
         endPostProcessPass: *const fn (ptr: *anyopaque) void,
         beginGPass: *const fn (ptr: *anyopaque) void,
         endGPass: *const fn (ptr: *anyopaque) void,
-        // FXAA Pass (Phase 3)
+        // FXAA pass
         beginFXAAPass: *const fn (ptr: *anyopaque) void,
         endFXAAPass: *const fn (ptr: *anyopaque) void,
-        // Bloom Pass (Phase 3)
+        // Bloom pass
         computeBloom: *const fn (ptr: *anyopaque) void,
         getEncoder: *const fn (ptr: *anyopaque) IGraphicsCommandEncoder,
         getStateContext: *const fn (ptr: *anyopaque) IRenderStateContext,
@@ -468,10 +472,16 @@ pub const RHI = struct {
         setVolumetricDensity: *const fn (ctx: *anyopaque, density: f32) void,
         setMSAA: *const fn (ctx: *anyopaque, samples: u8) void,
         recover: *const fn (ctx: *anyopaque) anyerror!void,
-        // Phase 3: FXAA and Bloom options
+        // Post-processing options
         setFXAA: *const fn (ctx: *anyopaque, enabled: bool) void,
         setBloom: *const fn (ctx: *anyopaque, enabled: bool) void,
         setBloomIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
+        setVignetteEnabled: *const fn (ctx: *anyopaque, enabled: bool) void,
+        setVignetteIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
+        setFilmGrainEnabled: *const fn (ctx: *anyopaque, enabled: bool) void,
+        setFilmGrainIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
+        setColorGradingEnabled: *const fn (ctx: *anyopaque, enabled: bool) void,
+        setColorGradingIntensity: *const fn (ctx: *anyopaque, intensity: f32) void,
     };
 
     pub fn factory(self: RHI) IResourceFactory {
@@ -696,7 +706,7 @@ pub const RHI = struct {
     pub fn bindUIPipeline(self: RHI, textured: bool) void {
         self.vtable.ui.bindPipeline(self.ptr, textured);
     }
-    // Phase 3: FXAA and Bloom controls
+    // Post-processing controls
     pub fn setFXAA(self: RHI, enabled: bool) void {
         self.vtable.setFXAA(self.ptr, enabled);
     }
@@ -705,5 +715,23 @@ pub const RHI = struct {
     }
     pub fn setBloomIntensity(self: RHI, intensity: f32) void {
         self.vtable.setBloomIntensity(self.ptr, intensity);
+    }
+    pub fn setVignetteEnabled(self: RHI, enabled: bool) void {
+        self.vtable.setVignetteEnabled(self.ptr, enabled);
+    }
+    pub fn setVignetteIntensity(self: RHI, intensity: f32) void {
+        self.vtable.setVignetteIntensity(self.ptr, intensity);
+    }
+    pub fn setFilmGrainEnabled(self: RHI, enabled: bool) void {
+        self.vtable.setFilmGrainEnabled(self.ptr, enabled);
+    }
+    pub fn setFilmGrainIntensity(self: RHI, intensity: f32) void {
+        self.vtable.setFilmGrainIntensity(self.ptr, intensity);
+    }
+    pub fn setColorGradingEnabled(self: RHI, enabled: bool) void {
+        self.vtable.setColorGradingEnabled(self.ptr, enabled);
+    }
+    pub fn setColorGradingIntensity(self: RHI, intensity: f32) void {
+        self.vtable.setColorGradingIntensity(self.ptr, intensity);
     }
 };

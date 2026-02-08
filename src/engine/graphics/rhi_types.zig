@@ -36,8 +36,8 @@ pub const InvalidTextureHandle: TextureHandle = 0;
 
 pub const MAX_FRAMES_IN_FLIGHT = 2;
 /// Number of cascaded shadow map splits.
-/// 3 cascades provide a good balance between quality (near detail) and performance (draw calls).
-pub const SHADOW_CASCADE_COUNT = 3;
+/// 4 cascades provide smoother transitions for large shadow distances (1000+) while maintaining quality.
+pub const SHADOW_CASCADE_COUNT = 4;
 
 pub const BufferUsage = enum {
     vertex,
@@ -166,12 +166,15 @@ pub const ShadowConfig = struct {
     resolution: u32 = 4096,
     pcf_samples: u8 = 12,
     cascade_blend: bool = true,
+    strength: f32 = 0.35, // Cloud shadow intensity (0-1)
+    light_size: f32 = 3.0, // PCSS light source size (world units) - controls penumbra softness
 };
 
 pub const ShadowParams = struct {
     light_space_matrices: [SHADOW_CASCADE_COUNT]Mat4,
     cascade_splits: [SHADOW_CASCADE_COUNT]f32,
     shadow_texel_sizes: [SHADOW_CASCADE_COUNT]f32,
+    light_size: f32 = 3.0, // PCSS light source size for penumbra estimation
 };
 
 pub const CloudParams = struct {
@@ -198,6 +201,11 @@ pub const CloudParams = struct {
     exposure: f32 = 0.9,
     saturation: f32 = 1.3,
     ssao_enabled: bool = true,
+    lpv_enabled: bool = true,
+    lpv_intensity: f32 = 0.5,
+    lpv_cell_size: f32 = 2.0,
+    lpv_grid_size: u32 = 32,
+    lpv_origin: Vec3 = Vec3.init(0.0, 0.0, 0.0),
 };
 
 pub const Color = struct {
@@ -232,6 +240,7 @@ pub const GpuTimingResults = struct {
     shadow_pass_ms: [SHADOW_CASCADE_COUNT]f32,
     g_pass_ms: f32,
     ssao_pass_ms: f32,
+    lpv_pass_ms: f32,
     sky_pass_ms: f32,
     opaque_pass_ms: f32,
     cloud_pass_ms: f32,

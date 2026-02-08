@@ -11,6 +11,7 @@
 //! - LOD0 generates last but gets priority in movement direction
 //! - Smooth transitions via fog masking
 //!
+//! GPU operations are decoupled via LODGPUBridge and LODRenderInterface (Issue #246).
 
 const std = @import("std");
 const lod_chunk = @import("lod_chunk.zig");
@@ -46,7 +47,12 @@ const RingBuffer = @import("../engine/core/ring_buffer.zig").RingBuffer;
 
 const Generator = @import("worldgen/generator_interface.zig").Generator;
 const LODMesh = @import("lod_mesh.zig").LODMesh;
-const LODRenderer = @import("lod_renderer.zig").LODRenderer;
+
+const lod_gpu = @import("lod_upload_queue.zig");
+const LODGPUBridge = lod_gpu.LODGPUBridge;
+const LODRenderInterface = lod_gpu.LODRenderInterface;
+const MeshMap = lod_gpu.MeshMap;
+const RegionMap = lod_gpu.RegionMap;
 
 const MAX_LOD_REGIONS = 2048;
 
@@ -68,6 +74,7 @@ pub const LODStats = struct {
     memory_used_mb: u32 = 0,
     upgrades_pending: u32 = 0,
     downgrades_pending: u32 = 0,
+    upload_failures: u32 = 0,
 
     pub fn totalLoaded(self: *const LODStats) u32 {
         var total: u32 = 0;
@@ -91,6 +98,7 @@ pub const LODStats = struct {
         self.memory_used_mb = 0;
         self.upgrades_pending = 0;
         self.downgrades_pending = 0;
+        self.upload_failures = 0;
     }
 
     pub fn recordState(self: *LODStats, lod_idx: usize, state: LODState) void {
@@ -118,825 +126,817 @@ const LODTransition = struct {
     priority: i32,
 };
 
-/// Expected RHI interface for LODManager:
-/// - createBuffer(size: usize, usage: BufferUsage) !BufferHandle
-/// - destroyBuffer(handle: BufferHandle) void
-/// - uploadBuffer(handle: BufferHandle, data: []const u8) !void
-/// - waitIdle() void
-/// - getFrameIndex() usize
-/// - setModelMatrix(model: Mat4, color: Vec3, mask_radius: f32) void
-/// - draw(handle: BufferHandle, count: u32, mode: DrawMode) void
-///
-/// Main LOD Manager - coordinates all LOD levels
-/// Generic over RHI type to allow mocking/DIP
-pub fn LODManager(comptime RHI: type) type {
-    return struct {
-        const Self = @This();
+/// LOD Manager - coordinates all LOD levels.
+/// Uses callback interfaces (LODGPUBridge, LODRenderInterface) for GPU operations
+/// instead of a direct RHI dependency.
+pub const LODManager = struct {
+    const Self = @This();
 
-        allocator: std.mem.Allocator,
-        config: ILODConfig,
+    allocator: std.mem.Allocator,
+    config: ILODConfig,
 
-        // Storage per LOD level (LOD0 uses existing World.chunks)
-        regions: [LODLevel.count]std.HashMap(LODRegionKey, *LODChunk, LODRegionKeyContext, 80),
+    // Storage per LOD level (LOD0 uses existing World.chunks)
+    regions: [LODLevel.count]RegionMap,
 
-        // Mesh storage per LOD level
-        meshes: [LODLevel.count]std.HashMap(LODRegionKey, *LODMesh, LODRegionKeyContext, 80),
+    // Mesh storage per LOD level
+    meshes: [LODLevel.count]MeshMap,
 
-        // Separate job queues per LOD level
-        // LOD3 queue processes first (fast), LOD0 queue last (slow but priority)
-        gen_queues: [LODLevel.count]*JobQueue,
+    // Separate job queues per LOD level
+    // LOD3 queue processes first (fast), LOD0 queue last (slow but priority)
+    gen_queues: [LODLevel.count]*JobQueue,
 
-        // Worker pool for LOD generation
-        lod_gen_pool: ?*WorkerPool,
+    // Worker pool for LOD generation
+    lod_gen_pool: ?*WorkerPool,
 
-        // Upload queues per LOD level
-        upload_queues: [LODLevel.count]RingBuffer(*LODChunk),
+    // Upload queues per LOD level
+    upload_queues: [LODLevel.count]RingBuffer(*LODChunk),
 
-        // Transition queue for LOD upgrades/downgrades
-        transition_queue: std.ArrayListUnmanaged(LODTransition),
+    // Transition queue for LOD upgrades/downgrades
+    transition_queue: std.ArrayListUnmanaged(LODTransition),
 
-        // Current player position (chunk coords)
-        player_cx: i32,
-        player_cz: i32,
+    // Current player position (chunk coords)
+    player_cx: i32,
+    player_cz: i32,
 
-        // Next job token
-        next_job_token: u32,
+    // Next job token
+    next_job_token: u32,
 
-        // Stats
-        stats: LODStats,
+    // Stats
+    stats: LODStats,
 
-        // Mutex for thread safety
-        mutex: std.Thread.RwLock,
+    // Mutex for thread safety
+    mutex: std.Thread.RwLock,
 
-        // RHI for GPU operations
-        rhi: RHI,
+    // GPU bridge for upload/destroy/sync operations (replaces direct RHI field)
+    gpu_bridge: LODGPUBridge,
 
-        // Terrain generator for LOD generation (mutable for cache recentering)
-        generator: Generator,
+    // Terrain generator for LOD generation (mutable for cache recentering)
+    generator: Generator,
 
-        // Paused state
-        paused: bool,
+    // Paused state
+    paused: bool,
 
-        // Memory tracking
-        memory_used_bytes: usize,
+    // Memory tracking
+    memory_used_bytes: usize,
 
-        // Performance tracking for throttling
-        update_tick: u32 = 0,
+    // Performance tracking for throttling
+    update_tick: u32 = 0,
 
-        // Deferred mesh deletion queue (Vulkan optimization)
-        deletion_queue: std.ArrayListUnmanaged(*LODMesh),
-        deletion_timer: f32 = 0,
+    // Deferred mesh deletion queue (Vulkan optimization)
+    deletion_queue: std.ArrayListUnmanaged(*LODMesh),
+    deletion_timer: f32 = 0,
 
-        renderer: *LODRenderer(RHI),
+    // Type-erased renderer interface (replaces direct LODRenderer(RHI) field)
+    renderer: LODRenderInterface,
 
-        // Callback type to check if a regular chunk is loaded and renderable
-        pub const ChunkChecker = *const fn (chunk_x: i32, chunk_z: i32, ctx: *anyopaque) bool;
+    // Callback type to check if a regular chunk is loaded and renderable
+    pub const ChunkChecker = lod_gpu.ChunkChecker;
 
-        pub fn init(allocator: std.mem.Allocator, config: ILODConfig, rhi: RHI, generator: Generator) !*Self {
-            const mgr = try allocator.create(Self);
+    pub fn init(allocator: std.mem.Allocator, config: ILODConfig, gpu_bridge: LODGPUBridge, render_iface: LODRenderInterface, generator: Generator) !*Self {
+        const mgr = try allocator.create(Self);
+        errdefer allocator.destroy(mgr);
 
-            var regions: [LODLevel.count]std.HashMap(LODRegionKey, *LODChunk, LODRegionKeyContext, 80) = undefined;
-            var meshes: [LODLevel.count]std.HashMap(LODRegionKey, *LODMesh, LODRegionKeyContext, 80) = undefined;
-            var gen_queues: [LODLevel.count]*JobQueue = undefined;
-            var upload_queues: [LODLevel.count]RingBuffer(*LODChunk) = undefined;
+        var regions: [LODLevel.count]RegionMap = undefined;
+        var meshes: [LODLevel.count]MeshMap = undefined;
+        var gen_queues: [LODLevel.count]*JobQueue = undefined;
+        var upload_queues: [LODLevel.count]RingBuffer(*LODChunk) = undefined;
+        var initialized_levels: usize = 0;
 
-            for (0..LODLevel.count) |i| {
-                regions[i] = std.HashMap(LODRegionKey, *LODChunk, LODRegionKeyContext, 80).init(allocator);
-                meshes[i] = std.HashMap(LODRegionKey, *LODMesh, LODRegionKeyContext, 80).init(allocator);
-
-                const queue = try allocator.create(JobQueue);
-                queue.* = JobQueue.init(allocator);
-                gen_queues[i] = queue;
-
-                upload_queues[i] = try RingBuffer(*LODChunk).init(allocator, 32);
+        errdefer {
+            var i: usize = 0;
+            while (i < initialized_levels) : (i += 1) {
+                upload_queues[i].deinit();
+                gen_queues[i].deinit();
+                allocator.destroy(gen_queues[i]);
+                meshes[i].deinit();
+                regions[i].deinit();
             }
-
-            const renderer = try LODRenderer(RHI).init(allocator, rhi);
-
-            mgr.* = .{
-                .allocator = allocator,
-                .config = config,
-                .regions = regions,
-                .meshes = meshes,
-                .gen_queues = gen_queues,
-                .lod_gen_pool = null, // Will be initialized below
-                .upload_queues = upload_queues,
-                .transition_queue = .empty,
-                .player_cx = 0,
-                .player_cz = 0,
-                .next_job_token = 1,
-                .stats = .{},
-                .mutex = .{},
-                .rhi = rhi,
-                .generator = generator,
-                .paused = false,
-                .memory_used_bytes = 0,
-                .update_tick = 0,
-                .deletion_queue = .empty,
-                .deletion_timer = 0,
-                .renderer = renderer,
-            };
-
-            // Initialize worker pool for LOD generation and meshing (3 workers for LOD tasks)
-            // All LOD jobs go to LOD3 queue in original code, we keep it consistent but use generic index
-            mgr.lod_gen_pool = try WorkerPool.init(allocator, 3, mgr.gen_queues[LODLevel.count - 1], mgr, processLODJob);
-
-            const radii = config.getRadii();
-            log.log.info("LODManager initialized with radii: LOD0={}, LOD1={}, LOD2={}, LOD3={}", .{
-                radii[0],
-                radii[1],
-                radii[2],
-                radii[3],
-            });
-
-            return mgr;
         }
 
-        pub fn deinit(self: *Self) void {
-            // Stop and cleanup queues
-            for (0..LODLevel.count) |i| {
-                self.gen_queues[i].stop();
+        for (0..LODLevel.count) |i| {
+            var region_map = RegionMap.init(allocator);
+            errdefer region_map.deinit();
+
+            var mesh_map = MeshMap.init(allocator);
+            errdefer mesh_map.deinit();
+
+            const queue = try allocator.create(JobQueue);
+            errdefer allocator.destroy(queue);
+            queue.* = JobQueue.init(allocator);
+            errdefer queue.deinit();
+
+            var upload_queue = try RingBuffer(*LODChunk).init(allocator, 32);
+            errdefer upload_queue.deinit();
+
+            regions[i] = region_map;
+            meshes[i] = mesh_map;
+            gen_queues[i] = queue;
+            upload_queues[i] = upload_queue;
+            initialized_levels += 1;
+        }
+
+        mgr.* = .{
+            .allocator = allocator,
+            .config = config,
+            .regions = regions,
+            .meshes = meshes,
+            .gen_queues = gen_queues,
+            .lod_gen_pool = null, // Will be initialized below
+            .upload_queues = upload_queues,
+            .transition_queue = .empty,
+            .player_cx = 0,
+            .player_cz = 0,
+            .next_job_token = 1,
+            .stats = .{},
+            .mutex = .{},
+            .gpu_bridge = gpu_bridge,
+            .generator = generator,
+            .paused = false,
+            .memory_used_bytes = 0,
+            .update_tick = 0,
+            .deletion_queue = .empty,
+            .deletion_timer = 0,
+            .renderer = render_iface,
+        };
+
+        // Initialize worker pool for LOD generation and meshing (3 workers for LOD tasks)
+        // All LOD jobs go to LOD3 queue in original code, we keep it consistent but use generic index
+        mgr.lod_gen_pool = try WorkerPool.init(allocator, 3, mgr.gen_queues[LODLevel.count - 1], mgr, processLODJob);
+
+        const radii = config.getRadii();
+        log.log.info("LODManager initialized with radii: LOD0={}, LOD1={}, LOD2={}, LOD3={}", .{
+            radii[0],
+            radii[1],
+            radii[2],
+            radii[3],
+        });
+
+        return mgr;
+    }
+
+    pub fn deinit(self: *Self) void {
+        // Stop and cleanup queues
+        for (0..LODLevel.count) |i| {
+            self.gen_queues[i].stop();
+        }
+
+        // Cleanup worker pool
+        if (self.lod_gen_pool) |pool| {
+            pool.deinit();
+        }
+
+        for (0..LODLevel.count) |i| {
+            self.gen_queues[i].deinit();
+            self.allocator.destroy(self.gen_queues[i]);
+            self.upload_queues[i].deinit();
+
+            // Cleanup meshes
+            var mesh_iter = self.meshes[i].iterator();
+            while (mesh_iter.next()) |entry| {
+                self.gpu_bridge.destroy(entry.value_ptr.*);
+                self.allocator.destroy(entry.value_ptr.*);
             }
+            self.meshes[i].deinit();
 
-            // Cleanup worker pool
-            if (self.lod_gen_pool) |pool| {
-                pool.deinit();
+            // Cleanup regions
+            var region_iter = self.regions[i].iterator();
+            while (region_iter.next()) |entry| {
+                entry.value_ptr.*.deinit(self.allocator);
+                self.allocator.destroy(entry.value_ptr.*);
             }
+            self.regions[i].deinit();
+        }
 
-            for (0..LODLevel.count) |i| {
-                self.gen_queues[i].deinit();
-                self.allocator.destroy(self.gen_queues[i]);
-                self.upload_queues[i].deinit();
+        self.transition_queue.deinit(self.allocator);
 
-                // Cleanup meshes
-                var mesh_iter = self.meshes[i].iterator();
-                while (mesh_iter.next()) |entry| {
-                    entry.value_ptr.*.deinit(self.rhi);
-                    self.allocator.destroy(entry.value_ptr.*);
-                }
-                self.meshes[i].deinit();
-
-                // Cleanup regions
-                var region_iter = self.regions[i].iterator();
-                while (region_iter.next()) |entry| {
-                    entry.value_ptr.*.deinit(self.allocator);
-                    self.allocator.destroy(entry.value_ptr.*);
-                }
-                self.regions[i].deinit();
+        // Process any pending deletions
+        if (self.deletion_queue.items.len > 0) {
+            self.gpu_bridge.waitIdle();
+            for (self.deletion_queue.items) |mesh| {
+                self.gpu_bridge.destroy(mesh);
+                self.allocator.destroy(mesh);
             }
+        }
+        self.deletion_queue.deinit(self.allocator);
 
-            self.transition_queue.deinit(self.allocator);
+        // NOTE: LODManager does NOT own the renderer lifetime.
+        // The renderer is owned by World and deinit'd there.
 
-            // Process any pending deletions
+        self.allocator.destroy(self);
+    }
+
+    /// Update LOD system with player position
+    pub fn update(self: *Self, player_pos: Vec3, player_velocity: Vec3, chunk_checker: ?ChunkChecker, checker_ctx: ?*anyopaque) !void {
+        if (self.paused) return;
+
+        // Deferred deletion handling (Issue #119: Performance optimization)
+        // Clean up deleted meshes once per second to avoid waitIdle stalls
+        self.deletion_timer += 0.016; // Approx 60fps delta
+        if (self.deletion_timer >= 1.0 or self.deletion_queue.items.len > 50) {
             if (self.deletion_queue.items.len > 0) {
-                self.rhi.waitIdle();
+                // Ensure GPU is done with resources before deleting
+                self.gpu_bridge.waitIdle();
                 for (self.deletion_queue.items) |mesh| {
-                    mesh.deinit(self.rhi);
+                    self.gpu_bridge.destroy(mesh);
                     self.allocator.destroy(mesh);
                 }
+                self.deletion_queue.clearRetainingCapacity();
             }
-            self.deletion_queue.deinit(self.allocator);
-
-            self.renderer.deinit();
-
-            self.allocator.destroy(self);
+            self.deletion_timer = 0;
         }
 
-        /// Update LOD system with player position
-        pub fn update(self: *Self, player_pos: Vec3, player_velocity: Vec3, chunk_checker: ?ChunkChecker, checker_ctx: ?*anyopaque) !void {
-            if (self.paused) return;
+        // Throttle heavy LOD management logic (generation queuing, state processing, unloads).
+        // LOD management involves iterating over thousands of potential regions and can
+        // take several milliseconds. Throttling to every 4 frames (approx 15Hz at 60fps)
+        // significantly reduces CPU overhead while remaining responsive to player movement.
+        self.update_tick += 1;
+        if (self.update_tick % 4 != 0) return;
 
-            // Deferred deletion handling (Issue #119: Performance optimization)
-            // Clean up deleted meshes once per second to avoid waitIdle stalls
-            self.deletion_timer += 0.016; // Approx 60fps delta
-            if (self.deletion_timer >= 1.0 or self.deletion_queue.items.len > 50) {
-                if (self.deletion_queue.items.len > 0) {
-                    // Ensure GPU is done with resources before deleting
-                    self.rhi.waitIdle();
-                    for (self.deletion_queue.items) |mesh| {
-                        mesh.deinit(self.rhi);
-                        self.allocator.destroy(mesh);
+        // Issue #211: Clean up LOD chunks that are fully covered by LOD0 (throttled)
+        if (chunk_checker) |checker| {
+            self.unloadLODWhereChunksLoaded(checker, checker_ctx.?);
+        }
+
+        // Safety: Check for NaN/Inf player position
+        if (!std.math.isFinite(player_pos.x) or !std.math.isFinite(player_pos.z)) return;
+
+        const pc = worldToChunk(@as(i32, @intFromFloat(player_pos.x)), @as(i32, @intFromFloat(player_pos.z)));
+        self.player_cx = pc.chunk_x;
+        self.player_cz = pc.chunk_z;
+
+        // Issue #119 Phase 4: Recenter classification cache if player moved far enough.
+        // This ensures LOD chunks have cache coverage for consistent biome/surface data.
+        const player_wx: i32 = @intFromFloat(player_pos.x);
+        const player_wz: i32 = @intFromFloat(player_pos.z);
+        _ = self.generator.maybeRecenterCache(player_wx, player_wz);
+
+        // Queue LOD regions that need loading (also queue on first frame)
+        // Priority: LOD3 first (fast, fills horizon), then LOD2, LOD1
+        // We iterate backwards from LODLevel.count-1 down to 1
+        var i: usize = LODLevel.count - 1;
+        while (i > 0) : (i -= 1) {
+            try self.queueLODRegions(@enumFromInt(@as(u3, @intCast(i))), player_velocity, chunk_checker, checker_ctx);
+        }
+
+        // Process state transitions
+        try self.processStateTransitions();
+
+        // Process uploads (limited per frame)
+        self.processUploads();
+
+        // Update stats
+        self.updateStats();
+
+        // Unload distant regions
+        try self.unloadDistantRegions();
+    }
+
+    /// Queue LOD regions that need generation
+    fn queueLODRegions(self: *Self, lod: LODLevel, velocity: Vec3, chunk_checker: ?ChunkChecker, checker_ctx: ?*anyopaque) !void {
+        const radii = self.config.getRadii();
+        const radius = radii[@intFromEnum(lod)];
+
+        // Skip LOD0 - handled by existing World system
+        if (lod == .lod0) return;
+
+        var queued_count: u32 = 0;
+
+        const scale: i32 = @intCast(lod.chunksPerSide());
+        const region_radius = @divFloor(radius, scale) + 1;
+
+        const player_rx = @divFloor(self.player_cx, scale);
+        const player_rz = @divFloor(self.player_cz, scale);
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const storage = &self.regions[@intFromEnum(lod)];
+
+        // All LOD jobs go to LOD3 queue (worker pool processes from there)
+        // We encode the actual LOD level in the dist_sq high bits
+        const queue = self.gen_queues[LODLevel.count - 1];
+        const lod_bits: i32 = @as(i32, @intCast(@intFromEnum(lod))) << 28;
+
+        // Calculate velocity direction for priority
+        const vel_len = @sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
+        const has_velocity = vel_len > 0.1;
+        const vel_dx: f32 = if (has_velocity) velocity.x / vel_len else 0;
+        const vel_dz: f32 = if (has_velocity) velocity.z / vel_len else 0;
+
+        var rz = player_rz - region_radius;
+        while (rz <= player_rz + region_radius) : (rz += 1) {
+            var rx = player_rx - region_radius;
+            while (rx <= player_rx + region_radius) : (rx += 1) {
+                // Check circular distance to avoid thrashing corner chunks
+                const dx = rx - player_rx;
+                const dz = rz - player_rz;
+                if (@as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz) > @as(i64, region_radius) * @as(i64, region_radius)) continue;
+
+                const key = LODRegionKey{ .rx = rx, .rz = rz, .lod = lod };
+
+                // Check if region is covered by higher detail chunks
+                if (chunk_checker) |checker| {
+                    // We use a temporary chunk to calculate bounds
+                    const temp_chunk = LODChunk.init(rx, rz, lod);
+                    if (self.areAllChunksLoaded(temp_chunk.worldBounds(), checker, checker_ctx.?)) {
+                        continue;
                     }
-                    self.deletion_queue.clearRetainingCapacity();
                 }
-                self.deletion_timer = 0;
-            }
 
-            // Throttle heavy LOD management logic (generation queuing, state processing, unloads).
-            // LOD management involves iterating over thousands of potential regions and can
-            // take several milliseconds. Throttling to every 4 frames (approx 15Hz at 60fps)
-            // significantly reduces CPU overhead while remaining responsive to player movement.
-            self.update_tick += 1;
-            if (self.update_tick % 4 != 0) return;
+                // Check if region exists and what state it's in
+                const existing = storage.get(key);
+                const needs_queue = if (existing) |chunk|
+                    // Re-queue if stuck in missing state
+                    chunk.state == .missing
+                else
+                    // Queue if doesn't exist
+                    true;
 
-            // Issue #211: Clean up LOD chunks that are fully covered by LOD0 (throttled)
-            if (chunk_checker) |checker| {
-                self.unloadLODWhereChunksLoaded(checker, checker_ctx.?);
-            }
+                if (needs_queue) {
+                    queued_count += 1;
 
-            // Safety: Check for NaN/Inf player position
-            if (!std.math.isFinite(player_pos.x) or !std.math.isFinite(player_pos.z)) return;
+                    // Reuse existing chunk or create new one
+                    const chunk = if (existing) |c| c else blk: {
+                        const c = try self.allocator.create(LODChunk);
+                        c.* = LODChunk.init(rx, rz, lod);
+                        try storage.put(key, c);
+                        break :blk c;
+                    };
 
-            const pc = worldToChunk(@as(i32, @intFromFloat(player_pos.x)), @as(i32, @intFromFloat(player_pos.z)));
-            self.player_cx = pc.chunk_x;
-            self.player_cz = pc.chunk_z;
+                    chunk.job_token = self.next_job_token;
+                    self.next_job_token += 1;
 
-            // Issue #119 Phase 4: Recenter classification cache if player moved far enough.
-            // This ensures LOD chunks have cache coverage for consistent biome/surface data.
-            const player_wx: i32 = @intFromFloat(player_pos.x);
-            const player_wz: i32 = @intFromFloat(player_pos.z);
-            _ = self.generator.maybeRecenterCache(player_wx, player_wz);
-
-            // Queue LOD regions that need loading (also queue on first frame)
-            // Priority: LOD3 first (fast, fills horizon), then LOD2, LOD1
-            // We iterate backwards from LODLevel.count-1 down to 1
-            var i: usize = LODLevel.count - 1;
-            while (i > 0) : (i -= 1) {
-                try self.queueLODRegions(@enumFromInt(@as(u3, @intCast(i))), player_velocity, chunk_checker, checker_ctx);
-            }
-
-            // Process state transitions
-            try self.processStateTransitions();
-
-            // Process uploads (limited per frame)
-            self.processUploads();
-
-            // Update stats
-            self.updateStats();
-
-            // Unload distant regions
-            try self.unloadDistantRegions();
-        }
-
-        /// Queue LOD regions that need generation
-        fn queueLODRegions(self: *Self, lod: LODLevel, velocity: Vec3, chunk_checker: ?ChunkChecker, checker_ctx: ?*anyopaque) !void {
-            const radii = self.config.getRadii();
-            const radius = radii[@intFromEnum(lod)];
-
-            // Skip LOD0 - handled by existing World system
-            if (lod == .lod0) return;
-
-            var queued_count: u32 = 0;
-
-            const scale: i32 = @intCast(lod.chunksPerSide());
-            const region_radius = @divFloor(radius, scale) + 1;
-
-            const player_rx = @divFloor(self.player_cx, scale);
-            const player_rz = @divFloor(self.player_cz, scale);
-
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            const storage = &self.regions[@intFromEnum(lod)];
-
-            // All LOD jobs go to LOD3 queue (worker pool processes from there)
-            // We encode the actual LOD level in the dist_sq high bits
-            const queue = self.gen_queues[LODLevel.count - 1];
-            const lod_bits: i32 = @as(i32, @intCast(@intFromEnum(lod))) << 28;
-
-            // Calculate velocity direction for priority
-            const vel_len = @sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
-            const has_velocity = vel_len > 0.1;
-            const vel_dx: f32 = if (has_velocity) velocity.x / vel_len else 0;
-            const vel_dz: f32 = if (has_velocity) velocity.z / vel_len else 0;
-
-            var rz = player_rz - region_radius;
-            while (rz <= player_rz + region_radius) : (rz += 1) {
-                var rx = player_rx - region_radius;
-                while (rx <= player_rx + region_radius) : (rx += 1) {
-                    // Check circular distance to avoid thrashing corner chunks
-                    const dx = rx - player_rx;
-                    const dz = rz - player_rz;
-                    if (@as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz) > @as(i64, region_radius) * @as(i64, region_radius)) continue;
-
-                    const key = LODRegionKey{ .rx = rx, .rz = rz, .lod = lod };
-
-                    // Check if region is covered by higher detail chunks
-                    if (chunk_checker) |checker| {
-                        // We use a temporary chunk to calculate bounds
-                        const temp_chunk = LODChunk.init(rx, rz, lod);
-                        if (self.areAllChunksLoaded(temp_chunk.worldBounds(), checker, checker_ctx.?)) {
-                            continue;
+                    // Calculate velocity-weighted priority
+                    // (dx, dz calculated above)
+                    const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
+                    // Scale priority to match chunk-distance units used by meshing jobs (which are prioritized by chunk dist)
+                    // This ensures generation doesn't starve meshing
+                    const priority_full = dist_sq * @as(i64, scale) * @as(i64, scale);
+                    var priority: i32 = @as(i32, @intCast(@min(priority_full, 0x0FFFFFFF)));
+                    if (has_velocity) {
+                        const fdx: f32 = @floatFromInt(dx);
+                        const fdz: f32 = @floatFromInt(dz);
+                        const dist = @sqrt(fdx * fdx + fdz * fdz);
+                        if (dist > 0.01) {
+                            const dot = (fdx * vel_dx + fdz * vel_dz) / dist;
+                            // Ahead = lower priority number, behind = higher
+                            const weight = 1.0 - dot * 0.5;
+                            priority = @intFromFloat(@as(f32, @floatFromInt(priority)) * weight);
                         }
                     }
 
-                    // Check if region exists and what state it's in
-                    const existing = storage.get(key);
-                    const needs_queue = if (existing) |chunk|
-                        // Re-queue if stuck in missing state
-                        chunk.state == .missing
-                    else
-                        // Queue if doesn't exist
-                        true;
+                    // Encode LOD level in high bits of dist_sq
+                    const encoded_priority = (priority & 0x0FFFFFFF) | lod_bits;
 
-                    if (needs_queue) {
-                        queued_count += 1;
-
-                        // Reuse existing chunk or create new one
-                        const chunk = if (existing) |c| c else blk: {
-                            const c = try self.allocator.create(LODChunk);
-                            c.* = LODChunk.init(rx, rz, lod);
-                            try storage.put(key, c);
-                            break :blk c;
-                        };
-
-                        chunk.job_token = self.next_job_token;
-                        self.next_job_token += 1;
-
-                        // Calculate velocity-weighted priority
-                        // (dx, dz calculated above)
-                        const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
-                        // Scale priority to match chunk-distance units used by meshing jobs (which are prioritized by chunk dist)
-                        // This ensures generation doesn't starve meshing
-                        const priority_full = dist_sq * @as(i64, scale) * @as(i64, scale);
-                        var priority: i32 = @as(i32, @intCast(@min(priority_full, 0x0FFFFFFF)));
-                        if (has_velocity) {
-                            const fdx: f32 = @floatFromInt(dx);
-                            const fdz: f32 = @floatFromInt(dz);
-                            const dist = @sqrt(fdx * fdx + fdz * fdz);
-                            if (dist > 0.01) {
-                                const dot = (fdx * vel_dx + fdz * vel_dz) / dist;
-                                // Ahead = lower priority number, behind = higher
-                                const weight = 1.0 - dot * 0.5;
-                                priority = @intFromFloat(@as(f32, @floatFromInt(priority)) * weight);
-                            }
-                        }
-
-                        // Encode LOD level in high bits of dist_sq
-                        const encoded_priority = (priority & 0x0FFFFFFF) | lod_bits;
-
-                        // Queue for generation
-                        try queue.push(.{
-                            .type = .chunk_generation,
-                            .dist_sq = encoded_priority,
-                            .data = .{
-                                .chunk = .{
-                                    .x = rx, // Using chunk coords for region coords
-                                    .z = rz,
-                                    .job_token = chunk.job_token,
-                                },
+                    // Queue for generation
+                    try queue.push(.{
+                        .type = .chunk_generation,
+                        .dist_sq = encoded_priority,
+                        .data = .{
+                            .chunk = .{
+                                .x = rx, // Using chunk coords for region coords
+                                .z = rz,
+                                .job_token = chunk.job_token,
                             },
-                        });
-                        chunk.state = .generating; // Mark as generating, not queued_for_generation
-                    }
-                }
-            }
-        }
-
-        /// Process state transitions (generated -> meshing -> ready)
-        fn processStateTransitions(self: *Self) !void {
-            // Use exclusive lock since we modify chunk state
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            for (1..LODLevel.count) |i| {
-                const lod = @as(LODLevel, @enumFromInt(@as(u3, @intCast(i))));
-                var iter = self.regions[i].iterator();
-                while (iter.next()) |entry| {
-                    const chunk = entry.value_ptr.*;
-                    if (chunk.state == .generated) {
-                        const scale = @as(i32, @intCast(lod.chunksPerSide()));
-                        const dx = chunk.region_x * scale - self.player_cx;
-                        const dz = chunk.region_z * scale - self.player_cz;
-                        const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
-                        const lod_bits = @as(i32, @intCast(i)) << 28;
-
-                        chunk.state = .meshing;
-                        try self.gen_queues[LODLevel.count - 1].push(.{
-                            .type = .chunk_meshing,
-                            // Encode LOD level in high bits of dist_sq
-                            .dist_sq = @as(i32, @truncate(dist_sq & 0x0FFFFFFF)) | lod_bits,
-                            .data = .{
-                                .chunk = .{
-                                    .x = chunk.region_x,
-                                    .z = chunk.region_z,
-                                    .job_token = chunk.job_token,
-                                },
-                            },
-                        });
-                    } else if (chunk.state == .mesh_ready) {
-                        chunk.state = .uploading;
-                        try self.upload_queues[i].push(chunk);
-                    }
-                }
-            }
-        }
-
-        /// Process GPU uploads (limited per frame)
-        fn processUploads(self: *Self) void {
-            // Use exclusive lock since we modify chunk state (chunk.state = .renderable)
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            const max_uploads = self.config.getMaxUploadsPerFrame();
-            var uploads: u32 = 0;
-
-            // Process from highest LOD down (furthest, should be ready first)
-            var i: usize = LODLevel.count - 1;
-            while (i > 0) : (i -= 1) {
-                while (!self.upload_queues[i].isEmpty() and uploads < max_uploads) {
-                    if (self.upload_queues[i].pop()) |chunk| {
-                        // Upload mesh to GPU
-                        const key = LODRegionKey{
-                            .rx = chunk.region_x,
-                            .rz = chunk.region_z,
-                            .lod = chunk.lod_level,
-                        };
-                        if (self.meshes[i].get(key)) |mesh| {
-                            mesh.upload(self.rhi) catch |err| {
-                                log.log.err("Failed to upload LOD{} mesh: {}", .{ i, err });
-                                continue;
-                            };
-                        }
-                        chunk.state = .renderable;
-                        uploads += 1;
-                    }
-                }
-            }
-        }
-
-        /// Unload regions that are too far from player
-        fn unloadDistantRegions(self: *Self) !void {
-            const radii = self.config.getRadii();
-            for (1..LODLevel.count) |i| {
-                try self.unloadDistantForLevel(@enumFromInt(@as(u3, @intCast(i))), radii[i]);
-            }
-        }
-
-        fn unloadDistantForLevel(self: *Self, lod: LODLevel, max_radius: i32) !void {
-            _ = max_radius; // Interface provides current radii
-            const radii = self.config.getRadii();
-            const lod_radius = radii[@intFromEnum(lod)];
-            const storage = &self.regions[@intFromEnum(lod)];
-
-            const scale: i32 = @intCast(lod.chunksPerSide());
-            const player_rx = @divFloor(self.player_cx, scale);
-            const player_rz = @divFloor(self.player_cz, scale);
-
-            // Use same +1 buffer as queuing to match radius exactly
-            const region_radius = @divFloor(lod_radius, scale) + 1;
-
-            var to_remove = std.ArrayListUnmanaged(LODRegionKey).empty;
-            defer to_remove.deinit(self.allocator);
-
-            // Hold lock for entire operation to prevent races with worker threads
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            var iter = storage.iterator();
-            while (iter.next()) |entry| {
-                const key = entry.key_ptr.*;
-                const chunk = entry.value_ptr.*;
-
-                const dx = key.rx - player_rx;
-                const dz = key.rz - player_rz;
-
-                const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
-                const rad_sq = @as(i64, region_radius) * @as(i64, region_radius);
-
-                if (dist_sq > rad_sq) {
-                    if (!chunk.isPinned() and
-                        chunk.state != .generating and
-                        chunk.state != .meshing and
-                        chunk.state != .uploading)
-                    {
-                        try to_remove.append(self.allocator, key);
-                    }
-                }
-            }
-
-            // Remove after iteration (still under lock)
-            if (to_remove.items.len > 0) {
-                for (to_remove.items) |key| {
-                    if (storage.get(key)) |chunk| {
-                        // Clean up mesh before removing chunk
-                        const meshes = &self.meshes[@intFromEnum(lod)];
-                        if (meshes.get(key)) |mesh| {
-                            // Push to deferred deletion queue instead of deleting immediately
-                            self.deletion_queue.append(self.allocator, mesh) catch {
-                                // Fallback if allocation fails: delete immediately (slow but safe)
-                                mesh.deinit(self.rhi);
-                                self.allocator.destroy(mesh);
-                            };
-                            _ = meshes.remove(key);
-                        }
-
-                        chunk.deinit(self.allocator);
-                        self.allocator.destroy(chunk);
-                        _ = storage.remove(key);
-                    }
-                }
-            }
-        }
-
-        /// Update statistics
-        fn updateStats(self: *Self) void {
-            self.stats.reset();
-            var mem_usage: usize = 0;
-
-            self.mutex.lockShared();
-            defer self.mutex.unlockShared();
-
-            for (0..LODLevel.count) |i| {
-                var iter = self.regions[i].iterator();
-                while (iter.next()) |entry| {
-                    const chunk = entry.value_ptr.*;
-                    self.stats.recordState(i, chunk.state);
-
-                    // Calculate actual memory usage for this chunk's data
-                    switch (chunk.data) {
-                        .simplified => |*s| {
-                            mem_usage += s.totalMemoryBytes();
                         },
-                        else => {},
-                    }
-                }
-
-                // Add mesh memory
-                var mesh_iter = self.meshes[i].iterator();
-                while (mesh_iter.next()) |entry| {
-                    mem_usage += entry.value_ptr.*.capacity * @sizeOf(Vertex);
+                    });
+                    chunk.state = .generating; // Mark as generating, not queued_for_generation
                 }
             }
-
-            self.stats.addMemory(mem_usage);
-            self.memory_used_bytes = mem_usage;
         }
+    }
 
-        /// Get current statistics
-        pub fn getStats(self: *Self) LODStats {
-            return self.stats;
-        }
+    /// Process state transitions (generated -> meshing -> ready)
+    fn processStateTransitions(self: *Self) !void {
+        // Use exclusive lock since we modify chunk state
+        self.mutex.lock();
+        defer self.mutex.unlock();
 
-        /// Pause all LOD generation
-        pub fn pause(self: *Self) void {
-            self.paused = true;
-            for (0..LODLevel.count) |i| {
-                self.gen_queues[i].setPaused(true);
-            }
-        }
+        for (1..LODLevel.count) |i| {
+            const lod = @as(LODLevel, @enumFromInt(@as(u3, @intCast(i))));
+            var iter = self.regions[i].iterator();
+            while (iter.next()) |entry| {
+                const chunk = entry.value_ptr.*;
+                if (chunk.state == .generated) {
+                    const scale = @as(i32, @intCast(lod.chunksPerSide()));
+                    const dx = chunk.region_x * scale - self.player_cx;
+                    const dz = chunk.region_z * scale - self.player_cz;
+                    const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
+                    const lod_bits = @as(i32, @intCast(i)) << 28;
 
-        /// Resume LOD generation
-        pub fn unpause(self: *Self) void {
-            self.paused = false;
-            for (0..LODLevel.count) |i| {
-                self.gen_queues[i].setPaused(false);
-            }
-        }
-
-        /// Get LOD level for a given chunk distance
-        pub fn getLODForDistance(self: *const Self, chunk_x: i32, chunk_z: i32) LODLevel {
-            const dx = chunk_x - self.player_cx;
-            const dz = chunk_z - self.player_cz;
-            const dist = @max(@abs(dx), @abs(dz));
-            return self.config.getLODForDistance(dist);
-        }
-
-        /// Check if a position is within LOD range
-        pub fn isInRange(self: *const Self, chunk_x: i32, chunk_z: i32) bool {
-            const dx = chunk_x - self.player_cx;
-            const dz = chunk_z - self.player_cz;
-            const dist = @max(@abs(dx), @abs(dz));
-            return self.config.isInRange(dist);
-        }
-
-        /// Render all LOD meshes
-        /// chunk_checker: Optional callback to check if regular chunks cover this region.
-        ///                If all chunks in region are loaded, the LOD region is skipped.
-        ///
-        /// NOTE: Acquires a shared lock on LODManager. LODRenderer must NOT attempt to acquire
-        /// a write lock on LODManager during rendering to avoid deadlocks.
-        pub fn render(self: *Self, view_proj: Mat4, camera_pos: Vec3, chunk_checker: ?ChunkChecker, checker_ctx: ?*anyopaque, use_frustum: bool) void {
-            self.mutex.lockShared();
-            defer self.mutex.unlockShared();
-
-            self.renderer.render(self, view_proj, camera_pos, chunk_checker, checker_ctx, use_frustum);
-        }
-
-        /// Free LOD meshes where all underlying chunks are loaded
-        pub fn unloadLODWhereChunksLoaded(self: *Self, checker: ChunkChecker, ctx: *anyopaque) void {
-            // Lock exclusive because we modify meshes and regions maps
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            for (1..LODLevel.count) |i| {
-                const storage = &self.regions[i];
-                const meshes = &self.meshes[i];
-
-                var to_remove = std.ArrayListUnmanaged(LODRegionKey).empty;
-                defer to_remove.deinit(self.allocator);
-
-                var iter = meshes.iterator();
-                while (iter.next()) |entry| {
-                    if (storage.get(entry.key_ptr.*)) |chunk| {
-                        // Don't unload if being processed (pinned) or not ready
-                        if (chunk.isPinned() or chunk.state == .generating or chunk.state == .meshing or chunk.state == .uploading) continue;
-
-                        const bounds = chunk.worldBounds();
-                        if (self.areAllChunksLoaded(bounds, checker, ctx)) {
-                            to_remove.append(self.allocator, entry.key_ptr.*) catch {};
-                        }
-                    }
+                    chunk.state = .meshing;
+                    try self.gen_queues[LODLevel.count - 1].push(.{
+                        .type = .chunk_meshing,
+                        // Encode LOD level in high bits of dist_sq
+                        .dist_sq = @as(i32, @truncate(dist_sq & 0x0FFFFFFF)) | lod_bits,
+                        .data = .{
+                            .chunk = .{
+                                .x = chunk.region_x,
+                                .z = chunk.region_z,
+                                .job_token = chunk.job_token,
+                            },
+                        },
+                    });
+                } else if (chunk.state == .mesh_ready) {
+                    chunk.state = .uploading;
+                    try self.upload_queues[i].push(chunk);
                 }
+            }
+        }
+    }
 
-                for (to_remove.items) |rem_key| {
-                    if (meshes.fetchRemove(rem_key)) |mesh_entry| {
-                        // Queue for deferred deletion to avoid waitIdle stutter
-                        self.deletion_queue.append(self.allocator, mesh_entry.value) catch {
-                            mesh_entry.value.deinit(self.rhi);
-                            self.allocator.destroy(mesh_entry.value);
+    /// Process GPU uploads (limited per frame)
+    fn processUploads(self: *Self) void {
+        // Use exclusive lock since we modify chunk state (chunk.state = .renderable)
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const max_uploads = self.config.getMaxUploadsPerFrame();
+        var uploads: u32 = 0;
+
+        // Process from highest LOD down (furthest, should be ready first)
+        var i: usize = LODLevel.count - 1;
+        while (i > 0) : (i -= 1) {
+            while (!self.upload_queues[i].isEmpty() and uploads < max_uploads) {
+                if (self.upload_queues[i].pop()) |chunk| {
+                    // Upload mesh to GPU via bridge callback
+                    const key = LODRegionKey{
+                        .rx = chunk.region_x,
+                        .rz = chunk.region_z,
+                        .lod = chunk.lod_level,
+                    };
+                    if (self.meshes[i].get(key)) |mesh| {
+                        self.gpu_bridge.upload(mesh) catch |err| {
+                            log.log.warn("LOD{} mesh upload failed (will retry): {}", .{ i, err });
+                            self.stats.upload_failures += 1;
+                            chunk.state = .mesh_ready; // Revert to allow retry
+                            continue;
                         };
                     }
-                    if (storage.fetchRemove(rem_key)) |chunk_entry| {
-                        chunk_entry.value.deinit(self.allocator);
-                        self.allocator.destroy(chunk_entry.value);
-                    }
+                    chunk.state = .renderable;
+                    uploads += 1;
                 }
             }
         }
+    }
 
-        /// Check if all chunks within the given world bounds are loaded and renderable
-        pub fn areAllChunksLoaded(self: *Self, bounds: LODChunk.WorldBounds, checker: ChunkChecker, ctx: *anyopaque) bool {
-            _ = self;
-            // Convert world bounds to chunk coordinates
-            const min_cx = @divFloor(bounds.min_x, CHUNK_SIZE_X);
-            const min_cz = @divFloor(bounds.min_z, CHUNK_SIZE_X);
-            const max_cx = @divFloor(bounds.max_x - 1, CHUNK_SIZE_X); // -1 because max is exclusive
-            const max_cz = @divFloor(bounds.max_z - 1, CHUNK_SIZE_X);
-
-            // Check every chunk in the region
-            var cz = min_cz;
-            while (cz <= max_cz) : (cz += 1) {
-                var cx = min_cx;
-                while (cx <= max_cx) : (cx += 1) {
-                    if (!checker(cx, cz, ctx)) {
-                        return false; // At least one chunk is not loaded
-                    }
-                }
-            }
-            return true; // All chunks are loaded
+    /// Unload regions that are too far from player
+    fn unloadDistantRegions(self: *Self) !void {
+        const radii = self.config.getRadii();
+        for (1..LODLevel.count) |i| {
+            try self.unloadDistantForLevel(@enumFromInt(@as(u3, @intCast(i))), radii[i]);
         }
+    }
 
-        /// Get or create mesh for a LOD region
-        fn getOrCreateMesh(self: *Self, key: LODRegionKey) !*LODMesh {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+    fn unloadDistantForLevel(self: *Self, lod: LODLevel, max_radius: i32) !void {
+        _ = max_radius; // Interface provides current radii
+        const radii = self.config.getRadii();
+        const lod_radius = radii[@intFromEnum(lod)];
+        const storage = &self.regions[@intFromEnum(lod)];
 
-            const lod_idx = @intFromEnum(key.lod);
-            if (lod_idx == 0 or lod_idx >= LODLevel.count) return error.InvalidLODLevel;
+        const scale: i32 = @intCast(lod.chunksPerSide());
+        const player_rx = @divFloor(self.player_cx, scale);
+        const player_rz = @divFloor(self.player_cz, scale);
 
-            const meshes = &self.meshes[lod_idx];
+        // Use same +1 buffer as queuing to match radius exactly
+        const region_radius = @divFloor(lod_radius, scale) + 1;
 
-            if (meshes.get(key)) |mesh| {
-                return mesh;
-            }
+        var to_remove = std.ArrayListUnmanaged(LODRegionKey).empty;
+        defer to_remove.deinit(self.allocator);
 
-            const mesh = try self.allocator.create(LODMesh);
-            mesh.* = LODMesh.init(self.allocator, key.lod);
-            try meshes.put(key, mesh);
-            return mesh;
-        }
+        // Hold lock for entire operation to prevent races with worker threads
+        self.mutex.lock();
+        defer self.mutex.unlock();
 
-        /// Build mesh for an LOD chunk (called after generation completes)
-        fn buildMeshForChunk(self: *Self, chunk: *LODChunk) !void {
-            const key = LODRegionKey{
-                .rx = chunk.region_x,
-                .rz = chunk.region_z,
-                .lod = chunk.lod_level,
-            };
+        var iter = storage.iterator();
+        while (iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const chunk = entry.value_ptr.*;
 
-            const mesh = try self.getOrCreateMesh(key);
-
-            // Access chunk.data under shared lock - the data is read-only during meshing
-            // and the chunk is pinned, so we just need to ensure visibility
-            self.mutex.lockShared();
-            defer self.mutex.unlockShared();
-
-            switch (chunk.data) {
-                .simplified => |*data| {
-                    const bounds = chunk.worldBounds();
-                    try mesh.buildFromSimplifiedData(data, bounds.min_x, bounds.min_z);
-                },
-                .full => {
-                    // LOD0 meshes handled by World, not LODManager
-                },
-                .empty => {
-                    // No data to build mesh from
-                },
-            }
-        }
-
-        /// Worker pool callback for LOD tasks (generation and meshing)
-        fn processLODJob(ctx: *anyopaque, job: Job) void {
-            const self: *Self = @ptrCast(@alignCast(ctx));
-
-            // Determine which LOD level this job is for based on encoded priority
-            const lod_level: LODLevel = @enumFromInt(@as(u3, @intCast((job.dist_sq >> 28) & 0x7)));
-            const key = LODRegionKey{
-                .rx = job.data.chunk.x,
-                .rz = job.data.chunk.z,
-                .lod = lod_level,
-            };
-
-            const lod_idx = @intFromEnum(lod_level);
-            if (lod_idx == 0) {
-                return;
-            }
-
-            // Phase 1: Acquire lock, validate job, pin chunk
-            self.mutex.lock();
-            const storage = &self.regions[lod_idx];
-
-            const chunk = storage.get(key) orelse {
-                self.mutex.unlock();
-                return;
-            };
-
-            // Stale job check (too far from player)
-            const scale: i32 = @intCast(lod_level.chunksPerSide());
-            const player_rx = @divFloor(self.player_cx, scale);
-            const player_rz = @divFloor(self.player_cz, scale);
-            const dx = job.data.chunk.x - player_rx;
-            const dz = job.data.chunk.z - player_rz;
-            const radii = self.config.getRadii();
-            const radius = radii[lod_idx];
-            const region_radius = @divFloor(radius, scale) + 2;
+            const dx = key.rx - player_rx;
+            const dz = key.rz - player_rz;
 
             const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
             const rad_sq = @as(i64, region_radius) * @as(i64, region_radius);
 
             if (dist_sq > rad_sq) {
-                if (chunk.state == .generating or chunk.state == .meshing) {
-                    chunk.state = .missing;
+                if (!chunk.isPinned() and
+                    chunk.state != .generating and
+                    chunk.state != .meshing and
+                    chunk.state != .uploading)
+                {
+                    try to_remove.append(self.allocator, key);
                 }
-                self.mutex.unlock();
-                return;
             }
+        }
 
-            // Skip if token mismatch
-            if (chunk.job_token != job.data.chunk.job_token) {
-                self.mutex.unlock();
-                return;
-            }
-
-            // Check state and capture job type before releasing lock
-            const current_state = chunk.state;
-            const job_type = job.type;
-
-            // Validate state matches expected for job type
-            const valid_state = switch (job_type) {
-                .chunk_generation => current_state == .generating,
-                .chunk_meshing => current_state == .meshing,
-                else => false,
-            };
-
-            if (!valid_state) {
-                self.mutex.unlock();
-                return;
-            }
-
-            // Check if we need to generate data (while still holding lock)
-            const needs_data_init = (job_type == .chunk_generation and chunk.data != .simplified);
-
-            // Pin chunk during operation (prevents unload)
-            chunk.pin();
-            self.mutex.unlock();
-
-            // Phase 2: Do expensive work without lock
-            var success = false;
-            var new_state: LODState = .missing;
-
-            switch (job_type) {
-                .chunk_generation => {
-                    // Initialize simplified data if needed
-                    if (needs_data_init) {
-                        var data = LODSimplifiedData.init(self.allocator, lod_level) catch {
-                            new_state = .missing;
-                            chunk.unpin();
-                            // Acquire lock briefly to update state
-                            self.mutex.lock();
-                            chunk.state = new_state;
-                            self.mutex.unlock();
-                            return;
+        // Remove after iteration (still under lock)
+        if (to_remove.items.len > 0) {
+            for (to_remove.items) |key| {
+                if (storage.get(key)) |chunk| {
+                    // Clean up mesh before removing chunk
+                    const meshes = &self.meshes[@intFromEnum(lod)];
+                    if (meshes.get(key)) |mesh| {
+                        // Push to deferred deletion queue instead of deleting immediately
+                        self.deletion_queue.append(self.allocator, mesh) catch {
+                            // Fallback if allocation fails: delete immediately (slow but safe)
+                            self.gpu_bridge.destroy(mesh);
+                            self.allocator.destroy(mesh);
                         };
-
-                        // Generate heightmap data (expensive, done without lock)
-                        self.generator.generateHeightmapOnly(&data, chunk.region_x, chunk.region_z, lod_level);
-
-                        // Acquire lock to update chunk data
-                        self.mutex.lock();
-                        chunk.data = .{ .simplified = data };
-                        self.mutex.unlock();
+                        _ = meshes.remove(key);
                     }
-                    success = true;
-                    new_state = .generated;
-                },
-                .chunk_meshing => {
-                    // Build mesh (expensive, done without lock)
-                    // Note: buildMeshForChunk -> getOrCreateMesh acquires its own lock
-                    self.buildMeshForChunk(chunk) catch |err| {
-                        log.log.err("Failed to build LOD{} async mesh: {}", .{ @intFromEnum(lod_level), err });
-                        new_state = .generated; // Retry later
+
+                    chunk.deinit(self.allocator);
+                    self.allocator.destroy(chunk);
+                    _ = storage.remove(key);
+                }
+            }
+        }
+    }
+
+    /// Update statistics
+    fn updateStats(self: *Self) void {
+        self.stats.reset();
+        var mem_usage: usize = 0;
+
+        self.mutex.lockShared();
+        defer self.mutex.unlockShared();
+
+        for (0..LODLevel.count) |i| {
+            var iter = self.regions[i].iterator();
+            while (iter.next()) |entry| {
+                const chunk = entry.value_ptr.*;
+                self.stats.recordState(i, chunk.state);
+
+                // Calculate actual memory usage for this chunk's data
+                switch (chunk.data) {
+                    .simplified => |*s| {
+                        mem_usage += s.totalMemoryBytes();
+                    },
+                    else => {},
+                }
+            }
+
+            // Add mesh memory
+            var mesh_iter = self.meshes[i].iterator();
+            while (mesh_iter.next()) |entry| {
+                mem_usage += entry.value_ptr.*.capacity * @sizeOf(Vertex);
+            }
+        }
+
+        self.stats.addMemory(mem_usage);
+        self.memory_used_bytes = mem_usage;
+    }
+
+    /// Get current statistics
+    pub fn getStats(self: *Self) LODStats {
+        return self.stats;
+    }
+
+    /// Pause all LOD generation
+    pub fn pause(self: *Self) void {
+        self.paused = true;
+        for (0..LODLevel.count) |i| {
+            self.gen_queues[i].setPaused(true);
+        }
+    }
+
+    /// Resume LOD generation
+    pub fn unpause(self: *Self) void {
+        self.paused = false;
+        for (0..LODLevel.count) |i| {
+            self.gen_queues[i].setPaused(false);
+        }
+    }
+
+    /// Get LOD level for a given chunk distance
+    pub fn getLODForDistance(self: *const Self, chunk_x: i32, chunk_z: i32) LODLevel {
+        const dx = chunk_x - self.player_cx;
+        const dz = chunk_z - self.player_cz;
+        const dist = @max(@abs(dx), @abs(dz));
+        return self.config.getLODForDistance(dist);
+    }
+
+    /// Check if a position is within LOD range
+    pub fn isInRange(self: *const Self, chunk_x: i32, chunk_z: i32) bool {
+        const dx = chunk_x - self.player_cx;
+        const dz = chunk_z - self.player_cz;
+        const dist = @max(@abs(dx), @abs(dz));
+        return self.config.isInRange(dist);
+    }
+
+    /// Render all LOD meshes
+    /// chunk_checker: Optional callback to check if regular chunks cover this region.
+    ///                If all chunks in region are loaded, the LOD region is skipped.
+    ///
+    /// NOTE: Acquires a shared lock on LODManager. LODRenderer must NOT attempt to acquire
+    /// a write lock on LODManager during rendering to avoid deadlocks.
+    pub fn render(self: *Self, view_proj: Mat4, camera_pos: Vec3, chunk_checker: ?ChunkChecker, checker_ctx: ?*anyopaque, use_frustum: bool) void {
+        self.mutex.lockShared();
+        defer self.mutex.unlockShared();
+
+        self.renderer.render(&self.meshes, &self.regions, self.config, view_proj, camera_pos, chunk_checker, checker_ctx, use_frustum);
+    }
+
+    /// Free LOD meshes where all underlying chunks are loaded
+    pub fn unloadLODWhereChunksLoaded(self: *Self, checker: ChunkChecker, ctx: *anyopaque) void {
+        // Lock exclusive because we modify meshes and regions maps
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        for (1..LODLevel.count) |i| {
+            const storage = &self.regions[i];
+            const meshes = &self.meshes[i];
+
+            var to_remove = std.ArrayListUnmanaged(LODRegionKey).empty;
+            defer to_remove.deinit(self.allocator);
+
+            var iter = meshes.iterator();
+            while (iter.next()) |entry| {
+                if (storage.get(entry.key_ptr.*)) |chunk| {
+                    // Don't unload if being processed (pinned) or not ready
+                    if (chunk.isPinned() or chunk.state == .generating or chunk.state == .meshing or chunk.state == .uploading) continue;
+
+                    const bounds = chunk.worldBounds();
+                    if (self.areAllChunksLoaded(bounds, checker, ctx)) {
+                        to_remove.append(self.allocator, entry.key_ptr.*) catch {};
+                    }
+                }
+            }
+
+            for (to_remove.items) |rem_key| {
+                if (meshes.fetchRemove(rem_key)) |mesh_entry| {
+                    // Queue for deferred deletion to avoid waitIdle stutter
+                    self.deletion_queue.append(self.allocator, mesh_entry.value) catch {
+                        self.gpu_bridge.destroy(mesh_entry.value);
+                        self.allocator.destroy(mesh_entry.value);
+                    };
+                }
+                if (storage.fetchRemove(rem_key)) |chunk_entry| {
+                    chunk_entry.value.deinit(self.allocator);
+                    self.allocator.destroy(chunk_entry.value);
+                }
+            }
+        }
+    }
+
+    /// Check if all chunks within the given world bounds are loaded and renderable
+    pub fn areAllChunksLoaded(self: *Self, bounds: LODChunk.WorldBounds, checker: ChunkChecker, ctx: *anyopaque) bool {
+        _ = self;
+        // Convert world bounds to chunk coordinates
+        const min_cx = @divFloor(bounds.min_x, CHUNK_SIZE_X);
+        const min_cz = @divFloor(bounds.min_z, CHUNK_SIZE_X);
+        const max_cx = @divFloor(bounds.max_x - 1, CHUNK_SIZE_X); // -1 because max is exclusive
+        const max_cz = @divFloor(bounds.max_z - 1, CHUNK_SIZE_X);
+
+        // Check every chunk in the region
+        var cz = min_cz;
+        while (cz <= max_cz) : (cz += 1) {
+            var cx = min_cx;
+            while (cx <= max_cx) : (cx += 1) {
+                if (!checker(cx, cz, ctx)) {
+                    return false; // At least one chunk is not loaded
+                }
+            }
+        }
+        return true; // All chunks are loaded
+    }
+
+    /// Get or create mesh for a LOD region
+    fn getOrCreateMesh(self: *Self, key: LODRegionKey) !*LODMesh {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const lod_idx = @intFromEnum(key.lod);
+        if (lod_idx == 0 or lod_idx >= LODLevel.count) return error.InvalidLODLevel;
+
+        const meshes = &self.meshes[lod_idx];
+
+        if (meshes.get(key)) |mesh| {
+            return mesh;
+        }
+
+        const mesh = try self.allocator.create(LODMesh);
+        mesh.* = LODMesh.init(self.allocator, key.lod);
+        try meshes.put(key, mesh);
+        return mesh;
+    }
+
+    /// Build mesh for an LOD chunk (called after generation completes)
+    fn buildMeshForChunk(self: *Self, chunk: *LODChunk) !void {
+        const key = LODRegionKey{
+            .rx = chunk.region_x,
+            .rz = chunk.region_z,
+            .lod = chunk.lod_level,
+        };
+
+        const mesh = try self.getOrCreateMesh(key);
+
+        // Access chunk.data under shared lock - the data is read-only during meshing
+        // and the chunk is pinned, so we just need to ensure visibility
+        self.mutex.lockShared();
+        defer self.mutex.unlockShared();
+
+        switch (chunk.data) {
+            .simplified => |*data| {
+                const bounds = chunk.worldBounds();
+                try mesh.buildFromSimplifiedData(data, bounds.min_x, bounds.min_z);
+            },
+            .full => {
+                // LOD0 meshes handled by World, not LODManager
+            },
+            .empty => {
+                // No data to build mesh from
+            },
+        }
+    }
+
+    /// Worker pool callback for LOD tasks (generation and meshing)
+    fn processLODJob(ctx: *anyopaque, job: Job) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        // Determine which LOD level this job is for based on encoded priority
+        const lod_level: LODLevel = @enumFromInt(@as(u3, @intCast((job.dist_sq >> 28) & 0x7)));
+        const key = LODRegionKey{
+            .rx = job.data.chunk.x,
+            .rz = job.data.chunk.z,
+            .lod = lod_level,
+        };
+
+        const lod_idx = @intFromEnum(lod_level);
+        if (lod_idx == 0) {
+            return;
+        }
+
+        // Phase 1: Acquire lock, validate job, pin chunk
+        self.mutex.lock();
+        const storage = &self.regions[lod_idx];
+
+        const chunk = storage.get(key) orelse {
+            self.mutex.unlock();
+            return;
+        };
+
+        // Stale job check (too far from player)
+        const scale: i32 = @intCast(lod_level.chunksPerSide());
+        const player_rx = @divFloor(self.player_cx, scale);
+        const player_rz = @divFloor(self.player_cz, scale);
+        const dx = job.data.chunk.x - player_rx;
+        const dz = job.data.chunk.z - player_rz;
+        const radii = self.config.getRadii();
+        const radius = radii[lod_idx];
+        const region_radius = @divFloor(radius, scale) + 2;
+
+        const dist_sq = @as(i64, dx) * @as(i64, dx) + @as(i64, dz) * @as(i64, dz);
+        const rad_sq = @as(i64, region_radius) * @as(i64, region_radius);
+
+        if (dist_sq > rad_sq) {
+            if (chunk.state == .generating or chunk.state == .meshing) {
+                chunk.state = .missing;
+            }
+            self.mutex.unlock();
+            return;
+        }
+
+        // Skip if token mismatch
+        if (chunk.job_token != job.data.chunk.job_token) {
+            self.mutex.unlock();
+            return;
+        }
+
+        // Check state and capture job type before releasing lock
+        const current_state = chunk.state;
+        const job_type = job.type;
+
+        // Validate state matches expected for job type
+        const valid_state = switch (job_type) {
+            .chunk_generation => current_state == .generating,
+            .chunk_meshing => current_state == .meshing,
+            else => false,
+        };
+
+        if (!valid_state) {
+            self.mutex.unlock();
+            return;
+        }
+
+        // Check if we need to generate data (while still holding lock)
+        const needs_data_init = (job_type == .chunk_generation and chunk.data != .simplified);
+
+        // Pin chunk during operation (prevents unload)
+        chunk.pin();
+        self.mutex.unlock();
+
+        // Phase 2: Do expensive work without lock
+        var success = false;
+        var new_state: LODState = .missing;
+
+        switch (job_type) {
+            .chunk_generation => {
+                // Initialize simplified data if needed
+                if (needs_data_init) {
+                    var data = LODSimplifiedData.init(self.allocator, lod_level) catch {
+                        new_state = .missing;
                         chunk.unpin();
                         // Acquire lock briefly to update state
                         self.mutex.lock();
@@ -944,55 +944,58 @@ pub fn LODManager(comptime RHI: type) type {
                         self.mutex.unlock();
                         return;
                     };
-                    success = true;
-                    new_state = .mesh_ready;
-                },
-                else => unreachable,
-            }
 
-            chunk.unpin();
+                    // Generate heightmap data (expensive, done without lock)
+                    self.generator.generateHeightmapOnly(&data, chunk.region_x, chunk.region_z, lod_level);
 
-            // Phase 3: Acquire lock briefly to update state
-            if (success) {
-                self.mutex.lock();
-                // Re-verify token hasn't changed while we were working
-                if (chunk.job_token == job.data.chunk.job_token) {
-                    chunk.state = new_state;
+                    // Acquire lock to update chunk data
+                    self.mutex.lock();
+                    chunk.data = .{ .simplified = data };
+                    self.mutex.unlock();
                 }
-                self.mutex.unlock();
-            }
+                success = true;
+                new_state = .generated;
+            },
+            .chunk_meshing => {
+                // Build mesh (expensive, done without lock)
+                // Note: buildMeshForChunk -> getOrCreateMesh acquires its own lock
+                self.buildMeshForChunk(chunk) catch |err| {
+                    log.log.err("Failed to build LOD{} async mesh: {}", .{ @intFromEnum(lod_level), err });
+                    new_state = .generated; // Retry later
+                    chunk.unpin();
+                    // Acquire lock briefly to update state
+                    self.mutex.lock();
+                    chunk.state = new_state;
+                    self.mutex.unlock();
+                    return;
+                };
+                success = true;
+                new_state = .mesh_ready;
+            },
+            else => unreachable,
         }
-    };
-}
+
+        chunk.unpin();
+
+        // Phase 3: Acquire lock briefly to update state
+        if (success) {
+            self.mutex.lock();
+            // Re-verify token hasn't changed while we were working
+            if (chunk.job_token == job.data.chunk.job_token) {
+                chunk.state = new_state;
+            }
+            self.mutex.unlock();
+        }
+    }
+};
 
 // Tests
 test "LODManager initialization" {
     const allocator = std.testing.allocator;
 
-    const MockRHIState = struct {
+    const MockState = struct {
         buffer_created: bool = false,
         buffer_destroyed: bool = false,
-    };
-
-    // Mock RHI for testing
-    const MockRHI = struct {
-        state: *MockRHIState,
-
-        pub fn createBuffer(self: @This(), _: usize, _: anytype) !u32 {
-            self.state.buffer_created = true;
-            return 1;
-        }
-        pub fn destroyBuffer(self: @This(), _: u32) void {
-            self.state.buffer_destroyed = true;
-        }
-        pub fn getFrameIndex(_: @This()) usize {
-            return 0;
-        }
-        // Needed by LODManager
-        pub fn waitIdle(_: @This()) void {}
-        // Needed by LODRenderer
-        pub fn setModelMatrix(_: @This(), _: Mat4, _: Vec3, _: f32) void {}
-        pub fn draw(_: @This(), _: u32, _: u32, _: anytype) void {}
     };
 
     const MockGenerator = struct {
@@ -1035,15 +1038,36 @@ test "LODManager initialization" {
         .radii = .{ 8, 16, 32, 64 },
     };
 
-    // Test that we can instantiate the generic manager with MockRHI
-    var mock_state = MockRHIState{};
-    const mock_rhi = MockRHI{ .state = &mock_state };
+    // Create mock GPU bridge
+    var mock_state = MockState{};
+    const mock_bridge = LODGPUBridge{
+        .on_upload = struct {
+            fn f(_: *LODMesh, _: *anyopaque) rhi_types.RhiError!void {}
+        }.f,
+        .on_destroy = struct {
+            fn f(_: *LODMesh, ctx: *anyopaque) void {
+                const state: *MockState = @ptrCast(@alignCast(ctx));
+                state.buffer_destroyed = true;
+            }
+        }.f,
+        .on_wait_idle = struct {
+            fn f(_: *anyopaque) void {}
+        }.f,
+        .ctx = @ptrCast(&mock_state),
+    };
 
-    const Manager = LODManager(MockRHI);
-    var mgr = try Manager.init(allocator, config.interface(), mock_rhi, mock_gen);
+    // Create mock render interface
+    const mock_render = LODRenderInterface{
+        .render_fn = struct {
+            fn f(_: *anyopaque, _: *const [LODLevel.count]MeshMap, _: *const [LODLevel.count]RegionMap, _: ILODConfig, _: Mat4, _: Vec3, _: ?LODManager.ChunkChecker, _: ?*anyopaque, _: bool) void {}
+        }.f,
+        .deinit_fn = struct {
+            fn f(_: *anyopaque) void {}
+        }.f,
+        .ptr = @ptrCast(&mock_state),
+    };
 
-    // Verify init called createBuffer (via LODRenderer)
-    try std.testing.expect(mock_state.buffer_created);
+    var mgr = try LODManager.init(allocator, config.interface(), mock_bridge, mock_render, mock_gen);
 
     // Verify initial state
     const stats = mgr.getStats();
@@ -1052,8 +1076,8 @@ test "LODManager initialization" {
 
     mgr.deinit();
 
-    // Verify deinit called destroyBuffer
-    try std.testing.expect(mock_state.buffer_destroyed);
+    // NOTE: LODManager does NOT call renderer.deinit() - renderer lifetime is
+    // owned by the caller (World). This is tested in the integration test below.
 
     // Check config values
     try std.testing.expectEqual(LODLevel.lod0, config.getLODForDistance(5));
@@ -1064,21 +1088,6 @@ test "LODManager initialization" {
 
 test "LODManager end-to-end covered cleanup" {
     const allocator = std.testing.allocator;
-
-    // Mock setup
-    const MockRHI = struct {
-        pub fn createBuffer(_: @This(), _: usize, _: anytype) !u32 {
-            return 1;
-        }
-        pub fn destroyBuffer(_: @This(), _: u32) void {}
-        pub fn uploadBuffer(_: @This(), _: u32, _: []const u8) !void {}
-        pub fn getFrameIndex(_: @This()) usize {
-            return 0;
-        }
-        pub fn waitIdle(_: @This()) void {}
-        pub fn setModelMatrix(_: @This(), _: Mat4, _: Vec3, _: f32) void {}
-        pub fn draw(_: @This(), _: u32, _: u32, _: anytype) void {}
-    };
 
     const MockGenerator = struct {
         fn generate(_: *anyopaque, _: *Chunk, _: ?*const bool) void {}
@@ -1119,8 +1128,33 @@ test "LODManager end-to-end covered cleanup" {
         .radii = .{ 2, 4, 8, 16 },
     };
 
-    const Manager = LODManager(MockRHI);
-    var mgr = try Manager.init(allocator, config.interface(), .{}, mock_gen);
+    // Create mock GPU bridge (no-op). Use a real pointer to satisfy debug assertions.
+    var noop_ctx: u8 = 0;
+    const mock_bridge = LODGPUBridge{
+        .on_upload = struct {
+            fn f(_: *LODMesh, _: *anyopaque) rhi_types.RhiError!void {}
+        }.f,
+        .on_destroy = struct {
+            fn f(_: *LODMesh, _: *anyopaque) void {}
+        }.f,
+        .on_wait_idle = struct {
+            fn f(_: *anyopaque) void {}
+        }.f,
+        .ctx = @ptrCast(&noop_ctx),
+    };
+
+    // Create mock render interface (no-op). Use a real pointer.
+    const mock_render = LODRenderInterface{
+        .render_fn = struct {
+            fn f(_: *anyopaque, _: *const [LODLevel.count]MeshMap, _: *const [LODLevel.count]RegionMap, _: ILODConfig, _: Mat4, _: Vec3, _: ?LODManager.ChunkChecker, _: ?*anyopaque, _: bool) void {}
+        }.f,
+        .deinit_fn = struct {
+            fn f(_: *anyopaque) void {}
+        }.f,
+        .ptr = @ptrCast(&noop_ctx),
+    };
+
+    var mgr = try LODManager.init(allocator, config.interface(), mock_bridge, mock_render, mock_gen);
     defer mgr.deinit();
 
     // 1. Initial position at origin

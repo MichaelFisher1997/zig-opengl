@@ -1,0 +1,117 @@
+#version 450
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+// Source SH grids (read)
+layout(set = 0, binding = 0, rgba32f) uniform readonly image3D src_r;
+layout(set = 0, binding = 1, rgba32f) uniform readonly image3D src_g;
+layout(set = 0, binding = 2, rgba32f) uniform readonly image3D src_b;
+
+// Destination SH grids (write)
+layout(set = 0, binding = 3, rgba32f) uniform writeonly image3D dst_r;
+layout(set = 0, binding = 4, rgba32f) uniform writeonly image3D dst_g;
+layout(set = 0, binding = 5, rgba32f) uniform writeonly image3D dst_b;
+
+// Occlusion grid
+layout(set = 0, binding = 6) readonly buffer OcclusionGrid {
+    uint data[];
+} occlusion;
+
+layout(push_constant) uniform PropPush {
+    uint grid_size;
+    uint _pad0[3];
+    vec4 propagation;
+} push_data;
+
+uint flatIndex(ivec3 cell, int gridSize) {
+    return uint(cell.x) + uint(cell.y) * uint(gridSize) + uint(cell.z) * uint(gridSize) * uint(gridSize);
+}
+
+// SH L1 constants
+const float SH_C0 = 0.282095;
+const float SH_C1 = 0.488603;
+
+// Evaluate SH in a given direction to get the scalar irradiance contribution
+float evaluateSH(vec4 sh, vec3 dir) {
+    return max(0.0, sh.x * SH_C0 + sh.y * SH_C1 * dir.x + sh.z * SH_C1 * dir.y + sh.w * SH_C1 * dir.z);
+}
+
+// Project a scalar value in a given direction into SH coefficients
+vec4 projectSH(float value, vec3 dir) {
+    return vec4(value * SH_C0, value * SH_C1 * dir.x, value * SH_C1 * dir.y, value * SH_C1 * dir.z);
+}
+
+void main() {
+    int gridSize = int(push_data.grid_size);
+    ivec3 cell = ivec3(gl_GlobalInvocationID.xyz);
+    if (any(greaterThanEqual(cell, ivec3(gridSize)))) {
+        return;
+    }
+
+    // If current cell is opaque, zero out
+    uint selfOcc = occlusion.data[flatIndex(cell, gridSize)];
+    if (selfOcc != 0u) {
+        imageStore(dst_r, cell, vec4(0.0));
+        imageStore(dst_g, cell, vec4(0.0));
+        imageStore(dst_b, cell, vec4(0.0));
+        return;
+    }
+
+    // Center retention
+    float retention = push_data.propagation.y;
+    vec4 center_r = imageLoad(src_r, cell) * retention;
+    vec4 center_g = imageLoad(src_g, cell) * retention;
+    vec4 center_b = imageLoad(src_b, cell) * retention;
+
+    vec4 accum_r = center_r;
+    vec4 accum_g = center_g;
+    vec4 accum_b = center_b;
+
+    float f = push_data.propagation.x;
+
+    // 6-connected neighbor propagation with SH directional transfer
+    // For each face, evaluate neighbor SH in the transfer direction and re-project
+    ivec3 offsets[6] = ivec3[6](
+        ivec3(-1, 0, 0), ivec3(1, 0, 0),
+        ivec3(0, -1, 0), ivec3(0, 1, 0),
+        ivec3(0, 0, -1), ivec3(0, 0, 1)
+    );
+    // Direction from neighbor to current cell (transfer direction)
+    vec3 dirs[6] = vec3[6](
+        vec3( 1, 0, 0), vec3(-1, 0, 0),
+        vec3( 0, 1, 0), vec3( 0,-1, 0),
+        vec3( 0, 0, 1), vec3( 0, 0,-1)
+    );
+
+    for (int i = 0; i < 6; i++) {
+        ivec3 n = cell + offsets[i];
+        if (any(lessThan(n, ivec3(0))) || any(greaterThanEqual(n, ivec3(gridSize)))) {
+            continue;
+        }
+        uint nOcc = occlusion.data[flatIndex(n, gridSize)];
+        if (nOcc != 0u) {
+            continue;
+        }
+
+        vec3 transferDir = dirs[i];
+
+        // Load neighbor SH coefficients
+        vec4 n_r = imageLoad(src_r, n);
+        vec4 n_g = imageLoad(src_g, n);
+        vec4 n_b = imageLoad(src_b, n);
+
+        // Evaluate how much light the neighbor sends in the transfer direction
+        float eval_r = evaluateSH(n_r, transferDir);
+        float eval_g = evaluateSH(n_g, transferDir);
+        float eval_b = evaluateSH(n_b, transferDir);
+
+        // Re-project into SH at current cell using the same direction
+        accum_r += projectSH(eval_r, transferDir) * f;
+        accum_g += projectSH(eval_g, transferDir) * f;
+        accum_b += projectSH(eval_b, transferDir) * f;
+    }
+
+    imageStore(dst_r, cell, accum_r);
+    imageStore(dst_g, cell, accum_g);
+    imageStore(dst_b, cell, accum_b);
+}

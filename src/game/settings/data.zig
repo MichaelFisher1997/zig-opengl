@@ -36,6 +36,7 @@ pub const Settings = struct {
     textures_enabled: bool = true,
     wireframe_enabled: bool = false,
     debug_shadows_active: bool = false, // Reverted to false for normal gameplay
+    debug_lpv_overlay_active: bool = false,
     shadow_quality: u32 = 2, // 0=Low, 1=Medium, 2=High, 3=Ultra
     shadow_distance: f32 = 250.0,
     anisotropic_filtering: u8 = 16,
@@ -67,12 +68,27 @@ pub const Settings = struct {
     volumetric_scattering: f32 = 0.8, // Mie scattering anisotropy (G)
     ssao_enabled: bool = true,
 
+    // LPV Settings (Issue #260)
+    lpv_enabled: bool = true,
+    lpv_quality_preset: u32 = 1, // 0=Fast, 1=Balanced, 2=Quality
+    lpv_intensity: f32 = 0.5,
+    lpv_cell_size: f32 = 2.0,
+    lpv_grid_size: u32 = 32, // Derived from lpv_quality_preset at runtime
+    lpv_propagation_iterations: u32 = 3, // Derived from lpv_quality_preset at runtime
+    lpv_update_interval_frames: u32 = 6, // Derived from lpv_quality_preset at runtime
+
     // FXAA Settings (Phase 3)
     fxaa_enabled: bool = true,
 
     // Bloom Settings (Phase 3)
     bloom_enabled: bool = true,
     bloom_intensity: f32 = 0.5,
+
+    // Post-Processing Settings (Phase 6)
+    vignette_enabled: bool = false,
+    vignette_intensity: f32 = 0.3,
+    film_grain_enabled: bool = false,
+    film_grain_intensity: f32 = 0.15,
 
     // Texture Settings
     max_texture_resolution: u32 = 512, // 16, 32, 64, 128, 256, 512
@@ -126,6 +142,11 @@ pub const Settings = struct {
         pub const shadow_cascade_blend = SettingMetadata{
             .label = "CASCADE BLENDING",
             .kind = .toggle,
+        };
+        pub const shadow_distance = SettingMetadata{
+            .label = "SHADOW DISTANCE",
+            .description = "Maximum distance for shadow rendering (higher = more shadows but lower performance)",
+            .kind = .{ .slider = .{ .min = 100.0, .max = 1000.0, .step = 50.0 } },
         };
         pub const pbr_enabled = SettingMetadata{
             .label = "PBR RENDERING",
@@ -186,6 +207,24 @@ pub const Settings = struct {
             .label = "BLOOM INTENSITY",
             .kind = .{ .slider = .{ .min = 0.0, .max = 2.0, .step = 0.1 } },
         };
+        pub const vignette_enabled = SettingMetadata{
+            .label = "VIGNETTE",
+            .description = "Darkens screen edges for cinematic effect",
+            .kind = .toggle,
+        };
+        pub const vignette_intensity = SettingMetadata{
+            .label = "VIGNETTE INTENSITY",
+            .kind = .{ .slider = .{ .min = 0.0, .max = 1.0, .step = 0.05 } },
+        };
+        pub const film_grain_enabled = SettingMetadata{
+            .label = "FILM GRAIN",
+            .description = "Adds subtle noise for film-like appearance",
+            .kind = .toggle,
+        };
+        pub const film_grain_intensity = SettingMetadata{
+            .label = "GRAIN INTENSITY",
+            .kind = .{ .slider = .{ .min = 0.0, .max = 1.0, .step = 0.05 } },
+        };
         pub const volumetric_density = SettingMetadata{
             .label = "FOG DENSITY",
             .kind = .{ .slider = .{ .min = 0.0, .max = 0.5, .step = 0.05 } },
@@ -197,6 +236,25 @@ pub const Settings = struct {
         pub const volumetric_scattering = SettingMetadata{
             .label = "VOLUMETRIC SCATTERING",
             .kind = .{ .slider = .{ .min = 0.0, .max = 1.0, .step = 0.05 } },
+        };
+        pub const lpv_enabled = SettingMetadata{
+            .label = "LPV GI",
+            .kind = .toggle,
+        };
+        pub const lpv_quality_preset = SettingMetadata{
+            .label = "LPV QUALITY",
+            .kind = .{ .choice = .{
+                .labels = &[_][]const u8{ "FAST", "BALANCED", "QUALITY" },
+                .values = &[_]u32{ 0, 1, 2 },
+            } },
+        };
+        pub const lpv_intensity = SettingMetadata{
+            .label = "LPV INTENSITY",
+            .kind = .{ .slider = .{ .min = 0.0, .max = 2.0, .step = 0.1 } },
+        };
+        pub const lpv_cell_size = SettingMetadata{
+            .label = "LPV CELL SIZE",
+            .kind = .{ .slider = .{ .min = 1.0, .max = 4.0, .step = 0.25 } },
         };
     };
 

@@ -1,6 +1,7 @@
 //! Engine-wide logging system with severity levels.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const LogLevel = enum {
     trace,
@@ -59,4 +60,4 @@ pub const Logger = struct {
 };
 
 /// Global logger instance
-pub var log = Logger.init(.debug);
+pub var log = Logger.init(if (builtin.is_test) .err else .debug);

@@ -22,12 +22,15 @@ const GlobalUniforms = extern struct {
     pbr_params: [4]f32,
     volumetric_params: [4]f32,
     viewport_size: [4]f32,
+    lpv_params: [4]f32,
+    lpv_origin: [4]f32,
 };
 
 const ShadowUniforms = extern struct {
     light_space_matrices: [rhi.SHADOW_CASCADE_COUNT]Mat4,
     cascade_splits: [4]f32,
     shadow_texel_sizes: [4]f32,
+    shadow_params: [4]f32, // x = light_size (PCSS), y/z/w reserved
 };
 
 pub const DescriptorManager = struct {
@@ -48,6 +51,7 @@ pub const DescriptorManager = struct {
 
     // Dummy textures
     dummy_texture: rhi.TextureHandle,
+    dummy_texture_3d: rhi.TextureHandle,
     dummy_normal_texture: rhi.TextureHandle,
     dummy_roughness_texture: rhi.TextureHandle,
 
@@ -65,6 +69,7 @@ pub const DescriptorManager = struct {
             .shadow_ubos = std.mem.zeroes([rhi.MAX_FRAMES_IN_FLIGHT]VulkanBuffer),
             .shadow_ubos_mapped = std.mem.zeroes([rhi.MAX_FRAMES_IN_FLIGHT]?*anyopaque),
             .dummy_texture = 0,
+            .dummy_texture_3d = 0,
             .dummy_normal_texture = 0,
             .dummy_roughness_texture = 0,
         };
@@ -105,15 +110,24 @@ pub const DescriptorManager = struct {
             return err;
         };
 
+        // 1x1x1 3D dummy texture for sampler3D bindings (LPV).
+        // Uses rgba32f to match LPV texture format, with zero data (no SH contribution).
+        const zero_pixel = [_]u8{0} ** 16; // 4 x f32 = 16 bytes, all zero
+        self.dummy_texture_3d = resource_manager.createTexture3D(1, 1, 1, .rgba32f, .{}, &zero_pixel) catch |err| {
+            self.deinit();
+            return err;
+        };
+
         resource_manager.flushTransfer() catch |err| {
             self.deinit();
             return err;
         };
 
         // Create Descriptor Pool
+        // Increased sizes to accommodate UI texture descriptor sets (128) + FXAA (2) + Bloom (20) + main (4)
         var pool_sizes = [_]c.VkDescriptorPoolSize{
             .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 500 },
-            .{ .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 500 },
+            .{ .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1000 },
             .{ .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 100 },
         };
 
@@ -121,7 +135,7 @@ pub const DescriptorManager = struct {
         pool_info.sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool_info.poolSizeCount = pool_sizes.len;
         pool_info.pPoolSizes = &pool_sizes[0];
-        pool_info.maxSets = 500;
+        pool_info.maxSets = 1000;
         pool_info.flags = c.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
         Utils.checkVk(c.vkCreateDescriptorPool(vulkan_device.vk_device, &pool_info, null, &self.descriptor_pool)) catch |err| {
@@ -153,6 +167,12 @@ pub const DescriptorManager = struct {
             .{ .binding = 9, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
             // 10: SSAO Map
             .{ .binding = 10, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+            // 11: LPV SH Red channel (or scalar RGB when SH disabled)
+            .{ .binding = 11, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+            // 12: LPV SH Green channel
+            .{ .binding = 12, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+            // 13: LPV SH Blue channel
+            .{ .binding = 13, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
         };
 
         var layout_info = std.mem.zeroes(c.VkDescriptorSetLayoutCreateInfo);

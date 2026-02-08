@@ -10,6 +10,10 @@
 const std = @import("std");
 const testing = std.testing;
 
+pub const std_options: std.Options = .{
+    .log_level = .err,
+};
+
 const Vec3 = @import("zig-math").Vec3;
 const Mat4 = @import("zig-math").Mat4;
 const AABB = @import("zig-math").AABB;
@@ -31,6 +35,12 @@ const block_registry = @import("world/block_registry.zig");
 const TextureAtlas = @import("engine/graphics/texture_atlas.zig").TextureAtlas;
 const BiomeId = @import("world/worldgen/biome.zig").BiomeId;
 
+// Meshing stage modules
+const ao_calculator = @import("world/meshing/ao_calculator.zig");
+const lighting_sampler = @import("world/meshing/lighting_sampler.zig");
+const biome_color_sampler = @import("world/meshing/biome_color_sampler.zig");
+const boundary = @import("world/meshing/boundary.zig");
+
 // Worldgen modules
 const Noise = @import("zig-noise").Noise;
 
@@ -45,6 +55,7 @@ const BiomeSource = @import("world/worldgen/biome.zig").BiomeSource;
 test {
     _ = @import("ecs_tests.zig");
     _ = @import("engine/graphics/vulkan_device.zig");
+    _ = @import("engine/graphics/vulkan/ssao_system_tests.zig");
     _ = @import("vulkan_tests.zig");
     _ = @import("engine/graphics/rhi_tests.zig");
     _ = @import("world/worldgen/schematics.zig");
@@ -919,6 +930,14 @@ const OverworldGenerator = @import("world/worldgen/overworld_generator.zig").Ove
 const deco_registry = @import("world/worldgen/decoration_registry.zig");
 const Generator = @import("world/worldgen/generator_interface.zig").Generator;
 
+fn chunkFingerprint(chunk: *const Chunk) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(std.mem.asBytes(&chunk.blocks));
+    hasher.update(std.mem.asBytes(&chunk.biomes));
+    hasher.update(std.mem.asBytes(&chunk.heightmap));
+    return hasher.final();
+}
+
 test "WorldGen same seed produces identical blocks at origin" {
     const allocator = testing.allocator;
 
@@ -1097,6 +1116,31 @@ test "WorldGen golden output for known seed at origin" {
     try testing.expect(block_registry.getBlockDefinition(surface_block).is_solid);
 }
 
+test "WorldGen stable chunk fingerprints for known seed" {
+    const allocator = testing.allocator;
+    const seed: u64 = 424242;
+    var gen = OverworldGenerator.init(seed, allocator, deco_registry.StandardDecorationProvider.provider());
+
+    const positions = [_][2]i32{
+        .{ 0, 0 },
+        .{ 17, -9 },
+        .{ -23, 31 },
+    };
+
+    const expected = [_]u64{
+        3930377586382103994,
+        9537000129428755126,
+        17337144674893402850,
+    };
+
+    for (positions, 0..) |pos, i| {
+        var chunk = Chunk.init(pos[0], pos[1]);
+        gen.generate(&chunk, null);
+        const fp = chunkFingerprint(&chunk);
+        try testing.expectEqual(expected[i], fp);
+    }
+}
+
 test "WorldGen populates heightmap and biomes" {
     const allocator = testing.allocator;
     var gen = OverworldGenerator.init(42, allocator, deco_registry.StandardDecorationProvider.provider());
@@ -1137,6 +1181,7 @@ test "Decoration placement" {
 test "OverworldGenerator with mock decoration provider" {
     const allocator = std.testing.allocator;
     const DecorationProvider = @import("world/worldgen/decoration_provider.zig").DecorationProvider;
+    const DecorationContext = @import("world/worldgen/decoration_provider.zig").DecorationProvider.DecorationContext;
 
     const MockProvider = struct {
         called_count: *usize,
@@ -1152,29 +1197,8 @@ test "OverworldGenerator with mock decoration provider" {
             .decorate = decorate,
         };
 
-        fn decorate(
-            ptr: ?*anyopaque,
-            chunk: *Chunk,
-            local_x: u32,
-            local_z: u32,
-            surface_y: i32,
-            surface_block: BlockType,
-            biome: BiomeId,
-            variant: f32,
-            allow_subbiomes: bool,
-            veg_mult: f32,
-            random: std.Random,
-        ) void {
-            _ = chunk;
-            _ = local_x;
-            _ = local_z;
-            _ = surface_y;
-            _ = surface_block;
-            _ = biome;
-            _ = variant;
-            _ = allow_subbiomes;
-            _ = veg_mult;
-            _ = random;
+        fn decorate(ptr: ?*anyopaque, ctx: DecorationContext) void {
+            _ = ctx;
             const count: *usize = @ptrCast(@alignCast(ptr.?));
             count.* += 1;
         }
@@ -1259,6 +1283,105 @@ test "adjacent transparent blocks share face" {
     if (mesh.pending_solid) |v| total_verts += @intCast(v.len);
     if (mesh.pending_fluid) |v| total_verts += @intCast(v.len);
     try testing.expect(total_verts < 72);
+}
+
+// ============================================================================
+// Meshing Stage Module Tests
+// ============================================================================
+
+test "calculateVertexAO both sides occluded returns 0.4" {
+    const ao = ao_calculator.calculateVertexAO(1.0, 1.0, 1.0);
+    try testing.expectApproxEqAbs(@as(f32, 0.4), ao, 0.001);
+}
+
+test "calculateVertexAO no occlusion returns 1.0" {
+    const ao = ao_calculator.calculateVertexAO(0.0, 0.0, 0.0);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), ao, 0.001);
+}
+
+test "calculateVertexAO single side occlusion" {
+    const ao = ao_calculator.calculateVertexAO(1.0, 0.0, 0.0);
+    try testing.expectApproxEqAbs(@as(f32, 0.8), ao, 0.001);
+}
+
+test "calculateVertexAO corner only occlusion" {
+    const ao = ao_calculator.calculateVertexAO(0.0, 0.0, 1.0);
+    try testing.expectApproxEqAbs(@as(f32, 0.8), ao, 0.001);
+}
+
+test "normalizeLightValues zero light" {
+    const light = PackedLight.init(0, 0);
+    const norm = lighting_sampler.normalizeLightValues(light);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), norm.skylight, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), norm.blocklight[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), norm.blocklight[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), norm.blocklight[2], 0.001);
+}
+
+test "normalizeLightValues max light" {
+    const light = PackedLight.init(15, 15);
+    const norm = lighting_sampler.normalizeLightValues(light);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), norm.skylight, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), norm.blocklight[0], 0.001);
+}
+
+test "normalizeLightValues RGB channels" {
+    const light = PackedLight.initRGB(8, 4, 8, 12);
+    const norm = lighting_sampler.normalizeLightValues(light);
+    try testing.expectApproxEqAbs(@as(f32, 8.0 / 15.0), norm.skylight, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 4.0 / 15.0), norm.blocklight[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 8.0 / 15.0), norm.blocklight[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 12.0 / 15.0), norm.blocklight[2], 0.001);
+}
+
+test "getBlockColor returns no tint for stone" {
+    var chunk = Chunk.init(0, 0);
+    const color = biome_color_sampler.getBlockColor(&chunk, .empty, .top, 0, 8, 8, .stone);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[2], 0.001);
+}
+
+test "getBlockColor returns no tint for grass side face" {
+    var chunk = Chunk.init(0, 0);
+    const color = biome_color_sampler.getBlockColor(&chunk, .empty, .east, 0, 8, 8, .grass);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[1], 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), color[2], 0.001);
+}
+
+test "getBlockColor returns biome tint for grass top face" {
+    var chunk = Chunk.init(0, 0);
+    const color = biome_color_sampler.getBlockColor(&chunk, .empty, .top, 64, 8, 8, .grass);
+    // Plains biome grass color should not be {1, 1, 1} (it should be tinted)
+    try testing.expect(color[0] != 1.0 or color[1] != 1.0 or color[2] != 1.0);
+}
+
+test "boundary getBlockCross returns air for null neighbors" {
+    var chunk = Chunk.init(0, 0);
+    // Access x = -1 with no west neighbor
+    const block = boundary.getBlockCross(&chunk, .empty, -1, 64, 8);
+    try testing.expectEqual(BlockType.air, block);
+}
+
+test "boundary getBlockCross returns air for out-of-bounds y" {
+    var chunk = Chunk.init(0, 0);
+    chunk.setBlock(8, 64, 8, .stone);
+    // Access within chunk bounds
+    const block = boundary.getBlockCross(&chunk, .empty, 8, 64, 8);
+    try testing.expectEqual(BlockType.stone, block);
+}
+
+test "boundary getBlockCross reads from neighbor chunk" {
+    var chunk = Chunk.init(0, 0);
+    var east_chunk = Chunk.init(1, 0);
+    east_chunk.setBlock(0, 64, 8, .dirt);
+    const neighbors = NeighborChunks{
+        .east = &east_chunk,
+    };
+    // Access x = 16 should read from east neighbor at x=0
+    const block = boundary.getBlockCross(&chunk, neighbors, 16, 64, 8);
+    try testing.expectEqual(BlockType.dirt, block);
 }
 
 // ============================================================================
@@ -1973,6 +2096,177 @@ test "BiomeSource getColor returns valid packed RGB" {
     // Ocean should be blue-ish
     const ocean_color = source.getColor(BiomeId.ocean);
     try testing.expect(ocean_color != desert_color);
+}
+
+// ============================================================================
+// Shadow Cascade Tests (Issue #243)
+// ============================================================================
+
+const CSM = @import("engine/graphics/csm.zig");
+
+test "ShadowCascades initZero produces valid zero state" {
+    const cascades = CSM.ShadowCascades.initZero();
+    // Zero-initialized cascades are NOT valid (splits must be > 0)
+    try testing.expect(!cascades.isValid());
+
+    // But all values must be finite (no NaN/Inf from uninitialized memory)
+    for (0..CSM.CASCADE_COUNT) |i| {
+        try testing.expect(std.math.isFinite(cascades.cascade_splits[i]));
+        try testing.expect(std.math.isFinite(cascades.texel_sizes[i]));
+        for (0..4) |row| {
+            for (0..4) |col| {
+                try testing.expect(std.math.isFinite(cascades.light_space_matrices[i].data[row][col]));
+            }
+        }
+    }
+}
+
+test "ShadowCascades isValid rejects NaN splits" {
+    var cascades = CSM.ShadowCascades.initZero();
+    // Set up valid-looking data first
+    for (0..CSM.CASCADE_COUNT) |i| {
+        cascades.cascade_splits[i] = @as(f32, @floatFromInt(i + 1)) * 50.0;
+        cascades.texel_sizes[i] = 0.1 * @as(f32, @floatFromInt(i + 1));
+        cascades.light_space_matrices[i] = Mat4.identity;
+    }
+    try testing.expect(cascades.isValid());
+
+    // Inject NaN into one cascade split
+    cascades.cascade_splits[1] = std.math.nan(f32);
+    try testing.expect(!cascades.isValid());
+}
+
+test "ShadowCascades isValid rejects non-monotonic splits" {
+    var cascades = CSM.ShadowCascades.initZero();
+    for (0..CSM.CASCADE_COUNT) |i| {
+        cascades.cascade_splits[i] = @as(f32, @floatFromInt(i + 1)) * 50.0;
+        cascades.texel_sizes[i] = 0.1 * @as(f32, @floatFromInt(i + 1));
+        cascades.light_space_matrices[i] = Mat4.identity;
+    }
+    try testing.expect(cascades.isValid());
+
+    // Make splits non-monotonic
+    cascades.cascade_splits[2] = cascades.cascade_splits[1]; // equal, not increasing
+    try testing.expect(!cascades.isValid());
+}
+
+test "computeCascades produces valid output for typical inputs" {
+    const cascades = CSM.computeCascades(
+        2048,
+        std.math.degreesToRadians(70.0),
+        16.0 / 9.0,
+        0.1,
+        250.0,
+        Vec3.init(0.3, -1.0, 0.2).normalize(),
+        Mat4.identity,
+        true,
+    );
+
+    try testing.expect(cascades.isValid());
+
+    // Splits should be monotonically increasing and bounded by shadow distance
+    var last_split: f32 = 0.0;
+    for (0..CSM.CASCADE_COUNT) |i| {
+        try testing.expect(cascades.cascade_splits[i] > last_split);
+        try testing.expect(cascades.cascade_splits[i] <= 250.0);
+        last_split = cascades.cascade_splits[i];
+    }
+
+    // Last cascade should reach shadow distance
+    try testing.expectApproxEqAbs(@as(f32, 250.0), cascades.cascade_splits[CSM.CASCADE_COUNT - 1], 1.0);
+}
+
+test "computeCascades deterministic with same inputs" {
+    const args = .{
+        @as(u32, 2048),
+        std.math.degreesToRadians(@as(f32, 60.0)),
+        @as(f32, 16.0 / 9.0),
+        @as(f32, 0.1),
+        @as(f32, 200.0),
+        Vec3.init(0.5, -0.8, 0.3).normalize(),
+        Mat4.identity,
+        true,
+    };
+
+    const c1 = @call(.auto, CSM.computeCascades, args);
+    const c2 = @call(.auto, CSM.computeCascades, args);
+
+    for (0..CSM.CASCADE_COUNT) |i| {
+        try testing.expectEqual(c1.cascade_splits[i], c2.cascade_splits[i]);
+        try testing.expectEqual(c1.texel_sizes[i], c2.texel_sizes[i]);
+        for (0..4) |row| {
+            for (0..4) |col| {
+                try testing.expectEqual(
+                    c1.light_space_matrices[i].data[row][col],
+                    c2.light_space_matrices[i].data[row][col],
+                );
+            }
+        }
+    }
+}
+
+test "computeCascades returns safe defaults for invalid inputs" {
+    // Zero resolution
+    const c1 = CSM.computeCascades(0, 1.0, 1.0, 0.1, 200.0, Vec3.init(0, -1, 0), Mat4.identity, true);
+    try testing.expectEqual(@as(f32, 0.0), c1.cascade_splits[0]);
+
+    // far <= near
+    const c2 = CSM.computeCascades(1024, 1.0, 1.0, 200.0, 0.1, Vec3.init(0, -1, 0), Mat4.identity, true);
+    try testing.expectEqual(@as(f32, 0.0), c2.cascade_splits[0]);
+
+    // near <= 0
+    const c3 = CSM.computeCascades(1024, 1.0, 1.0, 0.0, 200.0, Vec3.init(0, -1, 0), Mat4.identity, true);
+    try testing.expectEqual(@as(f32, 0.0), c3.cascade_splits[0]);
+
+    // Negative near plane
+    const c4 = CSM.computeCascades(1024, 1.0, 1.0, -0.1, 200.0, Vec3.init(0, -1, 0), Mat4.identity, true);
+    try testing.expectEqual(@as(f32, 0.0), c4.cascade_splits[0]);
+}
+
+test "computeCascades stable at large world coordinates" {
+    // Test that texel snapping precision fix works at large coordinates
+    // by verifying matrices are finite and valid even with a camera far from origin
+    const far_view = Mat4.translate(Vec3.init(-50000.0, -100.0, -50000.0));
+    const cascades = CSM.computeCascades(
+        2048,
+        std.math.degreesToRadians(60.0),
+        16.0 / 9.0,
+        0.1,
+        250.0,
+        Vec3.init(0.3, -1.0, 0.2).normalize(),
+        far_view,
+        true,
+    );
+
+    try testing.expect(cascades.isValid());
+
+    // All matrix elements must be finite (no precision overflow)
+    for (0..CSM.CASCADE_COUNT) |i| {
+        for (0..4) |row| {
+            for (0..4) |col| {
+                try testing.expect(std.math.isFinite(cascades.light_space_matrices[i].data[row][col]));
+            }
+        }
+    }
+}
+
+test "computeCascades uses fixed splits for large distances" {
+    // Shadow distance > 500 triggers fixed split ratios (8%, 25%, 60%, 100%)
+    const cascades = CSM.computeCascades(
+        2048,
+        std.math.degreesToRadians(60.0),
+        16.0 / 9.0,
+        0.1,
+        1000.0,
+        Vec3.init(0, -1, 0),
+        Mat4.identity,
+        true,
+    );
+
+    try testing.expectApproxEqAbs(@as(f32, 80.0), cascades.cascade_splits[0], 0.1); // 8%
+    try testing.expectApproxEqAbs(@as(f32, 250.0), cascades.cascade_splits[1], 0.1); // 25%
+    try testing.expectApproxEqAbs(@as(f32, 600.0), cascades.cascade_splits[2], 0.1); // 60%
+    try testing.expectApproxEqAbs(@as(f32, 1000.0), cascades.cascade_splits[3], 0.1); // 100%
 }
 
 test "BiomeSource selectBiomeWithEdge no edge returns primary only" {

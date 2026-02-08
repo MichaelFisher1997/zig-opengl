@@ -10,6 +10,8 @@ const rhi_pkg = @import("../../engine/graphics/rhi.zig");
 const render_graph_pkg = @import("../../engine/graphics/render_graph.zig");
 const PausedScreen = @import("paused.zig").PausedScreen;
 const DebugShadowOverlay = @import("../../engine/ui/debug_shadow_overlay.zig").DebugShadowOverlay;
+const DebugLPVOverlay = @import("../../engine/ui/debug_lpv_overlay.zig").DebugLPVOverlay;
+const Font = @import("../../engine/ui/font.zig");
 const log = @import("../../engine/core/log.zig");
 
 pub const WorldScreen = struct {
@@ -110,6 +112,11 @@ pub const WorldScreen = struct {
             log.log.info("Fog {s}", .{if (self.session.atmosphere.fog_enabled) "enabled" else "disabled"});
             self.last_debug_toggle_time = now;
         }
+        if (can_toggle_debug and ctx.input_mapper.isActionPressed(ctx.input, .toggle_lpv_overlay)) {
+            ctx.settings.debug_lpv_overlay_active = !ctx.settings.debug_lpv_overlay_active;
+            log.log.info("LPV overlay {s}", .{if (ctx.settings.debug_lpv_overlay_active) "enabled" else "disabled"});
+            self.last_debug_toggle_time = now;
+        }
 
         // Update Audio Listener
         const cam = &self.session.player.camera;
@@ -150,6 +157,21 @@ pub const WorldScreen = struct {
 
         const ssao_enabled = ctx.settings.ssao_enabled and !ctx.disable_ssao and !ctx.disable_gpass_draw;
         const cloud_shadows_enabled = ctx.settings.cloud_shadows_enabled and !ctx.disable_clouds;
+
+        const lpv_quality = resolveLPVQuality(ctx.settings.lpv_quality_preset);
+        try ctx.lpv_system.setSettings(
+            ctx.settings.lpv_enabled,
+            ctx.settings.lpv_intensity,
+            ctx.settings.lpv_cell_size,
+            lpv_quality.propagation_iterations,
+            lpv_quality.grid_size,
+            lpv_quality.update_interval_frames,
+        );
+        ctx.rhi.timing().beginPassTiming("LPVPass");
+        try ctx.lpv_system.update(self.session.world, camera.position, ctx.settings.debug_lpv_overlay_active);
+        ctx.rhi.timing().endPassTiming("LPVPass");
+
+        const lpv_origin = ctx.lpv_system.getOrigin();
         const cloud_params: rhi_pkg.CloudParams = blk: {
             const p = self.session.clouds.getShadowParams();
             break :blk .{
@@ -181,6 +203,11 @@ pub const WorldScreen = struct {
                 .volumetric_steps = ctx.settings.volumetric_steps,
                 .volumetric_scattering = ctx.settings.volumetric_scattering,
                 .ssao_enabled = ssao_enabled,
+                .lpv_enabled = ctx.settings.lpv_enabled,
+                .lpv_intensity = ctx.settings.lpv_intensity,
+                .lpv_cell_size = ctx.lpv_system.getCellSize(),
+                .lpv_grid_size = ctx.lpv_system.getGridSize(),
+                .lpv_origin = lpv_origin,
             };
         };
 
@@ -188,6 +215,10 @@ pub const WorldScreen = struct {
             try ctx.rhi.*.updateGlobalUniforms(view_proj_render, camera.position, self.session.atmosphere.celestial.sun_dir, self.session.atmosphere.sun_color, self.session.atmosphere.time.time_of_day, self.session.atmosphere.fog_color, self.session.atmosphere.fog_density, self.session.atmosphere.fog_enabled, self.session.atmosphere.sun_intensity, self.session.atmosphere.ambient_intensity, ctx.settings.textures_enabled, cloud_params);
 
             const env_map_handle = if (ctx.env_map_ptr) |e_ptr| (if (e_ptr.*) |t| t.handle else 0) else 0;
+
+            // Frame-local cascade storage: computed once by the first ShadowPass,
+            // then reused by subsequent cascade passes for consistency.
+            var frame_cascades: ?@import("../../engine/graphics/csm.zig").ShadowCascades = null;
 
             const render_ctx = render_graph_pkg.SceneContext{
                 .rhi = ctx.rhi.*, // SceneContext expects value for now
@@ -211,6 +242,10 @@ pub const WorldScreen = struct {
                 .bloom_enabled = ctx.settings.bloom_enabled,
                 .overlay_renderer = renderOverlay,
                 .overlay_ctx = self,
+                .cached_cascades = &frame_cascades,
+                .lpv_texture_handle = ctx.lpv_system.getTextureHandle(),
+                .lpv_texture_handle_g = ctx.lpv_system.getTextureHandleG(),
+                .lpv_texture_handle_b = ctx.lpv_system.getTextureHandleB(),
             };
             try ctx.render_graph.execute(render_ctx);
         }
@@ -227,6 +262,34 @@ pub const WorldScreen = struct {
 
         if (ctx.settings.debug_shadows_active) {
             DebugShadowOverlay.draw(ctx.rhi.ui(), ctx.rhi.shadow(), screen_w, screen_h, .{});
+        }
+        if (ctx.settings.debug_lpv_overlay_active) {
+            const overlay_size = std.math.clamp(220.0 * ctx.settings.ui_scale, 160.0, screen_h * 0.4);
+            const cfg = DebugLPVOverlay.Config{
+                .width = overlay_size,
+                .height = overlay_size,
+                .spacing = 10.0 * ctx.settings.ui_scale,
+            };
+            const r = DebugLPVOverlay.rect(screen_h, cfg);
+            DebugLPVOverlay.draw(ctx.rhi.ui(), ctx.lpv_system.getDebugOverlayTextureHandle(), screen_w, screen_h, cfg);
+
+            const stats = ctx.lpv_system.getStats();
+            const timing_results = ctx.rhi.timing().getTimingResults();
+            var line0_buf: [64]u8 = undefined;
+            var line1_buf: [64]u8 = undefined;
+            var line2_buf: [64]u8 = undefined;
+            var line3_buf: [64]u8 = undefined;
+            const line0 = std.fmt.bufPrint(&line0_buf, "LPV GRID:{d} ITER:{d}", .{ stats.grid_size, stats.propagation_iterations }) catch "LPV";
+            const line1 = std.fmt.bufPrint(&line1_buf, "LIGHTS:{d} UPDATE:{d:.2}MS", .{ stats.light_count, stats.cpu_update_ms }) catch "LIGHTS";
+            const line2 = std.fmt.bufPrint(&line2_buf, "TICK:{d} UPDATED:{d}", .{ stats.update_interval_frames, if (stats.updated_this_frame) @as(u8, 1) else @as(u8, 0) }) catch "TICK";
+            const line3 = std.fmt.bufPrint(&line3_buf, "LPV GPU:{d:.2}MS", .{timing_results.lpv_pass_ms}) catch "GPU";
+
+            const text_x = r.x;
+            const text_y = r.y - 28.0;
+            Font.drawText(ui, line0, text_x, text_y, 1.5, .{ .r = 0.95, .g = 0.98, .b = 1.0, .a = 1.0 });
+            Font.drawText(ui, line1, text_x, text_y + 10.0, 1.5, .{ .r = 0.95, .g = 0.98, .b = 1.0, .a = 1.0 });
+            Font.drawText(ui, line2, text_x, text_y + 20.0, 1.5, .{ .r = 0.95, .g = 0.98, .b = 1.0, .a = 1.0 });
+            Font.drawText(ui, line3, text_x, text_y + 30.0, 1.5, .{ .r = 0.95, .g = 0.98, .b = 1.0, .a = 1.0 });
         }
     }
 
@@ -251,3 +314,17 @@ pub const WorldScreen = struct {
         self.session.hand_renderer.draw(scene_ctx.camera.position, scene_ctx.camera.yaw, scene_ctx.camera.pitch);
     }
 };
+
+const LPVQualityResolved = struct {
+    grid_size: u32,
+    propagation_iterations: u32,
+    update_interval_frames: u32,
+};
+
+fn resolveLPVQuality(preset: u32) LPVQualityResolved {
+    return switch (preset) {
+        0 => .{ .grid_size = 16, .propagation_iterations = 2, .update_interval_frames = 8 },
+        2 => .{ .grid_size = 64, .propagation_iterations = 5, .update_interval_frames = 3 },
+        else => .{ .grid_size = 32, .propagation_iterations = 3, .update_interval_frames = 6 },
+    };
+}

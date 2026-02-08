@@ -9,7 +9,7 @@ const CHUNK_SIZE_Z = @import("chunk.zig").CHUNK_SIZE_Z;
 const GlobalVertexAllocator = @import("chunk_allocator.zig").GlobalVertexAllocator;
 const rhi_mod = @import("../engine/graphics/rhi.zig");
 const RHI = rhi_mod.RHI;
-const LODManager = @import("lod_manager.zig").LODManager(RHI);
+const LODManager = @import("lod_manager.zig").LODManager;
 const Vec3 = @import("../engine/math/vec3.zig").Vec3;
 const Mat4 = @import("../engine/math/mat4.zig").Mat4;
 const Frustum = @import("../engine/math/frustum.zig").Frustum;
@@ -180,8 +180,10 @@ pub const WorldRenderer = struct {
         self.storage.chunks_mutex.lockShared();
         defer self.storage.chunks_mutex.unlockShared();
 
+        // FIX: Enable frustum culling for LOD chunks in shadow pass
+        // This ensures LOD chunks are properly culled using the light-space frustum
         if (lod_manager) |lod_mgr| {
-            lod_mgr.render(light_space_matrix, camera_pos, ChunkStorage.isChunkRenderable, @ptrCast(self.storage), false);
+            lod_mgr.render(light_space_matrix, camera_pos, ChunkStorage.isChunkRenderable, @ptrCast(self.storage), true);
         }
 
         const frustum = shadow_frustum;

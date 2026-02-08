@@ -20,6 +20,7 @@ pub const Schematic = types.Schematic;
 pub const SchematicDecoration = types.SchematicDecoration;
 pub const Decoration = types.Decoration;
 pub const DecorationProvider = @import("decoration_provider.zig").DecorationProvider;
+pub const DecorationContext = @import("decoration_provider.zig").DecorationProvider.DecorationContext;
 
 pub const DECORATIONS = [_]Decoration{
     // === Grass ===
@@ -129,20 +130,18 @@ pub const StandardDecorationProvider = struct {
         return true;
     }
 
-    fn decorate(
-        ptr: ?*anyopaque,
-        chunk: *Chunk,
-        local_x: u32,
-        local_z: u32,
-        surface_y: i32,
-        surface_block: BlockType,
-        biome: BiomeId,
-        variant: f32,
-        allow_subbiomes: bool,
-        veg_mult: f32,
-        random: std.Random,
-    ) void {
+    fn decorate(ptr: ?*anyopaque, ctx: DecorationContext) void {
         _ = ptr;
+        const chunk = ctx.chunk;
+        const local_x = ctx.local_x;
+        const local_z = ctx.local_z;
+        const surface_y = ctx.surface_y;
+        const surface_block = ctx.surface_block;
+        const biome = ctx.biome;
+        const variant = ctx.variant;
+        const allow_subbiomes = ctx.allow_subbiomes;
+        const veg_mult = ctx.veg_mult;
+        const random = ctx.random;
 
         // 1. Static decorations (flowers, grass)
         for (DECORATIONS) |deco| {

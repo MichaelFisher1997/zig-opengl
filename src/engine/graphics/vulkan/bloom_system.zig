@@ -355,7 +355,7 @@ pub const BloomSystem = struct {
 
                 var image_info_prev = c.VkDescriptorImageInfo{
                     .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    .imageView = self.mip_views[target_mip],
+                    .imageView = self.mip_views[src_mip],
                     .sampler = self.sampler,
                 };
 
@@ -382,6 +382,132 @@ pub const BloomSystem = struct {
 
                 c.vkUpdateDescriptorSets(vk, 2, &writes[0], 0, null);
             }
+        }
+    }
+
+    pub fn compute(
+        self: *const BloomSystem,
+        command_buffer: c.VkCommandBuffer,
+        frame: usize,
+        hdr_image: c.VkImage,
+        hdr_extent: c.VkExtent2D,
+        draw_call_count: *u32,
+    ) void {
+        if (!self.enabled) return;
+        if (self.downsample_pipeline == null) return;
+        if (self.upsample_pipeline == null) return;
+        if (self.render_pass == null) return;
+        if (hdr_image == null) return;
+
+        var barrier = std.mem.zeroes(c.VkImageMemoryBarrier);
+        barrier.sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.srcAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        barrier.dstAccessMask = c.VK_ACCESS_SHADER_READ_BIT;
+        barrier.oldLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.newLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.image = hdr_image;
+        barrier.subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
+
+        c.vkCmdPipelineBarrier(command_buffer, c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &barrier);
+
+        c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.downsample_pipeline);
+
+        for (0..BLOOM_MIP_COUNT) |i| {
+            const mip_width = self.mip_widths[i];
+            const mip_height = self.mip_heights[i];
+
+            var clear_value = std.mem.zeroes(c.VkClearValue);
+            clear_value.color.float32 = .{ 0.0, 0.0, 0.0, 1.0 };
+
+            var rp_begin = std.mem.zeroes(c.VkRenderPassBeginInfo);
+            rp_begin.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rp_begin.renderPass = self.render_pass;
+            rp_begin.framebuffer = self.mip_framebuffers[i];
+            rp_begin.renderArea = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = mip_width, .height = mip_height } };
+            rp_begin.clearValueCount = 1;
+            rp_begin.pClearValues = &clear_value;
+
+            c.vkCmdBeginRenderPass(command_buffer, &rp_begin, c.VK_SUBPASS_CONTENTS_INLINE);
+
+            const viewport = c.VkViewport{
+                .x = 0,
+                .y = 0,
+                .width = @floatFromInt(mip_width),
+                .height = @floatFromInt(mip_height),
+                .minDepth = 0.0,
+                .maxDepth = 1.0,
+            };
+            c.vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+
+            const scissor = c.VkRect2D{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = mip_width, .height = mip_height } };
+            c.vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
+            c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &self.descriptor_sets[frame][i], 0, null);
+
+            const src_width: f32 = if (i == 0) @floatFromInt(hdr_extent.width) else @floatFromInt(self.mip_widths[i - 1]);
+            const src_height: f32 = if (i == 0) @floatFromInt(hdr_extent.height) else @floatFromInt(self.mip_heights[i - 1]);
+
+            const push = BloomPushConstants{
+                .texel_size = .{ 1.0 / src_width, 1.0 / src_height },
+                .threshold_or_radius = if (i == 0) self.threshold else 0.0,
+                .soft_threshold_or_intensity = 0.5,
+                .mip_level = @intCast(i),
+            };
+            c.vkCmdPushConstants(command_buffer, self.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(BloomPushConstants), &push);
+
+            c.vkCmdDraw(command_buffer, 3, 1, 0, 0);
+            draw_call_count.* += 1;
+
+            c.vkCmdEndRenderPass(command_buffer);
+        }
+
+        c.vkCmdBindPipeline(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.upsample_pipeline);
+
+        for (0..BLOOM_MIP_COUNT - 1) |pass| {
+            const target_mip = (BLOOM_MIP_COUNT - 2) - pass;
+            const mip_width = self.mip_widths[target_mip];
+            const mip_height = self.mip_heights[target_mip];
+
+            var rp_begin = std.mem.zeroes(c.VkRenderPassBeginInfo);
+            rp_begin.sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rp_begin.renderPass = self.render_pass;
+            rp_begin.framebuffer = self.mip_framebuffers[target_mip];
+            rp_begin.renderArea = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = mip_width, .height = mip_height } };
+            rp_begin.clearValueCount = 0;
+
+            c.vkCmdBeginRenderPass(command_buffer, &rp_begin, c.VK_SUBPASS_CONTENTS_INLINE);
+
+            const viewport = c.VkViewport{
+                .x = 0,
+                .y = 0,
+                .width = @floatFromInt(mip_width),
+                .height = @floatFromInt(mip_height),
+                .minDepth = 0.0,
+                .maxDepth = 1.0,
+            };
+            c.vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+
+            const scissor = c.VkRect2D{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = mip_width, .height = mip_height } };
+            c.vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
+            c.vkCmdBindDescriptorSets(command_buffer, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &self.descriptor_sets[frame][BLOOM_MIP_COUNT + pass], 0, null);
+
+            const src_mip = target_mip + 1;
+            const src_width: f32 = @floatFromInt(self.mip_widths[src_mip]);
+            const src_height: f32 = @floatFromInt(self.mip_heights[src_mip]);
+
+            const push = BloomPushConstants{
+                .texel_size = .{ 1.0 / src_width, 1.0 / src_height },
+                .threshold_or_radius = 1.0,
+                .soft_threshold_or_intensity = self.intensity,
+                .mip_level = 0,
+            };
+            c.vkCmdPushConstants(command_buffer, self.pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(BloomPushConstants), &push);
+
+            c.vkCmdDraw(command_buffer, 3, 1, 0, 0);
+            draw_call_count.* += 1;
+
+            c.vkCmdEndRenderPass(command_buffer);
         }
     }
 

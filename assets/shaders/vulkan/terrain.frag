@@ -32,6 +32,8 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
     vec4 pbr_params; // x = pbr_quality, y = exposure, z = saturation, w = ssao_strength
     vec4 volumetric_params; // x = enabled, y = density, z = steps, w = scattering
     vec4 viewport_size; // xy = width/height
+    vec4 lpv_params; // x = enabled, y = intensity, z = cell_size, w = grid_size
+    vec4 lpv_origin; // xyz = world origin
 } global;
 
 // Constants
@@ -55,15 +57,16 @@ float cloudNoise(vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-float cloudFbm(vec2 p) {
-    float v = 0.0;
-    float a = 0.5;
-    for (int i = 0; i < 2; i++) { 
-        v += a * cloudNoise(p);
-        p *= 2.0;
-        a *= 0.5;
+float cloudFbm(vec2 p, int octaves) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    for (int i = 0; i < octaves; i++) {
+        value += amplitude * cloudNoise(p * frequency);
+        amplitude *= 0.5;
+        frequency *= 2.0;
     }
-    return v;
+    return value;
 }
 
 // 4x4 Bayer matrix for dithered LOD transitions
@@ -80,10 +83,14 @@ float bayerDither4x4(vec2 position) {
 }
 
 float getCloudShadow(vec3 worldPos, vec3 sunDir) {
+    const float cloudBlockSize = 12.0;
     vec3 actualWorldPos = worldPos + global.cam_pos.xyz;
     vec2 shadowOffset = sunDir.xz * (global.cloud_params.x - actualWorldPos.y) / max(sunDir.y, 0.1);
-    vec2 samplePos = (actualWorldPos.xz + shadowOffset + global.cloud_wind_offset.xy) * global.cloud_wind_offset.z;
-    float cloudValue = cloudFbm(samplePos * 0.5);
+    vec2 worldXZ = actualWorldPos.xz + shadowOffset + global.cloud_wind_offset.xy;
+    // Apply block quantization to match cloud rendering
+    vec2 pixelPos = floor(worldXZ / cloudBlockSize) * cloudBlockSize;
+    vec2 samplePos = pixelPos * global.cloud_wind_offset.z;
+    float cloudValue = cloudFbm(samplePos, 3);
     float threshold = 1.0 - global.cloud_wind_offset.w;
     float cloudMask = smoothstep(threshold - 0.1, threshold + 0.1, cloudValue);
     return cloudMask * global.lighting.w;
@@ -95,11 +102,15 @@ layout(set = 0, binding = 7) uniform sampler2D uRoughnessMap;    // Roughness ma
 layout(set = 0, binding = 8) uniform sampler2D uDisplacementMap; // Displacement map (unused for now)
 layout(set = 0, binding = 9) uniform sampler2D uEnvMap;          // Environment Map (EXR)
 layout(set = 0, binding = 10) uniform sampler2D uSSAOMap;       // SSAO Map
+layout(set = 0, binding = 11) uniform sampler3D uLPVGrid;       // LPV SH Red channel (4 SH coefficients)
+layout(set = 0, binding = 12) uniform sampler3D uLPVGridG;      // LPV SH Green channel
+layout(set = 0, binding = 13) uniform sampler3D uLPVGridB;      // LPV SH Blue channel
 
 layout(set = 0, binding = 2) uniform ShadowUniforms {
-    mat4 light_space_matrices[3];
+    mat4 light_space_matrices[4];
     vec4 cascade_splits;
     vec4 shadow_texel_sizes;
+    vec4 shadow_params; // x = light_size (PCSS), y/z/w reserved
 } shadows;
 
 layout(set = 0, binding = 3) uniform sampler2DArrayShadow uShadowMaps;
@@ -136,18 +147,19 @@ float interleavedGradientNoise(vec2 fragCoord) {
     return fract(magic.z * fract(dot(fragCoord.xy, magic.xy)));
 }
 
-float findBlocker(vec2 uv, float zReceiver, int layer) {
+// PCSS blocker search using Poisson disk for better spatial distribution.
+// searchRadius is derived from light size and receiver depth in light-space.
+float findBlocker(vec2 uv, float zReceiver, int layer, float searchRadius, mat2 rot) {
     float blockerDepthSum = 0.0;
     int numBlockers = 0;
-    float searchRadius = 0.0015;
-    for (int i = -1; i <= 1; i++) {
-        for (int j = -1; j <= 1; j++) {
-            vec2 offset = vec2(i, j) * searchRadius;
-            float depth = texture(uShadowMapsRegular, vec3(uv + offset, float(layer))).r;
-            if (depth > zReceiver + 0.0001) {
-                blockerDepthSum += depth;
-                numBlockers++;
-            }
+    // Use first 8 Poisson samples for blocker search (cheaper than full 16)
+    for (int i = 0; i < 8; i++) {
+        vec2 offset = (rot * poissonDisk16[i]) * searchRadius;
+        float depth = texture(uShadowMapsRegular, vec3(uv + offset, float(layer))).r;
+        // Reverse-Z: blockers have GREATER depth than receiver
+        if (depth > zReceiver + 0.0002) {
+            blockerDepthSum += depth;
+            numBlockers++;
         }
     }
     if (numBlockers == 0) return -1.0;
@@ -172,24 +184,46 @@ float computeShadowFactor(vec3 fragPosWorld, vec3 N, vec3 L, int layer) {
     float tanTheta = sinTheta / NdotL;
     
     // Reverse-Z Bias: push fragment CLOSER to light (towards Near=1.0)
-    const float BASE_BIAS = 0.0015;
+    const float BASE_BIAS = 0.0025;
     const float SLOPE_BIAS = 0.003;
-    const float MAX_BIAS = 0.012;
+    const float MAX_BIAS = 0.015;
     
     float bias = BASE_BIAS * cascadeScale + SLOPE_BIAS * min(tanTheta, 5.0) * cascadeScale;
     bias = min(bias, MAX_BIAS);
     if (vTileID < 0) bias = max(bias, 0.006 * cascadeScale);
 
+    // Noise rotation for temporal stability
     float angle = interleavedGradientNoise(gl_FragCoord.xy) * PI * 0.25;
     float s = sin(angle);
-    float c = cos(angle);
-    mat2 rot = mat2(c, s, -s, c);
-    
+    float co = cos(angle);
+    mat2 rot = mat2(co, s, -s, co);
+
+    // PCSS: Percentage-Closer Soft Shadows
+    // lightSize in shadow-map UV space, scaled per cascade
+    float lightSize = shadows.shadow_params.x * texelSize;
+    const float MIN_RADIUS = 0.0005;
+    const float MAX_RADIUS = 0.008;
+
+    // Step 1: Blocker search with light-size-proportional search radius
+    float searchRadius = lightSize * 2.0 * cascadeScale;
+    searchRadius = clamp(searchRadius, MIN_RADIUS, MAX_RADIUS);
+    float avgBlockerDepth = findBlocker(projCoords.xy, currentDepth, layer, searchRadius, rot);
+
+    float radius;
+    if (avgBlockerDepth < 0.0) {
+        // No blockers found — use minimum PCF radius for contact hardening
+        radius = MIN_RADIUS * cascadeScale;
+    } else {
+        // Step 2: Penumbra estimation
+        // Reverse-Z: blocker depth > receiver depth means blocker is closer to light
+        float penumbraWidth = (avgBlockerDepth - currentDepth) / max(avgBlockerDepth, 0.0001) * lightSize;
+        radius = clamp(penumbraWidth * cascadeScale, MIN_RADIUS * cascadeScale, MAX_RADIUS * cascadeScale);
+    }
+
+    // Step 3: Variable-radius PCF filtering
     float shadow = 0.0;
-    float radius = 0.0015 * cascadeScale;
     for (int i = 0; i < 16; i++) {
         vec2 offset = (rot * poissonDisk16[i]) * radius;
-        // GREATER_OR_EQUAL comparison: returns 1.0 if (currentDepth + bias) >= mapDepth
         shadow += texture(uShadowMaps, vec4(projCoords.xy + offset, float(layer), currentDepth + bias));
     }
     // shadow factor: 1.0 (Shadowed) to 0.0 (Lit)
@@ -271,6 +305,44 @@ vec3 computeIBLAmbient(vec3 N, float roughness) {
     return textureLod(uEnvMap, envUV, envMipLevel).rgb;
 }
 
+// SH L1 constants for irradiance reconstruction
+const float LPV_SH_C0 = 0.282095;
+const float LPV_SH_C1 = 0.488603;
+
+// Evaluate SH L1 irradiance for a given direction
+float evaluateLPVSH(vec4 sh, vec3 dir) {
+    return max(0.0, sh.x * LPV_SH_C0 + sh.y * LPV_SH_C1 * dir.x + sh.z * LPV_SH_C1 * dir.y + sh.w * LPV_SH_C1 * dir.z);
+}
+
+// Sample the native 3D LPV SH grid and reconstruct directional irradiance using surface normal.
+vec3 sampleLPVAtlas(vec3 worldPos, vec3 normal) {
+    if (global.lpv_params.x < 0.5) return vec3(0.0);
+
+    float gridSize = max(global.lpv_params.w, 1.0);
+    float cellSize = max(global.lpv_params.z, 0.001);
+    vec3 local = (worldPos - global.lpv_origin.xyz) / cellSize;
+
+    if (any(lessThan(local, vec3(0.0))) || any(greaterThanEqual(local, vec3(gridSize)))) {
+        return vec3(0.0);
+    }
+
+    // Normalize to [0,1] UV range for hardware trilinear sampling
+    vec3 uvw = (local + 0.5) / gridSize;
+
+    // Sample 4 SH coefficients per color channel
+    vec4 sh_r = texture(uLPVGrid, uvw);
+    vec4 sh_g = texture(uLPVGridG, uvw);
+    vec4 sh_b = texture(uLPVGridB, uvw);
+
+    // Reconstruct directional irradiance using the surface normal
+    float irr_r = evaluateLPVSH(sh_r, normal);
+    float irr_g = evaluateLPVSH(sh_g, normal);
+    float irr_b = evaluateLPVSH(sh_b, normal);
+
+    // Clamp to prevent overexposure from accumulated SH values
+    return clamp(vec3(irr_r, irr_g, irr_b) * global.lpv_params.y, vec3(0.0), vec3(2.0));
+}
+
 vec3 computeBRDF(vec3 albedo, vec3 N, vec3 V, vec3 L, float roughness) {
     vec3 H = normalize(V + L);
     vec3 F0 = mix(vec3(DIELECTRIC_F0), albedo, 0.0);
@@ -301,14 +373,16 @@ vec3 computePBR(vec3 albedo, vec3 N, vec3 V, vec3 L, float roughness, float tota
     vec3 Lo = brdf * sunColor * NdotL_final * (1.0 - totalShadow);
     vec3 envColor = computeIBLAmbient(N, roughness);
     float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
-    vec3 ambientColor = albedo * (max(min(envColor, IBL_CLAMP) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao * shadowAmbientFactor;
+    vec3 indirect = sampleLPVAtlas(vFragPosWorld, N);
+    vec3 ambientColor = albedo * (max(min(envColor, IBL_CLAMP) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight + indirect) * ao * ssao * shadowAmbientFactor;
     return ambientColor + Lo;
 }
 
 vec3 computeNonPBR(vec3 albedo, vec3 N, float nDotL, float totalShadow, float skyLight, vec3 blockLight, float ao, float ssao) {
     vec3 envColor = computeIBLAmbient(N, NON_PBR_ROUGHNESS);
     float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
-    vec3 ambientColor = albedo * (max(min(envColor, IBL_CLAMP) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight) * ao * ssao * shadowAmbientFactor;
+    vec3 indirect = sampleLPVAtlas(vFragPosWorld, N);
+    vec3 ambientColor = albedo * (max(min(envColor, IBL_CLAMP) * skyLight * 0.8, vec3(global.lighting.x * 0.8)) + blockLight + indirect) * ao * ssao * shadowAmbientFactor;
     vec3 sunColor = global.sun_color.rgb * global.params.w * SUN_RADIANCE_TO_IRRADIANCE / PI;
     vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
     return ambientColor + directColor;
@@ -316,7 +390,8 @@ vec3 computeNonPBR(vec3 albedo, vec3 N, float nDotL, float totalShadow, float sk
 
 vec3 computeLOD(vec3 albedo, float nDotL, float totalShadow, float skyLightVal, vec3 blockLight, float ao, float ssao) {
     float shadowAmbientFactor = mix(1.0, 0.2, totalShadow);
-    vec3 ambientColor = albedo * (max(vec3(skyLightVal * 0.8), vec3(global.lighting.x * 0.4)) + blockLight) * ao * ssao * shadowAmbientFactor;
+    vec3 indirect = sampleLPVAtlas(vFragPosWorld, vec3(0.0, 1.0, 0.0)); // LOD uses up-facing normal
+    vec3 ambientColor = albedo * (max(vec3(skyLightVal * 0.8), vec3(global.lighting.x * 0.4)) + blockLight + indirect) * ao * ssao * shadowAmbientFactor;
     vec3 sunColor = global.sun_color.rgb * global.params.w * SUN_VOLUMETRIC_INTENSITY / PI;
     vec3 directColor = albedo * sunColor * nDotL * (1.0 - totalShadow);
     return ambientColor + directColor;
@@ -400,7 +475,14 @@ void main() {
 
     vec3 L = normalize(global.sun_dir.xyz);
     float nDotL = max(dot(N, L), 0.0);
-    int layer = viewDistance < shadows.cascade_splits[0] ? 0 : (viewDistance < shadows.cascade_splits[1] ? 1 : 2);
+    // NaN guard: if cascade_splits contain NaN, comparisons return false and
+    // we fall through to cascade 2 (widest). Also guard against zero/negative
+    // splits which indicate uninitialized or invalid cascade data.
+    int layer = 2;
+    if (shadows.cascade_splits[0] > 0.0 && shadows.cascade_splits[1] > 0.0) {
+        layer = viewDistance < shadows.cascade_splits[0] ? 0
+              : (viewDistance < shadows.cascade_splits[1] ? 1 : 2);
+    }
     float shadowFactor = computeShadowCascades(vFragPosWorld, N, L, viewDistance, layer);
     
     float cloudShadow = (global.cloud_params.w > 0.5 && global.params.w > 0.05 && global.sun_dir.y > 0.05) ? getCloudShadow(vFragPosWorld, global.sun_dir.xyz) : 0.0;

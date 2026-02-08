@@ -9,6 +9,7 @@ jobs:
     # Don't run on draft PRs; do run when they become ready_for_review.
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
     permissions:
       id-token: write
       contents: write
@@ -18,11 +19,58 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch previous opencode reviews
+        id: previous-reviews
+        run: |
+          # Get PR number
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          
+          # Fetch review comments from opencode-agent
+          echo "Fetching previous automated reviews..."
+          
+          # Get all reviews
+          gh api /repos/${{ github.repository }}/pulls/${PR_NUMBER}/reviews \
+            --jq '.[] | select(.user.login == "opencode-agent[bot]") | {body: .body, submitted_at: .submitted_at}' > /tmp/opencode_reviews.json 2>/dev/null || echo "[]" > /tmp/opencode_reviews.json
+          
+          # Get all PR review comments (inline comments)
+          gh api /repos/${{ github.repository }}/pulls/${PR_NUMBER}/comments \
+            --jq '.[] | select(.user.login == "opencode-agent[bot]") | {body: .body, path: .path, line: .line, created_at: .created_at}' > /tmp/opencode_comments.json 2>/dev/null || echo "[]" > /tmp/opencode_comments.json
+          
+          # Format the previous reviews for the prompt
+          # Use a simpler approach without heredoc to avoid delimiter issues
+          REVIEW_CONTENT="## Previous Automated Reviews from opencode-agent:\n\n"
+          
+          # Process reviews
+          if [ -s /tmp/opencode_reviews.json ] && [ "$(cat /tmp/opencode_reviews.json)" != "[]" ]; then
+            while IFS= read -r review; do
+              if [ -n "$review" ] && [ "$review" != "null" ]; then
+                body=$(echo "$review" | jq -r '.body // empty')
+                date=$(echo "$review" | jq -r '.submitted_at // empty')
+                if [ -n "$body" ] && [ "$body" != "null" ]; then
+                  REVIEW_CONTENT="${REVIEW_CONTENT}### Review from ${date}\n${body}\n\n---\n\n"
+                fi
+              fi
+            done < /tmp/opencode_reviews.json
+          else
+            REVIEW_CONTENT="${REVIEW_CONTENT}No previous automated reviews found.\n"
+          fi
+          
+          # Write to environment file using proper escaping
+          echo "PREVIOUS_REVIEWS<<EOF" >> $GITHUB_ENV
+          printf '%s\n' "$REVIEW_CONTENT" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          
+          echo "Previous reviews fetched and formatted for context"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
@@ -36,12 +84,111 @@ jobs:
       - name: Run opencode
         uses: anomalyco/opencode/github@latest
         env:
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
         with:
-          model: minimax-coding-plan/MiniMax-M2.1
+          model: kimi-for-coding/k2p5
           prompt: |
-            1. If the PR tags or references any issues (e.g., "Fixes #123"), verify if the implementation fully satisfies the requirements of those issues. If no issues are tagged, proceed without mentioning it.
-            2. If there are previous code reviews on this PR, verify if the feedback has been addressed. If there are no previous reviews, do not mention their absence.
-            3. Analyze for code quality issues, potential bugs, and architectural improvements.
-            4. Enforce SOLID principles. Provide a table breakdown scoring the PR on each of the 5 SOLID points (Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion). For each point, provide a score (e.g., 0-10 or N/A) and specific, actionable suggestions on where and how to improve.
+            You are reviewing a pull request. 
+
+            ${{ env.PREVIOUS_REVIEWS }}
+
+            ---
+
+            **YOUR TASK:** Analyze the CURRENT code changes and previous reviews above, then output your review in the following STRICT STRUCTURE:
+
+            **CRITICAL INSTRUCTIONS:**
+            1. **CHECK PREVIOUS ISSUES FIRST:** Look at the "Previous Automated Reviews" section above. For each issue previously reported (Critical, High, Medium, Low), verify if it still exists in the current code.
+            2. **ACKNOWLEDGE FIXES:** If a previously reported issue has been fixed, state "✅ **[FIXED]** Previous issue: [brief description]" in the appropriate section.
+            3. **ONLY REPORT NEW/UNRESOLVED ISSUES:** Do NOT re-report issues that have already been fixed. Only report issues that are still present in the current code.
+            4. **TRACK CHANGES:** If an issue was reported in a previous review but the code has changed, verify the new code and report the issue with updated file:line references if it still exists.
+
+            ---
+
+            ## 📋 Summary
+            First, check if the PR description mentions any linked issues (e.g., "Closes #123", "Fixes #456", "Resolves #789"). 
+            
+            If linked issues are found:
+            - Mention the issue number(s) explicitly
+            - Verify the PR actually implements what the issue(s) requested
+            - State whether the implementation fully satisfies the issue requirements
+            
+            Then provide 2-3 sentences summarizing the PR purpose, scope, and overall quality.
+
+            ## 🔴 Critical Issues (Must Fix - Blocks Merge)
+            **IMPORTANT:** Check previous reviews first. If critical issues were reported before, verify if they're fixed. If fixed, say "✅ All previously reported critical issues have been resolved."
+            
+            Only report NEW critical issues that could cause crashes, security vulnerabilities, data loss, or major bugs.
+            
+            For each issue, use this exact format:
+            ```
+            **[CRITICAL]** `File:Line` - Issue Title
+            **Confidence:** High|Medium|Low (how sure you are this is a real problem)
+            **Description:** Clear explanation of the issue
+            **Impact:** What could go wrong if merged
+            **Suggested Fix:** Specific code changes needed
+            ```
+
+            ## ⚠️ High Priority Issues (Should Fix)
+            Same approach as Critical - check previous reviews first, acknowledge fixes, only report unresolved issues.
+            
+            Same format as Critical, but with **[HIGH]** prefix.
+
+            ## 💡 Medium Priority Issues (Nice to Fix)
+            Same approach - verify previous reports, acknowledge fixes, report only still-present issues.
+            
+            Same format, with **[MEDIUM]** prefix.
+
+            ## ℹ️ Low Priority Suggestions (Optional)
+            Same approach.
+            
+            Same format, with **[LOW]** prefix.
+
+            ## 📊 SOLID Principles Score
+            | Principle | Score | Notes |
+            |-----------|-------|-------|
+            | Single Responsibility | 0-10 | Brief justification |
+            | Open/Closed | 0-10 | Brief justification |
+            | Liskov Substitution | 0-10 | Brief justification |
+            | Interface Segregation | 0-10 | Brief justification |
+            | Dependency Inversion | 0-10 | Brief justification |
+            | **Average** | **X.X** | |
+
+            ## 🎯 Final Assessment
+
+            ### Overall Confidence Score: XX%
+            Rate your confidence in this PR being ready to merge (0-100%).
+            **How to interpret:**
+            - 0-30%: Major concerns, do not merge without significant rework
+            - 31-60%: Moderate concerns, several issues need addressing
+            - 61-80%: Minor concerns, mostly ready with some fixes
+            - 81-100%: High confidence, ready to merge or with trivial fixes
+
+            ### Confidence Breakdown:
+            - **Code Quality:** XX% (how well-written is the code?)
+            - **Completeness:** XX% (does it fulfill requirements?)
+            - **Risk Level:** XX% (how risky is this change?)
+            - **Test Coverage:** XX% (are changes adequately tested?)
+
+            ### Merge Readiness:
+            - [ ] All critical issues resolved
+            - [ ] SOLID average score >= 6.0
+            - [ ] Overall confidence >= 60%
+            - [ ] No security concerns
+            - [ ] Tests present and passing (if applicable)
+
+            ### Verdict:
+            **MERGE** | **MERGE WITH FIXES** | **DO NOT MERGE**
+            
+            One-sentence explanation of the verdict.
+
+            ---
+
+            **Review Guidelines:**
+            1. **MOST IMPORTANT:** Always check previous reviews and verify if issues are fixed before reporting them again
+            2. Acknowledge fixes explicitly with ✅ **[FIXED]** markers
+            3. Check the PR description for linked issues ("Fixes #123", "Closes #456", etc.) and verify the implementation
+            4. Be extremely specific with file paths and line numbers
+            5. Confidence scores should reflect how certain you are - use "Low" when unsure
+            6. If you have nothing meaningful to add to a section, write "None identified" instead of omitting it
+            7. Always provide actionable fixes, never just complaints
 

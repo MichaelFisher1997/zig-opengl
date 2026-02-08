@@ -207,6 +207,16 @@ pub const BLOCK_REGISTRY = blk: {
                 def.texture_bottom = "spruce_log_top";
                 def.texture_side = "spruce_log_side";
             },
+            .torch => {
+                def.texture_top = "torch";
+                def.texture_bottom = "torch";
+                def.texture_side = "torch";
+            },
+            .lava => {
+                def.texture_top = "lava";
+                def.texture_bottom = "lava";
+                def.texture_side = "lava";
+            },
             else => {},
         }
 
@@ -257,18 +267,20 @@ pub const BLOCK_REGISTRY = blk: {
             .spruce_log => .{ 0.35, 0.25, 0.15 },
             .spruce_leaves => .{ 0.15, 0.4, 0.15 },
             .vine => .{ 0.2, 0.5, 0.1 },
+            .torch => .{ 1.0, 0.8, 0.4 },
+            .lava => .{ 1.0, 0.4, 0.1 },
             else => .{ 1, 0, 1 },
         };
 
         // 2. Solid
         def.is_solid = switch (id) {
-            .air, .water => false,
+            .air, .water, .lava, .torch => false,
             else => true,
         };
 
         // 3. Transparent
         def.is_transparent = switch (id) {
-            .air, .water, .glass, .leaves, .mangrove_leaves, .mangrove_roots, .jungle_leaves, .bamboo, .acacia_leaves, .acacia_sapling, .birch_leaves, .spruce_leaves, .vine, .tall_grass, .flower_red, .flower_yellow, .dead_bush, .cactus, .melon => true,
+            .air, .water, .lava, .glass, .leaves, .mangrove_leaves, .mangrove_roots, .jungle_leaves, .bamboo, .acacia_leaves, .acacia_sapling, .birch_leaves, .spruce_leaves, .vine, .tall_grass, .flower_red, .flower_yellow, .dead_bush, .cactus, .melon, .torch => true,
             else => false,
         };
 
@@ -280,20 +292,25 @@ pub const BLOCK_REGISTRY = blk: {
 
         // 5. Is Fluid
         def.is_fluid = switch (id) {
-            .water => true,
+            .water, .lava => true,
             else => false,
         };
 
         // 6. Render Pass
         def.render_pass = switch (id) {
-            .water => .fluid,
+            .water, .lava => .fluid,
             .glass => .translucent,
-            .leaves, .mangrove_leaves, .jungle_leaves, .acacia_leaves, .birch_leaves, .spruce_leaves, .mangrove_roots, .bamboo, .acacia_sapling, .vine, .tall_grass, .flower_red, .flower_yellow, .dead_bush, .cactus, .melon => .cutout,
+            .leaves, .mangrove_leaves, .jungle_leaves, .acacia_leaves, .birch_leaves, .spruce_leaves, .mangrove_roots, .bamboo, .acacia_sapling, .vine, .tall_grass, .flower_red, .flower_yellow, .dead_bush, .cactus, .melon, .torch => .cutout,
             else => .solid,
         };
 
-        // 7. Light Emission
-        def.light_emission = if (id == .glowstone) .{ 15, 14, 10 } else .{ 0, 0, 0 };
+        // 7. Light Emission (RGB values 0-15)
+        def.light_emission = switch (id) {
+            .glowstone => .{ 15, 14, 10 }, // Warm yellow
+            .torch => .{ 15, 11, 6 }, // Warm orange
+            .lava => .{ 15, 8, 3 }, // Red-orange
+            else => .{ 0, 0, 0 },
+        };
 
         definitions[int_id] = def;
     }

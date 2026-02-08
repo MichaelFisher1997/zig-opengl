@@ -119,6 +119,8 @@ pub const BlockType = enum(u8) {
     spruce_log = 42,
     spruce_leaves = 43,
     vine = 44,
+    torch = 45,
+    lava = 46,
 
     _,
 };

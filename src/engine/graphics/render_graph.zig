@@ -30,11 +30,17 @@ pub const SceneContext = struct {
     disable_gpass_draw: bool,
     disable_ssao: bool,
     disable_clouds: bool,
-    // Phase 3: FXAA and Bloom flags
+    // Post-processing flags
     fxaa_enabled: bool = true,
     bloom_enabled: bool = true,
     overlay_renderer: ?*const fn (ctx: SceneContext) void = null,
     overlay_ctx: ?*anyopaque = null,
+    lpv_texture_handle: rhi_pkg.TextureHandle = 0,
+    lpv_texture_handle_g: rhi_pkg.TextureHandle = 0,
+    lpv_texture_handle_b: rhi_pkg.TextureHandle = 0,
+    // Pointer to frame-local cascade storage, computed once per frame by the first
+    // ShadowPass and reused by subsequent cascade passes to guarantee consistency.
+    cached_cascades: *?CSM.ShadowCascades,
 };
 
 pub const IRenderPass = struct {
@@ -113,7 +119,7 @@ pub const RenderGraph = struct {
 
 // --- Standard Pass Implementations ---
 
-const SHADOW_PASS_NAMES = [_][]const u8{ "ShadowPass0", "ShadowPass1", "ShadowPass2" };
+const SHADOW_PASS_NAMES = [_][]const u8{ "ShadowPass0", "ShadowPass1", "ShadowPass2", "ShadowPass3" };
 
 pub const ShadowPass = struct {
     cascade_index: u32,
@@ -126,6 +132,7 @@ pub const ShadowPass = struct {
         .{ .name = "ShadowPass0", .needs_main_pass = false, .execute = execute },
         .{ .name = "ShadowPass1", .needs_main_pass = false, .execute = execute },
         .{ .name = "ShadowPass2", .needs_main_pass = false, .execute = execute },
+        .{ .name = "ShadowPass3", .needs_main_pass = false, .execute = execute },
     };
 
     pub fn pass(self: *ShadowPass) IRenderPass {
@@ -143,27 +150,43 @@ pub const ShadowPass = struct {
         const cascade_idx = self.cascade_index;
         const rhi = ctx.rhi;
 
-        const cascades = CSM.computeCascades(
-            ctx.shadow.resolution,
-            ctx.camera.fov,
-            ctx.aspect,
-            0.1,
-            ctx.shadow.distance,
-            ctx.sky_params.sun_dir,
-            ctx.camera.getViewMatrixOriginCentered(),
-            true,
-        );
+        // Compute cascades once per frame and cache via shared pointer so all
+        // cascade passes within the same frame use identical matrices.
+        const cascades = if (ctx.cached_cascades.*) |cached| cached else blk: {
+            const computed = CSM.computeCascades(
+                ctx.shadow.resolution,
+                ctx.camera.fov,
+                ctx.aspect,
+                0.1,
+                ctx.shadow.distance,
+                ctx.sky_params.sun_dir,
+                ctx.camera.getViewMatrixOriginCentered(),
+                true,
+            );
+            // Validate cascade data before using
+            if (!CSM.validateCascades(computed, log.log)) {
+                log.log.err("ShadowPass{}: Invalid cascade data, skipping shadow pass", .{cascade_idx});
+                return error.InvalidShadowCascades;
+            }
+            ctx.cached_cascades.* = computed;
+            break :blk computed;
+        };
+
         const light_space_matrix = cascades.light_space_matrices[cascade_idx];
 
-        try rhi.updateShadowUniforms(.{
-            .light_space_matrices = cascades.light_space_matrices,
-            .cascade_splits = cascades.cascade_splits,
-            .shadow_texel_sizes = cascades.texel_sizes,
-        });
+        // Only update uniforms on first cascade pass
+        if (cascade_idx == 0) {
+            try rhi.updateShadowUniforms(.{
+                .light_space_matrices = cascades.light_space_matrices,
+                .cascade_splits = cascades.cascade_splits,
+                .shadow_texel_sizes = cascades.texel_sizes,
+            });
+        }
 
         if (ctx.disable_shadow_draw) return;
 
         rhi.beginShadowPass(cascade_idx, light_space_matrix);
+        errdefer rhi.endShadowPass();
         ctx.shadow_scene.renderShadowPass(light_space_matrix, ctx.camera.position);
         rhi.endShadowPass();
     }
@@ -262,6 +285,9 @@ pub const OpaquePass = struct {
         const rhi = ctx.rhi;
         rhi.bindShader(ctx.main_shader);
         ctx.material_system.bindTerrainMaterial(ctx.env_map_handle);
+        rhi.bindTexture(ctx.lpv_texture_handle, 11);
+        rhi.bindTexture(ctx.lpv_texture_handle_g, 12);
+        rhi.bindTexture(ctx.lpv_texture_handle_b, 13);
         const view_proj = Mat4.perspectiveReverseZ(ctx.camera.fov, ctx.aspect, ctx.camera.near, ctx.camera.far).multiply(ctx.camera.getViewMatrixOriginCentered());
         ctx.world.render(view_proj, ctx.camera.position, true);
     }
@@ -338,7 +364,7 @@ pub const PostProcessPass = struct {
     }
 };
 
-// Phase 3: Bloom Pass - Computes bloom mip chain from HDR buffer
+// Bloom pass - computes bloom mip chain from HDR buffer
 pub const BloomPass = struct {
     enabled: bool = true,
     const VTABLE = IRenderPass.VTable{
@@ -360,7 +386,7 @@ pub const BloomPass = struct {
     }
 };
 
-// Phase 3: FXAA Pass - Applies FXAA to LDR output
+// FXAA pass - applies anti-aliasing to LDR output
 pub const FXAAPass = struct {
     enabled: bool = true,
     const VTABLE = IRenderPass.VTable{

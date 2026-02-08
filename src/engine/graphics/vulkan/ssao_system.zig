@@ -71,7 +71,7 @@ pub const SSAOSystem = struct {
         self.params.bias = DEFAULT_BIAS;
 
         try self.initRenderPasses(vk, ao_format);
-        errdefer self.deinit(vk, allocator);
+        errdefer self.deinit(vk, allocator, descriptor_pool);
 
         try self.initImages(device, width, height, ao_format);
         try self.initFramebuffers(vk, width, height);
@@ -490,12 +490,25 @@ pub const SSAOSystem = struct {
         }
     }
 
-    pub fn deinit(self: *SSAOSystem, vk: c.VkDevice, allocator: Allocator) void {
+    pub fn deinit(self: *SSAOSystem, vk: c.VkDevice, allocator: Allocator, descriptor_pool: c.VkDescriptorPool) void {
         _ = allocator;
         if (self.pipeline != null) c.vkDestroyPipeline(vk, self.pipeline, null);
         if (self.blur_pipeline != null) c.vkDestroyPipeline(vk, self.blur_pipeline, null);
         if (self.pipeline_layout != null) c.vkDestroyPipelineLayout(vk, self.pipeline_layout, null);
         if (self.blur_pipeline_layout != null) c.vkDestroyPipelineLayout(vk, self.blur_pipeline_layout, null);
+        // Free descriptor sets BEFORE destroying their layouts
+        if (descriptor_pool != null) {
+            for (0..rhi.MAX_FRAMES_IN_FLIGHT) |i| {
+                if (self.descriptor_sets[i] != null) {
+                    _ = c.vkFreeDescriptorSets(vk, descriptor_pool, 1, &self.descriptor_sets[i]);
+                    self.descriptor_sets[i] = null;
+                }
+                if (self.blur_descriptor_sets[i] != null) {
+                    _ = c.vkFreeDescriptorSets(vk, descriptor_pool, 1, &self.blur_descriptor_sets[i]);
+                    self.blur_descriptor_sets[i] = null;
+                }
+            }
+        }
         if (self.descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(vk, self.descriptor_set_layout, null);
         if (self.blur_descriptor_set_layout != null) c.vkDestroyDescriptorSetLayout(vk, self.blur_descriptor_set_layout, null);
         if (self.framebuffer != null) c.vkDestroyFramebuffer(vk, self.framebuffer, null);
@@ -570,41 +583,3 @@ pub const SSAOSystem = struct {
         }
     }
 };
-
-test "SSAOSystem noise generation" {
-    var rng = std.Random.DefaultPrng.init(12345);
-    const data1 = SSAOSystem.generateNoiseData(&rng);
-    rng = std.Random.DefaultPrng.init(12345);
-    const data2 = SSAOSystem.generateNoiseData(&rng);
-
-    try std.testing.expectEqual(data1, data2);
-
-    // Verify some properties
-    for (0..NOISE_SIZE * NOISE_SIZE) |i| {
-        // Red and Green should be random but in 0-255 range (always true for u8)
-        // Blue should be 0
-        try std.testing.expectEqual(@as(u8, 0), data1[i * 4 + 2]);
-        // Alpha should be 255
-        try std.testing.expectEqual(@as(u8, 255), data1[i * 4 + 3]);
-    }
-}
-
-test "SSAOSystem kernel generation" {
-    var rng = std.Random.DefaultPrng.init(67890);
-    const samples1 = SSAOSystem.generateKernelSamples(&rng);
-    rng = std.Random.DefaultPrng.init(67890);
-    const samples2 = SSAOSystem.generateKernelSamples(&rng);
-
-    for (0..KERNEL_SIZE) |i| {
-        try std.testing.expectEqual(samples1[i][0], samples2[i][0]);
-        try std.testing.expectEqual(samples1[i][1], samples2[i][1]);
-        try std.testing.expectEqual(samples1[i][2], samples2[i][2]);
-        try std.testing.expectEqual(samples1[i][3], samples2[i][3]);
-
-        // Hemisphere check: z must be >= 0
-        try std.testing.expect(samples1[i][2] >= 0.0);
-        // Length check: should be <= 1.0 (scaled by falloff)
-        const len = @sqrt(samples1[i][0] * samples1[i][0] + samples1[i][1] * samples1[i][1] + samples1[i][2] * samples1[i][2]);
-        try std.testing.expect(len <= 1.0);
-    }
-}

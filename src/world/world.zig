@@ -18,7 +18,8 @@ const registry = @import("worldgen/registry.zig");
 const GlobalVertexAllocator = @import("chunk_allocator.zig").GlobalVertexAllocator;
 const rhi_mod = @import("../engine/graphics/rhi.zig");
 const RHI = rhi_mod.RHI;
-const LODManager = @import("lod_manager.zig").LODManager(RHI);
+const LODManager = @import("lod_manager.zig").LODManager;
+const LODRenderer = @import("lod_renderer.zig").LODRenderer(RHI);
 const Vec3 = @import("../engine/math/vec3.zig").Vec3;
 const Mat4 = @import("../engine/math/mat4.zig").Mat4;
 const Frustum = @import("../engine/math/frustum.zig").Frustum;
@@ -58,6 +59,7 @@ pub const World = struct {
 
     // LOD System (Issue #114)
     lod_manager: ?*LODManager,
+    lod_renderer: ?*LODRenderer, // Owned separately; LODManager holds a type-erased interface
     lod_enabled: bool,
 
     pub fn init(allocator: std.mem.Allocator, render_distance: i32, seed: u64, rhi: RHI, atlas: *const TextureAtlas) !*World {
@@ -95,6 +97,7 @@ pub const World = struct {
             .safe_mode = safe_mode,
             .safe_render_distance = safe_render_distance,
             .lod_manager = null,
+            .lod_renderer = null,
             .lod_enabled = false,
         };
 
@@ -112,8 +115,16 @@ pub const World = struct {
     pub fn initGenWithLOD(generator_index: usize, allocator: std.mem.Allocator, render_distance: i32, seed: u64, rhi: RHI, lod_config: ILODConfig, atlas: *const TextureAtlas) !*World {
         const world = try initGen(generator_index, allocator, render_distance, seed, rhi, atlas);
 
-        // Initialize LOD manager with generator reference
-        world.lod_manager = try LODManager.init(allocator, lod_config, rhi, world.generator);
+        // Create LODRenderer (owns GPU draw resources, stays generic over RHI)
+        const lod_renderer = try LODRenderer.init(allocator, rhi);
+
+        // Create GPU bridge + render interface from the concrete renderer
+        const gpu_bridge = lod_renderer.createGPUBridge();
+        const render_iface = lod_renderer.toInterface();
+
+        // Initialize LOD manager with callback interfaces (no direct RHI dependency)
+        world.lod_manager = try LODManager.init(allocator, lod_config, gpu_bridge, render_iface, world.generator);
+        world.lod_renderer = lod_renderer;
         world.lod_enabled = true;
 
         const radii = lod_config.getRadii();
@@ -132,9 +143,14 @@ pub const World = struct {
         self.storage.deinitWithoutRHI();
         self.renderer.deinit();
 
-        // Cleanup LOD manager if enabled
+        // Cleanup LOD system if enabled.
+        // LODManager must be deinit'd first (it uses gpu_bridge callbacks that reference the renderer's RHI).
+        // LODRenderer is deinit'd second (it owns GPU draw buffers).
         if (self.lod_manager) |lod_mgr| {
             lod_mgr.deinit();
+        }
+        if (self.lod_renderer) |lod_rend| {
+            lod_rend.deinit();
         }
 
         self.generator.deinit(self.allocator);

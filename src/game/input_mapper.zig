@@ -155,6 +155,8 @@ pub const GameAction = enum(u8) {
     toggle_clouds,
     /// Toggle fog
     toggle_fog,
+    /// Toggle LPV debug overlay
+    toggle_lpv_overlay,
 
     pub const count = @typeInfo(GameAction).@"enum".fields.len;
 };
@@ -347,6 +349,7 @@ pub const DEFAULT_BINDINGS = blk: {
     bindings[@intFromEnum(GameAction.toggle_ssao)] = ActionBinding.init(.{ .key = .f8 });
     bindings[@intFromEnum(GameAction.toggle_clouds)] = ActionBinding.init(.{ .key = .f9 });
     bindings[@intFromEnum(GameAction.toggle_fog)] = ActionBinding.init(.{ .key = .f10 });
+    bindings[@intFromEnum(GameAction.toggle_lpv_overlay)] = ActionBinding.init(.{ .key = .f11 });
 
     // Map controls
     bindings[@intFromEnum(GameAction.toggle_map)] = ActionBinding.init(.{ .key = .m });

@@ -39,6 +39,8 @@ layout(set = 0, binding = 0) uniform GlobalUniforms {
     vec4 pbr_params; // x = pbr_quality, y = exposure, z = saturation, w = ssao_strength
     vec4 volumetric_params; // x = enabled, y = density, z = steps, w = scattering
     vec4 viewport_size; // xy = width/height
+    vec4 lpv_params; // x = enabled, y = intensity, z = cell_size, w = grid_size
+    vec4 lpv_origin; // xyz = world origin
 } global;
 
 layout(push_constant) uniform ModelUniforms {
@@ -69,7 +71,14 @@ void main() {
     vBlockLight = aBlockLight;
     
     vFragPosWorld = worldPos.xyz;
-    vViewDepth = vDistance;
+    // Calculate actual view-space Z depth for cascade selection
+    // This aligns with how CSM splits are calculated (view-space Z)
+    vec4 viewPos = global.view_proj * vec4(worldPos.xyz, 1.0);
+    // In reverse-Z, view-space Z increases as we go deeper into the scene
+    // We need the actual view-space depth, not clip-space
+    // Transform world position to view space
+    vec3 toCamera = worldPos.xyz - global.cam_pos.xyz;
+    vViewDepth = length(toCamera);
     vAO = aAO;
     vMaskRadius = model_data.mask_radius;
 
