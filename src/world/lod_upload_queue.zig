@@ -28,22 +28,36 @@ pub const LODGPUBridge = struct {
     /// Opaque context pointer (typically the concrete RHI instance).
     ctx: *anyopaque,
 
-    /// Validate that ctx is not undefined/null. Debug-only check.
+    fn hasInvalidCtx(self: LODGPUBridge) bool {
+        const ctx_addr = @intFromPtr(self.ctx);
+        return ctx_addr == 0 or ctx_addr == 0xaaaa_aaaa_aaaa_aaaa;
+    }
+
+    /// Validate that ctx is not undefined/null.
     fn assertValidCtx(self: LODGPUBridge) void {
-        std.debug.assert(@intFromPtr(self.ctx) != 0xaaaa_aaaa_aaaa_aaaa); // Zig's undefined pattern
+        std.debug.assert(!self.hasInvalidCtx());
     }
 
     pub fn upload(self: LODGPUBridge, mesh: *LODMesh) RhiError!void {
+        if (self.hasInvalidCtx()) return error.InvalidState;
         self.assertValidCtx();
         return self.on_upload(mesh, self.ctx);
     }
 
     pub fn destroy(self: LODGPUBridge, mesh: *LODMesh) void {
+        if (self.hasInvalidCtx()) {
+            std.log.err("LODGPUBridge.destroy called with invalid context pointer", .{});
+            return;
+        }
         self.assertValidCtx();
         self.on_destroy(mesh, self.ctx);
     }
 
     pub fn waitIdle(self: LODGPUBridge) void {
+        if (self.hasInvalidCtx()) {
+            std.log.err("LODGPUBridge.waitIdle called with invalid context pointer", .{});
+            return;
+        }
         self.assertValidCtx();
         self.on_wait_idle(self.ctx);
     }

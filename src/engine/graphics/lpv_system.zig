@@ -91,6 +91,16 @@ pub const LPVSystem = struct {
     inject_pipeline: c.VkPipeline = null,
     propagate_pipeline: c.VkPipeline = null,
 
+    const GridResources = struct {
+        grid_textures_a: [3]rhi_pkg.TextureHandle = .{ 0, 0, 0 },
+        grid_textures_b: [3]rhi_pkg.TextureHandle = .{ 0, 0, 0 },
+        active_grid_textures: [3]rhi_pkg.TextureHandle = .{ 0, 0, 0 },
+        debug_overlay_texture: rhi_pkg.TextureHandle = 0,
+        debug_overlay_pixels: []f32 = &.{},
+        image_layout_a: c.VkImageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        image_layout_b: c.VkImageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+
     pub fn init(
         allocator: std.mem.Allocator,
         rhi: rhi_pkg.RHI,
@@ -177,12 +187,48 @@ pub const LPVSystem = struct {
         const clamped_grid = std.math.clamp(grid_size, 16, 64);
         if (clamped_grid == self.grid_size) return;
 
-        self.destroyGridTextures();
+        const old_resources = GridResources{
+            .grid_textures_a = self.grid_textures_a,
+            .grid_textures_b = self.grid_textures_b,
+            .active_grid_textures = self.active_grid_textures,
+            .debug_overlay_texture = self.debug_overlay_texture,
+            .debug_overlay_pixels = self.debug_overlay_pixels,
+            .image_layout_a = self.image_layout_a,
+            .image_layout_b = self.image_layout_b,
+        };
+        const old_grid_size = self.grid_size;
+        const old_stats_grid_size = self.stats.grid_size;
+        const old_origin = self.origin;
+
+        const new_resources = try self.createGridResources(clamped_grid);
+        self.applyGridResources(new_resources);
         self.grid_size = clamped_grid;
         self.stats.grid_size = clamped_grid;
         self.origin = Vec3.zero;
-        try self.createGridTextures();
+
+        errdefer {
+            var failed_new = GridResources{
+                .grid_textures_a = self.grid_textures_a,
+                .grid_textures_b = self.grid_textures_b,
+                .active_grid_textures = self.active_grid_textures,
+                .debug_overlay_texture = self.debug_overlay_texture,
+                .debug_overlay_pixels = self.debug_overlay_pixels,
+                .image_layout_a = self.image_layout_a,
+                .image_layout_b = self.image_layout_b,
+            };
+            self.destroyGridResources(&failed_new);
+            self.applyGridResources(old_resources);
+            self.grid_size = old_grid_size;
+            self.stats.grid_size = old_stats_grid_size;
+            self.origin = old_origin;
+        }
+
+        self.buildDebugOverlay(&.{}, 0);
+        try self.uploadDebugOverlay();
         try self.updateDescriptorSets();
+
+        var old_to_destroy = old_resources;
+        self.destroyGridResources(&old_to_destroy);
     }
 
     pub fn getTextureHandle(self: *const LPVSystem) rhi_pkg.TextureHandle {
@@ -269,7 +315,13 @@ pub const LPVSystem = struct {
         }
 
         // Build occlusion grid for opaque block awareness during propagation
-        self.buildOcclusionGrid(world);
+        if (!self.buildOcclusionGrid(world)) {
+            const elapsed_ns = timer.read();
+            const delta_ms: f32 = @floatCast(@as(f64, @floatFromInt(elapsed_ns)) / @as(f64, std.time.ns_per_ms));
+            self.stats.light_count = @intCast(light_count);
+            self.stats.cpu_update_ms = delta_ms;
+            return;
+        }
 
         if (debug_overlay_enabled) {
             // Keep debug overlay generation only when overlay is active.
@@ -359,17 +411,18 @@ pub const LPVSystem = struct {
 
     /// Build a per-cell occlusion grid (1 = opaque, 0 = transparent) for the current LPV volume.
     /// Stored as packed u32 array where each u32 holds the opacity for one cell.
-    fn buildOcclusionGrid(self: *LPVSystem, world: *World) void {
+    fn buildOcclusionGrid(self: *LPVSystem, world: *World) bool {
         const gs = @as(usize, self.grid_size);
         const total_cells = gs * gs * gs;
 
         // Ensure CPU buffer is allocated
         if (self.occlusion_grid.len != total_cells) {
-            if (self.occlusion_grid.len > 0) self.allocator.free(self.occlusion_grid);
-            self.occlusion_grid = self.allocator.alloc(u32, total_cells) catch {
-                self.occlusion_grid = &.{};
-                return;
+            const new_grid = self.allocator.alloc(u32, total_cells) catch |err| {
+                std.log.err("LPV occlusion grid allocation failed ({} cells): {}", .{ total_cells, err });
+                return false;
             };
+            if (self.occlusion_grid.len > 0) self.allocator.free(self.occlusion_grid);
+            self.occlusion_grid = new_grid;
         }
 
         @memset(self.occlusion_grid, 0);
@@ -438,7 +491,109 @@ pub const LPVSystem = struct {
         if (self.occlusion_buffer.mapped_ptr) |ptr| {
             const bytes = std.mem.sliceAsBytes(self.occlusion_grid);
             @memcpy(@as([*]u8, @ptrCast(ptr))[0..bytes.len], bytes);
+            return true;
         }
+
+        std.log.err("LPV occlusion upload skipped: buffer is not mapped", .{});
+        return false;
+    }
+
+    fn createGridResources(self: *LPVSystem, grid_size: u32) !GridResources {
+        var resources = GridResources{};
+        errdefer self.destroyGridResources(&resources);
+
+        const empty = try self.allocator.alloc(f32, @as(usize, grid_size) * @as(usize, grid_size) * @as(usize, grid_size) * 4);
+        defer self.allocator.free(empty);
+        @memset(empty, 0.0);
+        const bytes = std.mem.sliceAsBytes(empty);
+
+        const tex_config = rhi_pkg.TextureConfig{
+            .min_filter = .linear,
+            .mag_filter = .linear,
+            .wrap_s = .clamp_to_edge,
+            .wrap_t = .clamp_to_edge,
+            .generate_mipmaps = false,
+            .is_render_target = false,
+        };
+
+        for (0..3) |ch| {
+            resources.grid_textures_a[ch] = try self.rhi.factory().createTexture3D(
+                grid_size,
+                grid_size,
+                grid_size,
+                .rgba32f,
+                tex_config,
+                bytes,
+            );
+
+            resources.grid_textures_b[ch] = try self.rhi.factory().createTexture3D(
+                grid_size,
+                grid_size,
+                grid_size,
+                .rgba32f,
+                tex_config,
+                bytes,
+            );
+        }
+
+        const debug_size = @as(usize, grid_size) * @as(usize, grid_size) * 4;
+        resources.debug_overlay_pixels = try self.allocator.alloc(f32, debug_size);
+        @memset(resources.debug_overlay_pixels, 0.0);
+
+        resources.debug_overlay_texture = try self.rhi.createTexture(
+            grid_size,
+            grid_size,
+            .rgba32f,
+            .{
+                .min_filter = .linear,
+                .mag_filter = .linear,
+                .wrap_s = .clamp_to_edge,
+                .wrap_t = .clamp_to_edge,
+                .generate_mipmaps = false,
+                .is_render_target = false,
+            },
+            std.mem.sliceAsBytes(resources.debug_overlay_pixels),
+        );
+
+        resources.active_grid_textures = resources.grid_textures_a;
+        resources.image_layout_a = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        resources.image_layout_b = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        return resources;
+    }
+
+    fn applyGridResources(self: *LPVSystem, resources: GridResources) void {
+        self.grid_textures_a = resources.grid_textures_a;
+        self.grid_textures_b = resources.grid_textures_b;
+        self.active_grid_textures = resources.active_grid_textures;
+        self.debug_overlay_texture = resources.debug_overlay_texture;
+        self.debug_overlay_pixels = resources.debug_overlay_pixels;
+        self.image_layout_a = resources.image_layout_a;
+        self.image_layout_b = resources.image_layout_b;
+    }
+
+    fn destroyGridResources(self: *LPVSystem, resources: *GridResources) void {
+        for (0..3) |ch| {
+            if (resources.grid_textures_a[ch] != 0) {
+                self.rhi.destroyTexture(resources.grid_textures_a[ch]);
+                resources.grid_textures_a[ch] = 0;
+            }
+            if (resources.grid_textures_b[ch] != 0) {
+                self.rhi.destroyTexture(resources.grid_textures_b[ch]);
+                resources.grid_textures_b[ch] = 0;
+            }
+        }
+
+        if (resources.debug_overlay_texture != 0) {
+            self.rhi.destroyTexture(resources.debug_overlay_texture);
+            resources.debug_overlay_texture = 0;
+        }
+        if (resources.debug_overlay_pixels.len > 0) {
+            self.allocator.free(resources.debug_overlay_pixels);
+            resources.debug_overlay_pixels = &.{};
+        }
+
+        resources.active_grid_textures = .{ 0, 0, 0 };
     }
 
     fn dispatchCompute(self: *LPVSystem, light_count: usize) !void {
@@ -553,67 +708,11 @@ pub const LPVSystem = struct {
     }
 
     fn createGridTextures(self: *LPVSystem) !void {
-        const empty = try self.allocator.alloc(f32, @as(usize, self.grid_size) * @as(usize, self.grid_size) * @as(usize, self.grid_size) * 4);
-        defer self.allocator.free(empty);
-        @memset(empty, 0.0);
-        const bytes = std.mem.sliceAsBytes(empty);
-
-        // Native 3D textures for SH L1 LPV: 3 channel textures per grid (R, G, B),
-        // each storing 4 SH coefficients (L0, L1x, L1y, L1z) as rgba32f.
-        const tex_config = rhi_pkg.TextureConfig{
-            .min_filter = .linear,
-            .mag_filter = .linear,
-            .wrap_s = .clamp_to_edge,
-            .wrap_t = .clamp_to_edge,
-            .generate_mipmaps = false,
-            .is_render_target = false,
-        };
-
-        for (0..3) |ch| {
-            self.grid_textures_a[ch] = try self.rhi.factory().createTexture3D(
-                self.grid_size,
-                self.grid_size,
-                self.grid_size,
-                .rgba32f,
-                tex_config,
-                bytes,
-            );
-
-            self.grid_textures_b[ch] = try self.rhi.factory().createTexture3D(
-                self.grid_size,
-                self.grid_size,
-                self.grid_size,
-                .rgba32f,
-                tex_config,
-                bytes,
-            );
-        }
-
-        const debug_size = @as(usize, self.grid_size) * @as(usize, self.grid_size) * 4;
-        self.debug_overlay_pixels = try self.allocator.alloc(f32, debug_size);
-        @memset(self.debug_overlay_pixels, 0.0);
-
-        self.debug_overlay_texture = try self.rhi.createTexture(
-            self.grid_size,
-            self.grid_size,
-            .rgba32f,
-            .{
-                .min_filter = .linear,
-                .mag_filter = .linear,
-                .wrap_s = .clamp_to_edge,
-                .wrap_t = .clamp_to_edge,
-                .generate_mipmaps = false,
-                .is_render_target = false,
-            },
-            std.mem.sliceAsBytes(self.debug_overlay_pixels),
-        );
+        const resources = try self.createGridResources(self.grid_size);
+        self.applyGridResources(resources);
 
         self.buildDebugOverlay(&.{}, 0);
         try self.uploadDebugOverlay();
-
-        self.active_grid_textures = self.grid_textures_a;
-        self.image_layout_a = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        self.image_layout_b = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
 
     fn destroyGridTextures(self: *LPVSystem) void {

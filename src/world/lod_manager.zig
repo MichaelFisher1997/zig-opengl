@@ -194,21 +194,45 @@ pub const LODManager = struct {
 
     pub fn init(allocator: std.mem.Allocator, config: ILODConfig, gpu_bridge: LODGPUBridge, render_iface: LODRenderInterface, generator: Generator) !*Self {
         const mgr = try allocator.create(Self);
+        errdefer allocator.destroy(mgr);
 
         var regions: [LODLevel.count]RegionMap = undefined;
         var meshes: [LODLevel.count]MeshMap = undefined;
         var gen_queues: [LODLevel.count]*JobQueue = undefined;
         var upload_queues: [LODLevel.count]RingBuffer(*LODChunk) = undefined;
+        var initialized_levels: usize = 0;
+
+        errdefer {
+            var i: usize = 0;
+            while (i < initialized_levels) : (i += 1) {
+                upload_queues[i].deinit();
+                gen_queues[i].deinit();
+                allocator.destroy(gen_queues[i]);
+                meshes[i].deinit();
+                regions[i].deinit();
+            }
+        }
 
         for (0..LODLevel.count) |i| {
-            regions[i] = RegionMap.init(allocator);
-            meshes[i] = MeshMap.init(allocator);
+            var region_map = RegionMap.init(allocator);
+            errdefer region_map.deinit();
+
+            var mesh_map = MeshMap.init(allocator);
+            errdefer mesh_map.deinit();
 
             const queue = try allocator.create(JobQueue);
+            errdefer allocator.destroy(queue);
             queue.* = JobQueue.init(allocator);
-            gen_queues[i] = queue;
+            errdefer queue.deinit();
 
-            upload_queues[i] = try RingBuffer(*LODChunk).init(allocator, 32);
+            var upload_queue = try RingBuffer(*LODChunk).init(allocator, 32);
+            errdefer upload_queue.deinit();
+
+            regions[i] = region_map;
+            meshes[i] = mesh_map;
+            gen_queues[i] = queue;
+            upload_queues[i] = upload_queue;
+            initialized_levels += 1;
         }
 
         mgr.* = .{

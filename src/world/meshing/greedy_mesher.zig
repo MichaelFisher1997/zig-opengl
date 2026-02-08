@@ -55,6 +55,8 @@ pub fn meshSlice(
     fluid_list: *std.ArrayListUnmanaged(Vertex),
     atlas: *const TextureAtlas,
 ) !void {
+    if (axis != .top and axis != .east and axis != .south) return error.UnsupportedFace;
+
     const du: u32 = 16;
     const dv: u32 = 16;
     var mask = try allocator.alloc(?FaceKey, du * dv);
@@ -180,7 +182,7 @@ fn addGreedyFace(
         .top => Face.bottom,
         .east => Face.west,
         .south => Face.north,
-        else => unreachable,
+        else => return error.UnsupportedFace,
     };
     const base_col = block_def.getFaceColor(face);
     const col = [3]f32{ base_col[0] * tint[0], base_col[1] * tint[1], base_col[2] * tint[2] };
@@ -200,50 +202,55 @@ fn addGreedyFace(
 
     var p: [4][3]f32 = undefined;
     var uv: [4][2]f32 = undefined;
-    if (axis == .top) {
-        const y = sf;
-        if (forward) {
-            p[0] = .{ uf, y, vf + hf };
-            p[1] = .{ uf + wf, y, vf + hf };
-            p[2] = .{ uf + wf, y, vf };
-            p[3] = .{ uf, y, vf };
-        } else {
-            p[0] = .{ uf, y, vf };
-            p[1] = .{ uf + wf, y, vf };
-            p[2] = .{ uf + wf, y, vf + hf };
-            p[3] = .{ uf, y, vf + hf };
-        }
-        uv = [4][2]f32{ .{ 0, 0 }, .{ wf, 0 }, .{ wf, hf }, .{ 0, hf } };
-    } else if (axis == .east) {
-        const x = sf;
-        const y0: f32 = @floatFromInt(si * SUBCHUNK_SIZE);
-        if (forward) {
-            p[0] = .{ x, y0 + uf, vf + hf };
-            p[1] = .{ x, y0 + uf, vf };
-            p[2] = .{ x, y0 + uf + wf, vf };
-            p[3] = .{ x, y0 + uf + wf, vf + hf };
-        } else {
-            p[0] = .{ x, y0 + uf, vf };
-            p[1] = .{ x, y0 + uf, vf + hf };
-            p[2] = .{ x, y0 + uf + wf, vf + hf };
-            p[3] = .{ x, y0 + uf + wf, vf };
-        }
-        uv = [4][2]f32{ .{ 0, wf }, .{ hf, wf }, .{ hf, 0 }, .{ 0, 0 } };
-    } else {
-        const z = sf;
-        const y0: f32 = @floatFromInt(si * SUBCHUNK_SIZE);
-        if (forward) {
-            p[0] = .{ uf, y0 + vf, z };
-            p[1] = .{ uf + wf, y0 + vf, z };
-            p[2] = .{ uf + wf, y0 + vf + hf, z };
-            p[3] = .{ uf, y0 + vf + hf, z };
-        } else {
-            p[0] = .{ uf + wf, y0 + vf, z };
-            p[1] = .{ uf, y0 + vf, z };
-            p[2] = .{ uf, y0 + vf + hf, z };
-            p[3] = .{ uf + wf, y0 + vf + hf, z };
-        }
-        uv = [4][2]f32{ .{ 0, hf }, .{ wf, hf }, .{ wf, 0 }, .{ 0, 0 } };
+    switch (axis) {
+        .top => {
+            const y = sf;
+            if (forward) {
+                p[0] = .{ uf, y, vf + hf };
+                p[1] = .{ uf + wf, y, vf + hf };
+                p[2] = .{ uf + wf, y, vf };
+                p[3] = .{ uf, y, vf };
+            } else {
+                p[0] = .{ uf, y, vf };
+                p[1] = .{ uf + wf, y, vf };
+                p[2] = .{ uf + wf, y, vf + hf };
+                p[3] = .{ uf, y, vf + hf };
+            }
+            uv = [4][2]f32{ .{ 0, 0 }, .{ wf, 0 }, .{ wf, hf }, .{ 0, hf } };
+        },
+        .east => {
+            const x = sf;
+            const y0: f32 = @floatFromInt(si * SUBCHUNK_SIZE);
+            if (forward) {
+                p[0] = .{ x, y0 + uf, vf + hf };
+                p[1] = .{ x, y0 + uf, vf };
+                p[2] = .{ x, y0 + uf + wf, vf };
+                p[3] = .{ x, y0 + uf + wf, vf + hf };
+            } else {
+                p[0] = .{ x, y0 + uf, vf };
+                p[1] = .{ x, y0 + uf, vf + hf };
+                p[2] = .{ x, y0 + uf + wf, vf + hf };
+                p[3] = .{ x, y0 + uf + wf, vf };
+            }
+            uv = [4][2]f32{ .{ 0, wf }, .{ hf, wf }, .{ hf, 0 }, .{ 0, 0 } };
+        },
+        .south => {
+            const z = sf;
+            const y0: f32 = @floatFromInt(si * SUBCHUNK_SIZE);
+            if (forward) {
+                p[0] = .{ uf, y0 + vf, z };
+                p[1] = .{ uf + wf, y0 + vf, z };
+                p[2] = .{ uf + wf, y0 + vf + hf, z };
+                p[3] = .{ uf, y0 + vf + hf, z };
+            } else {
+                p[0] = .{ uf + wf, y0 + vf, z };
+                p[1] = .{ uf, y0 + vf, z };
+                p[2] = .{ uf, y0 + vf + hf, z };
+                p[3] = .{ uf + wf, y0 + vf + hf, z };
+            }
+            uv = [4][2]f32{ .{ 0, hf }, .{ wf, hf }, .{ wf, 0 }, .{ 0, 0 } };
+        },
+        else => return error.UnsupportedFace,
     }
 
     // Calculate AO for all 4 corners

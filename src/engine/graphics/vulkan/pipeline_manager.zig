@@ -24,6 +24,7 @@ const MAX_FRAMES_IN_FLIGHT = rhi.MAX_FRAMES_IN_FLIGHT;
 const PUSH_CONSTANT_SIZE_MODEL: u32 = 256; // mat4 model + vec3 color + float mask
 const PUSH_CONSTANT_SIZE_SKY: u32 = 128; // mat4 view_proj + vec4 params
 const PUSH_CONSTANT_SIZE_UI: u32 = @sizeOf(Mat4); // Orthographic projection matrix
+const MAX_SHADER_MODULE_BYTES: usize = 4 * 1024 * 1024;
 
 /// Pipeline manager handles all pipeline-related resources
 pub const PipelineManager = struct {
@@ -81,7 +82,7 @@ pub const PipelineManager = struct {
         vk_device: c.VkDevice,
         path: []const u8,
     ) !c.VkShaderModule {
-        const code = try std.fs.cwd().readFileAlloc(path, allocator, @enumFromInt(1024 * 1024));
+        const code = try std.fs.cwd().readFileAlloc(path, allocator, @enumFromInt(MAX_SHADER_MODULE_BYTES));
         defer allocator.free(code);
         return try Utils.createShaderModule(vk_device, code);
     }
